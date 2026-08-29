@@ -7,26 +7,29 @@ using System.Windows.Forms;
 
 namespace MyExtension
 {
-    internal sealed class GlobalKeyboardLogger : IDisposable
+    internal sealed class GlobalKeyboardHook : IDisposable
     {
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_SYSKEYDOWN = 0x0104;
-        private const int WM_KEYUP = 0x0101;
-        private const int WM_SYSKEYUP = 0x0105;
 
         private readonly LowLevelKeyboardProc _proc;
         private IntPtr _hookId = IntPtr.Zero;
         private bool _disposed;
 
-        // ===================== Output Window =====================
-        private static IVsOutputWindowPane _pane;
-        private static Guid PaneGuid = new Guid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890"); // Change this GUID if you want
-        private bool _isHandled = false;
+        private readonly AsyncPackage _package;
+        private readonly InputHandler _inputHandler;   // ← added
 
-        public GlobalKeyboardLogger()
+        // Output window
+        private static IVsOutputWindowPane _pane;
+        private static Guid PaneGuid = new Guid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
+
+        public GlobalKeyboardHook(AsyncPackage package)
         {
-            _proc = HookCallback; // Keep the delegate alive!
+            _package = package ?? throw new ArgumentNullException(nameof(package));
+            _inputHandler = new InputHandler(package);   // ← create handler
+
+            _proc = HookCallback;
             _hookId = SetHook(_proc);
 
             if (_hookId == IntPtr.Zero)
@@ -40,54 +43,54 @@ namespace MyExtension
             }
         }
 
-        private static IntPtr SetHook(LowLevelKeyboardProc proc)
-        {
-            using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule)
-            {
-                return SetWindowsHookEx(
-                    WH_KEYBOARD_LL,
-                    proc,
-                    GetModuleHandle(curModule.ModuleName),
-                    0);
-            }
-        }
-
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            _isHandled = false;
             if (nCode >= 0 && IsVisualStudioFocused())
             {
                 int vkCode = Marshal.ReadInt32(lParam);
                 Keys key = (Keys)vkCode;
 
                 bool isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
-                bool isKeyUp = wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP;
 
                 if (isKeyDown)
-                    Log($"KeyDown: {key} (VK={vkCode})");
-                else if (isKeyUp)
-                    Log($"KeyUp:   {key} (VK={vkCode})");
-                bool ctrl = (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;
-                bool shift = (GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
+                {
+                    bool ctrl = (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;
+                    bool shift = (GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
+                    bool alt = (GetAsyncKeyState((int)Keys.Menu) & 0x8000) != 0;
 
-                if (key == Keys.L && ctrl)
-                {
-                    Log("Ctrl+Shift+L");
-                }
-                if (_isHandled)
-                {
-                    return (IntPtr)1;
+                    Log($"KeyDown: {key} | Ctrl={ctrl} Shift={shift} Alt={alt}");
+
+                    bool handled = false;
+
+                    // Switch to UI thread and let InputHandler decide
+                    ThreadHelper.JoinableTaskFactory.Run(async () =>
+                    {
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        handled = _inputHandler.HandleKey(key, ctrl, shift, alt);
+                    });
+
+                    if (handled)
+                    {
+                        Log("→ Key was handled by InputHandler");
+                        return (IntPtr)1;   // block the key
+                    }
                 }
             }
+
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
+        // ===================== Helper methods (unchanged) =====================
 
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+        private static IntPtr SetHook(LowLevelKeyboardProc proc)
+        {
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.MainModule)
+            {
+                return SetWindowsHookEx(WH_KEYBOARD_LL, proc,
+                    GetModuleHandle(curModule.ModuleName), 0);
+            }
+        }
 
         private bool IsVisualStudioFocused()
         {
@@ -97,14 +100,12 @@ namespace MyExtension
             GetWindowThreadProcessId(hwnd, out uint processId);
             return processId == (uint)Process.GetCurrentProcess().Id;
         }
+
         private void Log(string message)
         {
             string fullMessage = $"[GlobalKeyboard] {DateTime.Now:HH:mm:ss.fff}  {message}";
-
-            // Always write to Debug as backup
             Debug.WriteLine(fullMessage);
 
-            // Write to custom Output Window pane (must be on UI thread)
             try
             {
                 ThreadHelper.JoinableTaskFactory.Run(async () =>
@@ -113,10 +114,7 @@ namespace MyExtension
                     WriteToOutputWindow(fullMessage);
                 });
             }
-            catch
-            {
-                // Ignore if we can't switch threads (rare)
-            }
+            catch { }
         }
 
         private static void WriteToOutputWindow(string message)
@@ -128,22 +126,11 @@ namespace MyExtension
                 var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
                 if (outputWindow == null) return;
 
-                // Create the pane
-                outputWindow.CreatePane(
-                    ref PaneGuid,
-                    "NeoVisual",      // ← Name shown in "Show output from" dropdown
-                    fInitVisible: 1,
-                    fClearWithSolution: 1);
-
+                outputWindow.CreatePane(ref PaneGuid, "NeoVisual", 1, 1);
                 outputWindow.GetPane(ref PaneGuid, out _pane);
             }
 
-            if (_pane != null)
-            {
-                _pane.OutputStringThreadSafe(message + Environment.NewLine);
-                // Optional: activate the pane every time
-                // _pane.Activate();
-            }
+            _pane?.OutputStringThreadSafe(message + Environment.NewLine);
         }
 
         public void Dispose()
@@ -161,10 +148,7 @@ namespace MyExtension
             GC.SuppressFinalize(this);
         }
 
-        ~GlobalKeyboardLogger()
-        {
-            Dispose();
-        }
+        ~GlobalKeyboardHook() => Dispose();
 
         // ===================== P/Invoke =====================
 
@@ -185,5 +169,11 @@ namespace MyExtension
 
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     }
 }

@@ -35,7 +35,7 @@ namespace MyExtension
         /// </summary>
         public const string PackageGuidString = "2f73bf14-6619-47e7-850c-29e95557f429";
 
-        private GlobalKeyboardLogger _keyboardLogger;
+        private GlobalKeyboardHook _keyboardLogger;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -46,7 +46,7 @@ namespace MyExtension
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
             // Start global keyboard logging
-            _keyboardLogger = new GlobalKeyboardLogger();
+            _keyboardLogger = new GlobalKeyboardHook(this);
         }
 
         protected override void Dispose(bool disposing)

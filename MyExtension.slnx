@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="MyExtension/MyExtension.csproj">
+    <Deploy />
+  </Project>
+</Solution>

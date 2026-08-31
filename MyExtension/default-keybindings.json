@@ -1,0 +1,29 @@
+{
+  "leader": "Space",
+  "bindings": {
+    "Ctrl+H": "navigate-left",
+    "Ctrl+L": "navigate-right",
+    "Ctrl+K": "navigate-up",
+    "Ctrl+J": "navigate-down",
+
+    "B,D": "command:File.Close",
+    "W": "command:File.SaveSelectedItems",
+    "Q": "command:File.Exit",
+    "E": "command:View.SolutionExplorer",
+    "F,F": "command:Edit.GoToFile",
+    "F,G": "command:Edit.FindinFiles",
+    "F,B": "command:Window.NavigateTo",
+    "F,R": "command:File.OpenFile",
+    "C,A": "command:View.QuickActions",
+    "C,R": "command:Refactor.Rename",
+    "/": "command:Edit.Find",
+    "C,F": "command:Edit.FormatDocument",
+    "S,S": "command:Edit.NavigateTo",
+    "G,G": "command:View.GitChanges",
+    "G,B": "command:Team.Git.Branches",
+    "G,C": "command:Team.Git.Commit",
+    "T,T": "command:View.Terminal",
+    "B,B": "command:Build.BuildSolution",
+    "B,R": "command:Debug.Start"
+  }
+}

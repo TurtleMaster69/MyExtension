@@ -19,5 +19,14 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="default-keybindings.json" />
   </ItemGroup>
 </Project>

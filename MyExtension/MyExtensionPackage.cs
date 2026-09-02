@@ -37,7 +37,8 @@ namespace MyExtension
         /// <summary>Stable package identity used by the registration attributes.</summary>
         public const string PackageGuidString = "2f73bf14-6619-47e7-850c-29e95557f429";
 
-        private GlobalKeyboardHook _keyboardLogger;
+        private GlobalKeyboardHook? _keyboardLogger;
+        private WindowManager? _windowManager;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -53,6 +54,8 @@ namespace MyExtension
             try
             {
                 _keyboardLogger = new GlobalKeyboardHook(this);
+                var monitorSelection = await GetServiceAsync<SVsShellMonitorSelection, IVsMonitorSelection>(throwOnFailure: true, cancellationToken);
+                _windowManager = new WindowManager(monitorSelection);
             }
             catch (Exception ex)
             {
@@ -66,6 +69,8 @@ namespace MyExtension
             {
                 _keyboardLogger?.Dispose();
                 _keyboardLogger = null;
+                _windowManager?.Dispose();
+                _windowManager = null;
             }
 
             base.Dispose(disposing);

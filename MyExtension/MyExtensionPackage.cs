@@ -1,10 +1,12 @@
 ﻿using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
+using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Telescope;
 
 namespace MyExtension
 {
@@ -39,6 +41,7 @@ namespace MyExtension
 
         private GlobalKeyboardHook? _keyboardLogger;
         private WindowManager? _windowManager;
+        private TelescopeController? _telescope;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -53,14 +56,74 @@ namespace MyExtension
             // extension degrades to a no-op and we log the reason.
             try
             {
-                _keyboardLogger = new GlobalKeyboardHook(this);
+                _telescope = new TelescopeController();
+                _telescope.RegisterFinder(new FileFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
+
+                _keyboardLogger = new GlobalKeyboardHook(this, _telescope);
                 var monitorSelection = await GetServiceAsync<SVsShellMonitorSelection, IVsMonitorSelection>(throwOnFailure: true, cancellationToken);
                 _windowManager = new WindowManager(monitorSelection);
+
+                await RegisterTelescopeCommandAsync(cancellationToken);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[MyExtension] Failed to initialize keyboard hook: {ex}");
             }
+        }
+
+        /// <summary>
+        /// Registers the <c>Telescope.Show</c> VS command so the picker can also be invoked from
+        /// the command palette / menus, in addition to the leader-key binding.
+        /// </summary>
+        private async Task RegisterTelescopeCommandAsync(CancellationToken cancellationToken)
+        {
+            var commandService = await GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
+            if (commandService == null)
+            {
+                return;
+            }
+
+            var cmdId = new CommandID(GuidList.CommandSet, CommandList.TelescopeShow);
+            var menuItem = new OleMenuCommand((_, _) => OpenTelescope(), cmdId);
+            commandService.AddCommand(menuItem);
+        }
+
+        private void OpenTelescope()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope?.Open("Files", centerRect);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MyExtension] Failed to open Telescope: {ex}");
+            }
+        }
+
+        private static System.Drawing.Rectangle? GetWindowRect(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !GetWindowRectNative(hwnd, out var rect))
+            {
+                return null;
+            }
+            return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetWindowRectNative(IntPtr hWnd, out NativeRect rect);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct NativeRect
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
         }
 
         protected override void Dispose(bool disposing)
@@ -71,6 +134,8 @@ namespace MyExtension
                 _keyboardLogger = null;
                 _windowManager?.Dispose();
                 _windowManager = null;
+                _telescope?.Dispose();
+                _telescope = null;
             }
 
             base.Dispose(disposing);

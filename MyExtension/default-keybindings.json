@@ -11,6 +11,7 @@
     "Q": "command:File.Exit",
     "E": "command:View.SolutionExplorer",
     "F,F": "command:Edit.GoToFile",
+    "F,T": "telescope",
     "F,G": "command:Edit.FindinFiles",
     "F,B": "command:Window.NavigateTo",
     "F,R": "command:File.OpenFile",

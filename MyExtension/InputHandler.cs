@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
+using Telescope;
 
 namespace MyExtension
 {
@@ -35,6 +36,7 @@ namespace MyExtension
         private readonly VsVimIntegration _vsVim;
         private readonly PopupNavigation _popupNav;
         private readonly ToolWindowNavigation _toolNav;
+        private readonly TelescopeController _telescope;
 
         // Leader-sequence state: the keys typed since the leader key, and whether a sequence is
         // currently in progress. _leaderActive is volatile because the hook thread's cheap
@@ -58,9 +60,10 @@ namespace MyExtension
         // Simple modifier shortcuts (matched directly): "Ctrl+H", "Alt+X"...
         private readonly Dictionary<string, Action> _simpleBindings;
 
-        public InputHandler(AsyncPackage package)
+        public InputHandler(AsyncPackage package, TelescopeController telescope)
         {
             _package = package;
+            _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
             _vsVim = new VsVimIntegration(package);
             _popupNav = new PopupNavigation(_vsVim);
             _toolNav = new ToolWindowNavigation(_vsVim);
@@ -120,6 +123,7 @@ namespace MyExtension
                 case "navigate-right": return () => Navigate(CardinalNavigationConstants.RIGHT);
                 case "navigate-up": return () => Navigate(CardinalNavigationConstants.UP);
                 case "navigate-down": return () => Navigate(CardinalNavigationConstants.DOWN);
+                case "telescope": return () => OpenTelescope();
                 default:
                     break;
             }
@@ -167,6 +171,14 @@ namespace MyExtension
         public bool HandleKey(Keys key, bool ctrl, bool shift, bool alt)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            // While the Telescope overlay is open it owns keyboard focus. Every key must pass
+            // through to the overlay's filter box / key handlers — the extension must NOT act on
+            // Space (leader), hjkl, or Escape. Returning false lets the key reach the overlay.
+            if (_telescope.IsOpen)
+            {
+                return false;
+            }
 
             // Escape always cancels an in-progress leader sequence (and otherwise passes through).
             if (key == Keys.Escape)
@@ -291,6 +303,49 @@ namespace MyExtension
         {
             var wm = new WindowMatrix(_package);
             wm.NavigateInDirection(direction);
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Files" finder, centered over the VS main window.
+        /// The <see cref="FileFinder"/> gathers its candidates via DTE on the UI thread.
+        /// </summary>
+        private void OpenTelescope()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Files", centerRect);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Failed to open Telescope: {ex.Message}");
+            }
+        }
+
+        /// <summary>Retrieves the on-screen rectangle (in pixels) of a window handle.</summary>
+        private static System.Drawing.Rectangle? GetWindowRect(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !GetWindowRectNative(hwnd, out var rect))
+            {
+                return null;
+            }
+            return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetWindowRectNative(IntPtr hWnd, out NativeRect rect);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct NativeRect
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
         }
     }
 }

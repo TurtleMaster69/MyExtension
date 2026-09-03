@@ -2,4 +2,5 @@
   <Project Path="MyExtension/MyExtension.csproj">
     <Deploy />
   </Project>
+  <Project Path="Telescope/Telescope.csproj" />
 </Solution>

@@ -42,23 +42,30 @@ read it before making changes. This file only covers what's easy to get wrong.
   LazyVim-style leader bindings like `w`→save are wired). To add a *new built-in
   action*, add a case there and a line in `default-keybindings.json`.
 - Handled keys are *blocked* from VS by returning `(IntPtr)1` from the hook callback.
-- VsVim 2022 mode-awareness: `VsVimIntegration` resolves `Vim.IVim` via MEF contract
-  `"Vim.IVim"` + reflection (assembly `Vim.Core.dll`; no compile-time dependency and no
-  committed third-party binaries). Mode is read from the buffer for the **active text
-  view**: `GetActiveView2(fMustHaveFocus:0)` → `IWpfTextView` →
-  `IVim.TryGetVimBuffer(view, out buffer)` → `get_ModeKind()`. Because VsVim implements
-  its interfaces **explicitly**, reflection must resolve members via
-  `Type.GetInterfaceMap` (plain `GetMethod(name)` returns null for the private
-  `Vim.IVim.TryGetVimBuffer`). `IsInTypingMode()` (Insert=2/Replace=7) gates the leader
-  key; `IsInEditor()` = `ITextView.HasAggregateFocus`. Do **not** rely on
-  `IVim.FocusedBuffer` (not tracked reliably), `GetActiveView2(fMustHaveFocus:1)` (true
-  even when a tool window has focus), or UI Automation (`AutomationElement.FocusedElement`,
-  which throws "application is in a broken state").
+- VsVim 2022 mode-awareness: `VimModeTracker` (a shared MEF part) tracks the focused
+  editor's mode **event-driven** — no per-keystroke polling. It is an
+  `IWpfTextViewCreationListener` (`[ContentType("text")]`), so VS calls `TextViewCreated`
+  for every code view; it subscribes to each view's `Got/LostAggregateFocus`/`Closed` and
+  to the focused buffer's `IVimBuffer.SwitchedMode` event, updating a cached
+  `IsInTypingMode` boolean (`InputHandler.IsTyping()` reads it; Insert=2/Replace=7 gate
+  the leader key). `InputHandler` resolves the same singleton from the MEF container
+  (`IComponentModel.DefaultExportProvider.GetExportedValue<VimModeTracker>()`).
+  Interop: resolve `Vim.IVim` via MEF contract `"Vim.IVim"` + reflection (assembly
+  `Vim.Core.dll`; no compile-time dependency and no committed third-party binaries). Get
+  the buffer with the **non-creating** `IVim.TryGetVimBuffer(view, out buffer)`; read mode
+  via `get_ModeKind()`/`IMode.get_ModeKind()`; subscribe via `add_SwitchedMode`.
+  Because VsVim implements its interfaces **explicitly**, reflection must resolve members
+  via `Type.GetInterfaceMap` (plain `GetMethod(name)` returns null), and event delegates
+  must be built from the interface's `EventHandlerType` (an `EventHandler<object>` won't
+  bind to the add method). Do **not** rely on `IVim.FocusedBuffer` (not tracked reliably),
+  `GetActiveView2(fMustHaveFocus:1)` (true even when a tool window has focus), or UI
+  Automation (`AutomationElement.FocusedElement`, which throws "application is in a broken
+  state").
 - Editor list-navigation: `PopupNavigation` maps `Ctrl+N`/`Ctrl+P` to injected
   Down/Up arrow keys (which the completion/quick-action/peek lists consume — not
-  `Edit.LineDown`, which moves the caret), gated on `_vsVim.IsInEditor()`. To stop VS
-  dimming the completion list while Ctrl is held, `InputHandler` swallows the Ctrl
-  key-down itself when `IsCompletionActive()` (via MEF `ICompletionBroker`).
+  `Edit.LineDown`, which moves the caret), gated on `_windowManager.IsToolWindow()`. To
+  stop VS dimming the completion list while Ctrl is held, `InputHandler` swallows the
+  Ctrl key-down itself when `IsCompletionActive()` (via MEF `ICompletionBroker`).
 - Tool-window `hjkl` navigation: `ToolWindowNavigation` translates `j/k/h/l`→arrow
   keys (via `KeyInjection`/`keybd_event`). Focus is classified in-process with WPF
   `Keyboard.FocusedElement` (inject unless focus is a `TextBoxBase` text input or a

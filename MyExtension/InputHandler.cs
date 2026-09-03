@@ -33,7 +33,7 @@ namespace MyExtension
     internal class InputHandler
     {
         private readonly AsyncPackage _package;
-        private readonly VsVimIntegration _vsVim;
+        private readonly VimModeTracker _vsVim;
         private readonly PopupNavigation _popupNav;
         private readonly WindowManager _windowManager;
         private readonly TelescopeController _telescope;
@@ -65,12 +65,39 @@ namespace MyExtension
             _package = package;
             _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
             _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
-            _vsVim = new VsVimIntegration(package);
+
+            // The Vim mode tracker is a shared MEF part (also an IWpfTextViewCreationListener
+            // that VS instantiates for every code view). We retrieve the same singleton instance
+            // here so its event-driven cached mode is what gates the leader key.
+            _vsVim = ResolveVimModeTracker();
+
             _popupNav = new PopupNavigation(_windowManager);
 
             var config = KeybindingConfig.Load();
             _leaderKey = config.LeaderKey;
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
+        }
+
+        /// <summary>
+        /// Retrieves the shared <see cref="VimModeTracker"/> from the VS MEF container. Falls back
+        /// to a fresh instance (whose cached mode stays false) if MEF composition is unavailable.
+        /// </summary>
+        private VimModeTracker ResolveVimModeTracker()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var componentModel = ((System.IServiceProvider)_package).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                    as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+                return componentModel?.DefaultExportProvider.GetExportedValue<VimModeTracker>()
+                    ?? new VimModeTracker();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Failed to resolve VimModeTracker: {ex.Message}");
+                return new VimModeTracker();
+            }
         }
 
         /// <summary>
@@ -324,7 +351,7 @@ namespace MyExtension
             {
                 return _windowManager.CurrentController?.IsInputMode == true;
             }
-            return _vsVim.IsInTypingMode();
+            return _vsVim.IsInTypingMode;
         }
 
         /// <summary>Builds the canonical shortcut string, e.g. Ctrl+H, Shift+F4, Alt+X.</summary>

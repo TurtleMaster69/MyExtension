@@ -24,8 +24,8 @@ namespace MyExtension
     /// <para/>
     /// <b>Performance:</b> a cheap pre-filter (<see cref="IsInteresting"/>) skips the handler
     /// entirely for plain typing keys, so the common path costs a few Win32 calls only. The
-    /// expensive per-key work (VsVim mode consultation) is TTL-cached in
-    /// <see cref="VsVimIntegration"/>. The <c>else</c> marshal below is defensive only — with
+    /// VsVim mode state is tracked event-driven in <see cref="VimModeTracker"/> (no per-key
+    /// consultation). The <c>else</c> marshal below is defensive only — with
     /// the hook on the UI thread it normally never runs (and must stay bounded: low-level hook
     /// callbacks that block too long are silently removed by Windows).
     ///

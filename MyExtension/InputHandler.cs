@@ -35,7 +35,7 @@ namespace MyExtension
         private readonly AsyncPackage _package;
         private readonly VsVimIntegration _vsVim;
         private readonly PopupNavigation _popupNav;
-        private readonly ToolWindowNavigation _toolNav;
+        private readonly WindowManager _windowManager;
         private readonly TelescopeController _telescope;
 
         // Leader-sequence state: the keys typed since the leader key, and whether a sequence is
@@ -60,13 +60,13 @@ namespace MyExtension
         // Simple modifier shortcuts (matched directly): "Ctrl+H", "Alt+X"...
         private readonly Dictionary<string, Action> _simpleBindings;
 
-        public InputHandler(AsyncPackage package, TelescopeController telescope)
+        public InputHandler(AsyncPackage package, TelescopeController telescope, WindowManager windowManager)
         {
             _package = package;
             _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
+            _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
             _vsVim = new VsVimIntegration(package);
-            _popupNav = new PopupNavigation(_vsVim);
-            _toolNav = new ToolWindowNavigation(_vsVim);
+            _popupNav = new PopupNavigation(_windowManager);
 
             var config = KeybindingConfig.Load();
             _leaderKey = config.LeaderKey;
@@ -180,9 +180,14 @@ namespace MyExtension
                 return false;
             }
 
-            // Escape always cancels an in-progress leader sequence (and otherwise passes through).
+            // Escape: exits a tool window's input mode first (back to normal), otherwise cancels
+            // an in-progress leader sequence (and otherwise passes through).
             if (key == Keys.Escape)
             {
+                if (ExitToolWindowInputMode())
+                {
+                    return true;
+                }
                 ResetSequence();
                 return false;
             }
@@ -192,28 +197,50 @@ namespace MyExtension
             // etc.), so the Ctrl key-down is always passed through untouched.
 
             // Ctrl+N / Ctrl+P: navigate the focused list/popup (completion, quick actions, peek)
-            // by injecting a Down/Up arrow key.
+            // by injecting a Down/Up arrow key. Only meaningful in a document (code editor)
+            // context; popup navigation gates on that itself.
             if ((key == Keys.N || key == Keys.P) && ctrl && !shift && !alt)
             {
                 return _popupNav.TryNavigate(down: key == Keys.N);
             }
 
-            // hjkl in tool-window lists/trees. Never in the editor (VsVim owns hjkl there) and
-            // never mid leader-sequence.
-            if (!_leaderActive && !ctrl && !shift && !alt &&
-                (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L))
+            // Tool window: route through its controller's normal/input mode.
+            if (_windowManager.IsToolWindow)
             {
-                if (_toolNav.TryNavigate(key))
+                var controller = _windowManager.CurrentController;
+                if (controller != null)
                 {
-                    return true;
+                    // Input mode: typing passes through. Only Escape (handled above) exits it.
+                    if (controller.IsInputMode)
+                    {
+                        return false;
+                    }
+
+                    // Normal mode: i enters input mode; hjkl move the focused surface.
+                    if (!ctrl && !shift && !alt)
+                    {
+                        if (key == Keys.I)
+                        {
+                            controller.EnterInputMode();
+                            return true;
+                        }
+
+                        if (!_leaderActive &&
+                            (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L) &&
+                            controller.TryMove(key))
+                        {
+                            return true;
+                        }
+                    }
                 }
             }
 
-            // 1. Leader key pressed: begin a sequence, unless the user is typing (VsVim insert/
-            //    replace mode, or a text input elsewhere) — then Space must type a literal space.
+            // 1. Leader key pressed: begin a sequence, unless the user is typing — then Space
+            //    types a literal space. "Typing" means a tool window in input mode, or the VsVim
+            //    editor in insert/replace mode.
             if (key == _leaderKey && !ctrl && !shift && !alt)
             {
-                if (_vsVim.IsInTypingMode() || ToolWindowNavigation.IsTextInputFocused())
+                if (IsTyping())
                 {
                     return false;
                 }
@@ -268,6 +295,38 @@ namespace MyExtension
             _currentSequence.Clear();
         }
 
+        /// <summary>
+        /// If the focused tool window is in input mode, exits it (back to normal) and returns
+        /// true so the Escape key is swallowed. Returns false otherwise.
+        /// </summary>
+        private bool ExitToolWindowInputMode()
+        {
+            if (_windowManager.IsToolWindow)
+            {
+                var controller = _windowManager.CurrentController;
+                if (controller?.IsInputMode == true)
+                {
+                    controller.ExitInputMode();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// True when the user is typing, so the leader key must type a literal space instead of
+        /// starting a leader sequence: a tool window in input mode, or the VsVim editor in
+        /// insert/replace mode.
+        /// </summary>
+        private bool IsTyping()
+        {
+            if (_windowManager.IsToolWindow)
+            {
+                return _windowManager.CurrentController?.IsInputMode == true;
+            }
+            return _vsVim.IsInTypingMode();
+        }
+
         /// <summary>Builds the canonical shortcut string, e.g. Ctrl+H, Shift+F4, Alt+X.</summary>
         private string BuildSimpleKey(Keys key, bool ctrl, bool shift, bool alt)
         {
@@ -301,7 +360,10 @@ namespace MyExtension
         /// <summary>Performs Cardinal window navigation in a compass direction (see WindowMatrix).</summary>
         private void Navigate(char direction)
         {
-            var wm = new WindowMatrix(_package);
+            // Rebuild the window matrix each navigation (windows can be resized/opened/closed),
+            // but source the active window from WindowManager's cached frame rather than re-deriving
+            // it from DTE.
+            var wm = new WindowMatrix(_package, _windowManager.CurrentWindow);
             wm.NavigateInDirection(direction);
         }
 

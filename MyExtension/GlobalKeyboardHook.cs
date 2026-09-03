@@ -57,11 +57,11 @@ namespace MyExtension
         // Our process id never changes; cached because the focus check runs for every key.
         private static readonly int CurrentProcessId = Process.GetCurrentProcess().Id;
 
-        public GlobalKeyboardHook(AsyncPackage package, Telescope.TelescopeController telescope)
+        public GlobalKeyboardHook(AsyncPackage package, Telescope.TelescopeController telescope, WindowManager windowManager)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
 
-            _inputHandler = new InputHandler(package, telescope);
+            _inputHandler = new InputHandler(package, telescope, windowManager);
 
             // Create the output pane eagerly (on the UI thread) so Log() never has to switch
             // threads afterwards (OutputStringThreadSafe is then usable from any thread).
@@ -159,11 +159,12 @@ namespace MyExtension
             switch (key)
             {
                 case Keys.Space:      // leader key
-                case Keys.Escape:     // sequence cancel
+                case Keys.Escape:     // sequence cancel / exit tool-window input mode
                 case Keys.H:
                 case Keys.J:
                 case Keys.K:
                 case Keys.L:          // h/j/k/l tool-window navigation
+                case Keys.I:          // i = enter tool-window input mode
                 case Keys.ControlKey:
                 case Keys.LControlKey:
                 case Keys.RControlKey: // Ctrl swallow while a completion popup is open

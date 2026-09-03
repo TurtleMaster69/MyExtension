@@ -1,5 +1,6 @@
 ﻿using EnvDTE;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Utilities;
 using System;
 using System.Collections.Generic;
@@ -32,7 +33,18 @@ namespace CardinalNavigation
         /// initalize windowmatrix and track windows; no filtering
         /// </summary>
         /// <param name="package"></param>
-        public WindowMatrix(AsyncPackage package)
+        public WindowMatrix(AsyncPackage package) : this(package, null)
+        {
+        }
+
+        /// <summary>
+        /// initalize windowmatrix and track windows; no filtering. The active window is taken from
+        /// <paramref name="currentFrame"/> (the cached frame tracked by <see cref="WindowManager"/>)
+        /// when supplied, otherwise it falls back to the DTE's active window.
+        /// </summary>
+        /// <param name="package"></param>
+        /// <param name="currentFrame">the currently focused window frame, or null to use DTE.</param>
+        public WindowMatrix(AsyncPackage package, IVsWindowFrame currentFrame)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -43,18 +55,24 @@ namespace CardinalNavigation
 
             SetWindowDivideSelectionSizes();
 
+            // The active window is sourced from WindowManager's cached frame instead of re-deriving
+            // it from DTE.ActiveWindow — WindowManager already tracks focus via selection events.
+            EnvDTE.Window activeWindow = currentFrame != null
+                ? VsShellUtilities.GetWindowObject(currentFrame)
+                : dteService.ActiveWindow;
+
             m_ActiveWindows = WindowControlAdapter.GetLinkedWindowControlAdapters(m_IVsFrames,
                 UtilityMethods.GetWindowsList(dteService.Windows),
-                dteService.ActiveWindow).
+                activeWindow).
                 ToList();
 
-            if (dteService.ActiveWindow == null)
+            if (activeWindow == null)
             {
                 // gracefully exit
                 throw new("well maybe fix this");
             }
 
-            m_activeWindow = WindowControlAdapter.GetActiveWindowControlAdapter(dteService.ActiveWindow, m_ActiveWindows);
+            m_activeWindow = WindowControlAdapter.GetActiveWindowControlAdapter(activeWindow, m_ActiveWindows);
         }
 
         /// <summary>

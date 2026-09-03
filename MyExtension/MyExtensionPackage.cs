@@ -59,9 +59,12 @@ namespace MyExtension
                 _telescope = new TelescopeController();
                 _telescope.RegisterFinder(new FileFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
 
-                _keyboardLogger = new GlobalKeyboardHook(this, _telescope);
+                // Build WindowManager (current-window tracking + tool-window controller dispatch)
+                // before the hook so InputHandler can consume its cached state from the start.
                 var monitorSelection = await GetServiceAsync<SVsShellMonitorSelection, IVsMonitorSelection>(throwOnFailure: true, cancellationToken);
                 _windowManager = new WindowManager(monitorSelection);
+
+                _keyboardLogger = new GlobalKeyboardHook(this, _telescope, _windowManager);
 
                 await RegisterTelescopeCommandAsync(cancellationToken);
             }

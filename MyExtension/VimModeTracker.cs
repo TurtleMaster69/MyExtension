@@ -244,6 +244,15 @@ namespace MyExtension
         /// <summary>Raised by VsVim whenever the buffer's mode changes (UI thread).</summary>
         private void OnSwitchedMode(object sender, EventArgs e)
         {
+            // Only trust the mode of the buffer we currently consider focused. During a focus
+            // switch the previous buffer may still fire SwitchedMode (or a stale event may arrive
+            // after we moved on); ignore anything not from _currentBuffer so we don't overwrite
+            // the focused buffer's cached state.
+            if (!ReferenceEquals(sender, _currentBuffer))
+            {
+                return;
+            }
+
             int? mode = GetCurrentModeKindFromEventArgs(e);
             UpdateTypingFromMode(mode);
         }

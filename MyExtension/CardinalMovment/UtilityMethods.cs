@@ -1,7 +1,6 @@
 ﻿
 using System;
 using System.Collections.Generic;
-using System.Windows.Forms;
 using EnvDTE;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -36,64 +35,6 @@ namespace CardinalNavigation
         }
 
 
-        private static List<EnvDTE.Window> GetLinkedParentWindows(EnvDTE.Window window)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var linkedFrame = window?.LinkedWindowFrame;
-
-            if (linkedFrame == null || linkedFrame.LinkedWindows == null)
-            {
-                return null;
-            }
-
-            return (List<EnvDTE.Window>)linkedFrame.LinkedWindows;
-        }
-
-
-        private static List<EnvDTE.Window> FindAllLinkedWindows(EnvDTE.Window window, List<EnvDTE.Window> linkedParentWindows)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var top = window.Top;
-            var left = window.Left;
-
-            return linkedParentWindows?.FindAll((eachWindow) =>
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-                return eachWindow.Top == top && eachWindow.Left == left;
-            });
-        }
-
-        /// <summary>
-        /// Is our our parent window the main window?
-        /// </summary>
-        /// <param name="window"></param>
-        /// <returns></returns>
-        public static bool WindowIsLinked(EnvDTE.Window window)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var linkedParentWindows = GetLinkedParentWindows(window);
-            return FindAllLinkedWindows(window, linkedParentWindows)?.Count > 0;
-        }
-
-        /// <summary>
-        /// if a given window is docked, we get the most recently used window
-        /// docked at the same position. Otherwise, we return the window.
-        /// </summary>
-        /// <param name="window"></param>
-        /// <returns></returns>
-        public static EnvDTE.Window GetMostRecentlyUsedLinkedWindow(EnvDTE.Window window)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var linkedParentWindows = GetLinkedParentWindows(window);
-            if (linkedParentWindows?.Count <= 1)
-            {
-                return window;
-            }
-            return FindAllLinkedWindows(window, linkedParentWindows)?[0];
-        }
-
         /// <summary>
         /// returns a list to LinkedWindows
         /// </summary>
@@ -119,17 +60,17 @@ namespace CardinalNavigation
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (parentWindow == null)
-            {
-                // it also seems intuitive that we could have multiple nested windows.. but i haven't seen a 
-                // case where it happens yet.
-                MessageBox.Show("Unable to find parent for active window.\n");
-                throw new NullReferenceException();
-            }
-
             // note: not all windows linked to a parent are in parent.LinkedWindows; we'll pair
             //       them manually.
             List<EnvDTE.Window> linkedWindows = new List<EnvDTE.Window>();
+
+            if (parentWindow == null)
+            {
+                // No parent to anchor linked windows around; return empty so navigation degrades
+                // to a no-op instead of throwing into the keyboard hook.
+                System.Diagnostics.Debug.WriteLine("[NeoVisual] No parent window for active window; skipping window linking.");
+                return linkedWindows;
+            }
 
             foreach (var window in allWindows)
             {
@@ -140,8 +81,6 @@ namespace CardinalNavigation
                     linkedWindows.Add(window);
                 }
             }
-
-
 
             return linkedWindows;
         }

@@ -5,7 +5,6 @@ using Microsoft.VisualStudio.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Windows.Forms;
 
 namespace CardinalNavigation
 {
@@ -44,35 +43,54 @@ namespace CardinalNavigation
         /// </summary>
         /// <param name="package"></param>
         /// <param name="currentFrame">the currently focused window frame, or null to use DTE.</param>
-        public WindowMatrix(AsyncPackage package, IVsWindowFrame currentFrame)
+        public WindowMatrix(AsyncPackage package, IVsWindowFrame? currentFrame)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            this.CheckDte(package);
-            m_IVsFrames = IVsUIWindowFrameExtractor.GetIVsWindowFramesEnumerator(package);
-
-            DTE dteService = UtilityMethods.GetDTE(package);
-
-            SetWindowDivideSelectionSizes();
-
-            // The active window is sourced from WindowManager's cached frame instead of re-deriving
-            // it from DTE.ActiveWindow — WindowManager already tracks focus via selection events.
-            EnvDTE.Window activeWindow = currentFrame != null
-                ? VsShellUtilities.GetWindowObject(currentFrame)
-                : dteService.ActiveWindow;
-
-            m_ActiveWindows = WindowControlAdapter.GetLinkedWindowControlAdapters(m_IVsFrames,
-                UtilityMethods.GetWindowsList(dteService.Windows),
-                activeWindow).
-                ToList();
-
-            if (activeWindow == null)
+            // Initialization is best-effort: never let a navigation-setup failure throw into the
+            // keyboard hook. On any error we degrade to an empty matrix (NavigateInDirection
+            // becomes a no-op) and log.
+            try
             {
-                // gracefully exit
-                throw new("well maybe fix this");
-            }
+                this.CheckDte(package);
+                m_IVsFrames = IVsUIWindowFrameExtractor.GetIVsWindowFramesEnumerator(package);
 
-            m_activeWindow = WindowControlAdapter.GetActiveWindowControlAdapter(activeWindow, m_ActiveWindows);
+                DTE dteService = UtilityMethods.GetDTE(package);
+
+                SetWindowDivideSelectionSizes();
+
+                // The active window is sourced from WindowManager's cached frame instead of re-deriving
+                // it from DTE.ActiveWindow — WindowManager already tracks focus via selection events.
+                EnvDTE.Window activeWindow = currentFrame != null
+                    ? VsShellUtilities.GetWindowObject(currentFrame)
+                    : dteService.ActiveWindow;
+
+                m_ActiveWindows = WindowControlAdapter.GetLinkedWindowControlAdapters(m_IVsFrames,
+                    UtilityMethods.GetWindowsList(dteService.Windows),
+                    activeWindow).
+                    ToList();
+
+                if (activeWindow == null)
+                {
+                    // No active window to anchor navigation around; degrade to a no-op rather than
+                    // throwing (navigation should never crash the hook). m_activeWindow stays null;
+                    // NavigateInDirection guards against it.
+                    m_ActiveWindows = new List<WindowControlAdapter>();
+                    m_activeWindow = null!;
+                    return;
+                }
+
+                // If the active window can't be paired to an adapter (possible when the window list
+                // is mid-change), degrade to a no-op rather than throwing.
+                m_activeWindow = WindowControlAdapter.GetActiveWindowControlAdapter(activeWindow, m_ActiveWindows) ?? null!;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[NeoVisual] Window matrix initialization failed: {ex.Message}\n{ex.StackTrace}");
+                m_ActiveWindows = new List<WindowControlAdapter>();
+                m_activeWindow = null!;
+            }
         }
 
         /// <summary>
@@ -88,14 +106,12 @@ namespace CardinalNavigation
             m_DpiXScale = m_DeviceDpiX / DpiAwareness.DefaultLogicalDpi;
             m_DpiYScale = m_DeviceDpiY / DpiAwareness.DefaultLogicalDpi;
 
-            m_XDivide = CardinalNavigationConstants.DefaultLogicalXWindowDivide * m_DpiYScale;
+            m_XDivide = CardinalNavigationConstants.DefaultLogicalXWindowDivide * m_DpiXScale;
             m_YDivide = CardinalNavigationConstants.DefaultLogicalTabPaneDivide * m_DpiYScale;
 
             // increase by scale factor to be safe
             m_XDivide *= CardinalNavigationConstants.DefaultLogicalSelectorScale;
             m_YDivide *= CardinalNavigationConstants.DefaultLogicalSelectorScale;
-
-            var awarenessContext = DpiAwareness.ProcessDpiAwarenessContext;
         }
 
 
@@ -108,7 +124,8 @@ namespace CardinalNavigation
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Unable to get DTE {CardinalNavigationConstants.GithubMessage}{ex.StackTrace}");
+                System.Diagnostics.Debug.WriteLine(
+                    $"[NeoVisual] Unable to get DTE for window navigation: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -123,9 +140,10 @@ namespace CardinalNavigation
         /// <returns></returns>
         private static int AdjacencySize(int activeAxis, int activeHeightOrWidth, int windowAxis, int windowHeightOrWidth)
         {
-            return System.Linq.Enumerable.Range(activeAxis, activeAxis + activeHeightOrWidth).Intersect(
-                System.Linq.Enumerable.Range(windowAxis, windowAxis + windowHeightOrWidth)
-                ).Count();
+            // Closed-form overlap of two 1-D spans [start, end): no Enumerable.Range allocation.
+            int start = Math.Max(activeAxis, windowAxis);
+            int end = Math.Min(activeAxis + activeHeightOrWidth, windowAxis + windowHeightOrWidth);
+            return Math.Max(0, end - start);
         }
 
         #region Filter Windows
@@ -430,9 +448,10 @@ namespace CardinalNavigation
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Reducing Windows Failed. " +
-                                $"{CardinalNavigationConstants.GithubMessage}\n{ex}\n{ex.StackTrace}");
-                throw;
+                // Navigation is best-effort: never throw into the keyboard hook or pop a modal
+                // dialog mid-typing. Log and move on.
+                System.Diagnostics.Debug.WriteLine(
+                    $"[NeoVisual] Window navigation failed: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -444,7 +463,8 @@ namespace CardinalNavigation
         public void NavigateInDirection(char direction)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (m_activeWindow.AutoHides() || m_activeWindow == null || m_ActiveWindows.Count == 0)
+            // Guard order matters: m_activeWindow may be null, so test it before dereferencing it.
+            if (m_activeWindow == null || m_ActiveWindows.Count == 0 || m_activeWindow.AutoHides())
             {
                 return;
             }

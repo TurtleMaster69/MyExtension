@@ -204,21 +204,25 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 29 scenarios
+pwsh tools/test-e2e.ps1                              # all 33 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **29 scenarios** are: `telescope-open`, `telescope-search`,
-`telescope-navigate`, `telescope-wrap`, `telescope-mode`, `telescope-open-file`,
-`telescope-issues`, `telescope-references`, `telescope-grep`,
-`telescope-implementation`, `telescope-prompt-motions`, `telescope-preview-motions`,
-`telescope-q-close`, `telescope-open-file-normal`, `telescope-no-selection`,
-`telescope-preview`, `neovisual-window-nav`, `neovisual-leader`,
-`neovisual-toolwindow`, `neovisual-explorer-toggle`, `neovisual-explorer-open`,
-`neovisual-explorer-open-o`, `neovisual-explorer-collapse`,
-`neovisual-explorer-rename`, `neovisual-explorer-add`, `neovisual-explorer-move`,
-`neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`.
+The **33 scenarios** (31 passing; 2 known-RED — `explorer-open-navigation` +
+`explorer-open-searchbox`, tracked in docs/progress.md) are: `telescope-open`,
+`telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
+`telescope-open-file`, `telescope-issues`, `telescope-references`,
+`telescope-grep`, `telescope-implementation`, `telescope-open-file-searchbox`,
+`telescope-open-file-navigation`, `telescope-prompt-motions`,
+`telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
+`telescope-no-selection`, `telescope-preview`, `neovisual-window-nav`,
+`neovisual-leader`, `neovisual-toolwindow`, `neovisual-explorer-toggle`,
+`neovisual-explorer-open`, `neovisual-explorer-open-o`,
+`neovisual-explorer-collapse`, `neovisual-explorer-rename`,
+`neovisual-explorer-add`, `neovisual-explorer-move`,
+`neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
+`explorer-open-navigation` (known-RED), `explorer-open-searchbox` (known-RED).
 
 ### 5.3 E2E harness gotchas
 
@@ -306,5 +310,5 @@ The **29 scenarios** are: `telescope-open`, `telescope-search`,
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (56) and
   `dotnet run --project tests/NeoVisual.Tests` (25).
-- Live E2E: `pwsh tools/test-e2e.ps1` (29 scenarios); subset with `-Tests a,b,c`;
-  list with `-List`.
+- Live E2E: `pwsh tools/test-e2e.ps1` (33 scenarios; 31 passing + 2 known-RED);
+  subset with `-Tests a,b,c`; list with `-List`.

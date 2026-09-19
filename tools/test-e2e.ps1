@@ -19,6 +19,8 @@
 #   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
 #   telescope-q-close    q closes the overlay in normal mode
 #   telescope-open-file-normal  Enter selects the match in NORMAL mode
+#   telescope-open-file-searchbox  type a single-match query, WAIT for the filter to settle, Enter opens it
+#   telescope-open-file-navigation  type a multi-match query, j to index 1, Enter opens the moved-to row
 #   telescope-no-selection  j/k on an empty result list is a no-op (selection stays 0)
 #   neovisual-window-nav  Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
 #   neovisual-leader      Space+W fires a leader binding (leader-binding executed: W)
@@ -30,6 +32,8 @@
 #   neovisual-explorer-rename  r starts rename (F2), Escape cancels
 #   neovisual-explorer-add     a runs the Add Item command
 #   neovisual-explorer-move    m runs the Move command
+#   explorer-open-navigation   l expands, j walks the tree to a pinned FILE node, o opens it
+#   explorer-open-searchbox    i focuses the search box, type a query, o opens the filtered result
 #   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview
 #   neovisual-editor-insert  insert-mode typing reaches the editor (hook must not swallow text)
 #   neovisual-textinput-motions  Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret
@@ -868,6 +872,82 @@ Register-Scenario 'neovisual-explorer-move' {
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
 }
 
+# --- explorer-open-navigation --------------------------------------------
+# Solution Explorer tree navigation to a SPECIFIC file node: expand (l), walk down with j to a
+# pinned file (Beta.cs), then o opens it. Distinct from neovisual-explorer-open/-open-o (which loop
+# l/j/open-until-something-opens) by navigating j/k to a KNOWN target and asserting THAT file
+# opens, not just any editor view. The seeded tree is alphabetical within the project, so from a
+# fresh (collapsed) solution node: l -> probe project, j -> project, l -> expand project's children,
+# j x2 -> Beta.cs (Alpha, Beta, ...), then o opens it.
+Register-Scenario 'explorer-open-navigation' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer navigation'
+    # Ensure Solution Explorer is open and focused (toggle until the open log appears).
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+
+    # Deterministic walk to Beta.cs. (The tree may already be expanded from a prior scenario; the
+    # l/j steps below are idempotent enough to land on the alphabetical order in a fresh boot.)
+    Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand the solution node (reveals Probe)
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer expand" 'l expanded the solution node'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> Probe project node
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j walked down to the Probe project'
+    Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand the project's children
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer expand" 'l expanded the Probe project'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> Alpha.cs
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> Beta.cs
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j walked down to the Beta.cs file node'
+    Assert-VsFocused $vs 'explorer navigation (o)' # keys must land in the VS instance
+    Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open the selected file
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*[\\/]Beta\.cs" 'o opened the navigated-to file (Beta.cs)'
+    Assert-NoEnterStorm $logPath 'explorer-open-navigation'
+}
+
+# --- explorer-open-searchbox ---------------------------------------------
+# Solution Explorer search box: i focuses the search box (and enters input mode), typing filters the
+# tree natively, Escape returns focus to the (now-filtered) tree, and o opens the single filtered
+# result. Covers the search-box focus path + the ExitInputMode refocus (F16's earlier concern).
+Register-Scenario 'explorer-open-searchbox' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer search box'
+    # Ensure Solution Explorer is open and focused (toggle until the open log appears).
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+
+    # i focuses the search box and enters input mode.
+    Send-Tap 0x49; Start-Sleep -Milliseconds 400   # i -> search box focus + input mode
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer search-focus" 'i focused the Solution Explorer search box'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-enter-input" 'i entered tool-window input mode'
+    # Type a query that filters the tree to a single file (native live filtering).
+    Send-Text 'GrepProbe'
+    Start-Sleep -Milliseconds 500
+    # Escape exits input mode and refocuses the tree (View.SolutionExplorer); the native filter
+    # keeps the single GrepProbe.cs result selected.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-exit-input" 'Escape exited input mode'
+    # o (normal mode, tree focused) opens the filtered result.
+    Assert-VsFocused $vs 'explorer search box (o)'
+    Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open the filtered result
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*[\\/]GrepProbe\.cs" 'o opened the filtered result (GrepProbe.cs)'
+    Assert-NoEnterStorm $logPath 'explorer-open-searchbox'
+}
+
 # --- telescope-wrap ------------------------------------------------------
 # Selection wraps around the result list: j past the last goes to 0, k past the first goes to last.
 Register-Scenario 'telescope-wrap' {
@@ -1380,6 +1460,48 @@ Register-Scenario 'telescope-open-file-normal' {
     Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800   # Enter selects in normal mode
     Assert-NewLogLine $logPath "$($script:PfxTel)key=Return mode=normal handled=True" 'Enter (Return) was handled in normal mode'
     Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Program\.cs" 'Enter opened Program.cs in normal mode'
+}
+
+# --- telescope-open-file-searchbox ----------------------------------------
+# In INSERT mode, type a query that filters to EXACTLY ONE file, WAIT for the filter to settle
+# (results count=1 selected=0), then Enter opens that exact filtered candidate. Distinct from
+# telescope-open-file (which presses Enter without first confirming the settle line before opening).
+Register-Scenario 'telescope-open-file-searchbox' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Program'                                          # unique match in the scratch solution
+    Assert-NewLogLine $logPath "promptChanged query='Program'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter settled to the single Program.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Program\.cs" 'preview shows the filtered Program.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800     # Enter (INSERT mode) opens the match
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Program\.cs" 'Enter opened Program.cs from the search box'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-open-file-navigation ----------------------------------------
+# Type a query matching >=2 files, Esc to NORMAL mode, move selection with j to index 1, then Enter
+# opens the MOVED-TO row (proves Enter opens the selected row, not just index 0) — distinct from
+# telescope-open-file-normal (opens index 0 without moving). The "Service" query matches the seeded
+# Services/AuthService.cs + Service.cs (fzf --no-sort preserves DTE order, folder files first), so
+# index 1 is the top-level Service.cs.
+Register-Scenario 'telescope-open-file-navigation' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Service'
+    Assert-NewLogLine $logPath "promptChanged query='Service'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=2 selected=0" 'Service matched exactly two files'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200              # j -> index 1
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=2 selected=1" 'j moved selection to index 1'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*[\\/]Service\.cs" 'preview shows the index-1 file (Service.cs)'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800   # Enter selects the moved-to row
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*[\\/]Service\.cs" 'Enter opened the moved-to row (Service.cs)'
+    Close-Telescope $vs $logPath
 }
 
 # --- telescope-no-selection ----------------------------------------------

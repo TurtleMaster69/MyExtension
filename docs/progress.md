@@ -11,10 +11,11 @@ reads at the start of every loop iteration.
 
 - Offline units: `tests/Telescope.Tests` **56 passed**; `tests/NeoVisual.Tests`
   **25 passed**.
-- Live E2E: `tools/test-e2e.ps1` lists **29 scenarios** (incl. `seed-reset`).
-  The full 29-scenario suite is GREEN (verified 2026-09-19 after the
-  implementation-finder item; one pre-existing flake `neovisual-editor-insert`
-  passes on retry); **no known-RED scenarios remain**.
+- Live E2E: `tools/test-e2e.ps1` lists **33 scenarios** (incl. `seed-reset`).
+  **31 passing**; **2 known-RED** (new follow-up items, root causes documented in
+  the queue below): `explorer-open-navigation` (tree-state not normalized after
+  auto-open) and `explorer-open-searchbox` (search-box focus-exit gap). The
+  `neovisual-editor-insert` flake remains on record (retry-pass).
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -61,19 +62,28 @@ reads at the start of every loop iteration.
    `neovisual-explorer-open-o`'s focus flakiness also fixed (F16:
    `Assert-VsFocused` in the walk loop).
 
-### New planned E2E scenarios (user-requested, NOT yet implemented)
+### New planned E2E scenarios (user-requested) — status 2026-09-19
 
-- `telescope-open-file-searchbox` — Telescope: open a file directly from the
-  search box (type a query in insert mode → Enter opens the filtered result).
-- `telescope-open-file-navigation` — Telescope: open a file via navigation (Esc
-  to normal mode, j/k to move selection, Enter opens). Partially overlaps
-  `telescope-open-file-normal` — make the navigation variant actually move
-  selection with j/k first.
-- `explorer-open-navigation` — Solution Explorer: open a file via tree
-  navigation (l/j/k to walk to a file, open with `o`).
-- `explorer-open-searchbox` — Solution Explorer: open a file directly from the
-  search box (i focuses it, type a query to filter the tree, open with `o`).
-  Watch the search-box focus path and `TextMotionHelper` handling.
+- ✅ **`telescope-open-file-searchbox`** — DONE (see Done section): type a query in
+  insert mode, wait for the settle, Enter opens the filtered result.
+- ✅ **`telescope-open-file-navigation`** — DONE (see Done section): Esc to normal,
+  **j moves the selection to index 1**, Enter opens the moved-to row (`Service.cs`).
+- ⚠️ **`explorer-open-navigation`** — **KNOWN-RED** (registered; real gap): the
+  solution auto-open leaves the tree in a non-normalized state (Models/ expanded,
+  IShape.cs selected), so a pinned l/j/k sequence cannot reach a specific file
+  node. Needs a tree-state normalization primitive (e.g. collapse-to-root
+  binding/action) or a harness normalization. **Queued as the next bugfix item.**
+- ⚠️ **`explorer-open-searchbox`** — **KNOWN-RED** (registered; real gap): after
+  `i`→type→`Esc`, `ExitInputMode`'s `View.SolutionExplorer` refocus does NOT
+  restore tree focus — `o` falls through into the search box (no
+  `solution-explorer open`). Needs the search-box focus-exit path fixed.
+  **Queued as the next bugfix item.**
+
+> Harness-health note (2026-09-19): the M-M6 concurrent unit-suite launch can hit
+> a build-output lock — both test projects compile the shared `Telescope.csproj`
+> into the same `obj/` path; Defender AV occasionally locks `Telescope.dll`
+> (CS2012). A re-run passes; not a test failure. Prefer sequential or staggered
+> unit-suite runs when both are needed.
 
 ## In-progress
 
@@ -108,10 +118,31 @@ Top of the queue, in priority order:
      Roslyn `FindImplementationsAsync`, preview line-jump).
    - `fzf` finder — with preview pane. **DEFERRED** (user clarified 2026-09-19:
      build implementation first; fzf-finder scope TBD by the user).
-4. Add the 4 new planned E2E scenarios (above) and their offline unit tests.
+4. ~~Add the 4 new planned E2E scenarios~~ — **PARTIAL**: `telescope-open-file-searchbox`
+   + `telescope-open-file-navigation` **DONE** (see Done section); the other 2
+   exposed real gaps → now the next queue items:
+   - **`explorer-open-navigation`** — fix the tree-state normalization gap
+     (KNOWN-RED scenario registered).
+   - **`explorer-open-searchbox`** — fix the search-box focus-exit gap
+     (KNOWN-RED scenario registered).
+5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-19 — 2 planned E2E coverage scenarios** (Lane: trivial, GREEN —
+  partial item): added `telescope-open-file-searchbox` (insert-mode query →
+  wait for settle → Enter opens the filtered single match, `Program.cs`) and
+  `telescope-open-file-navigation` (Esc to normal, `j` moves selection to index
+  1, Enter opens the MOVED-TO row `Service.cs` — pinned `results count=2
+  selected=1`, tighter than the plan's `\d+`). Both assert ONLY existing
+  diagnostics (M-M7 N/A). The other 2 planned scenarios (`explorer-open-navigation`,
+  `explorer-open-searchbox`) FAILED against the current extension with real
+  behavior gaps → registered as known-RED + queued as the next items (see the
+  queue). No code change; no unit tests (pure coverage).
+  **Change summary:** edited `tools/test-e2e.ps1` (+2 scenarios + header).
+  **If these regress, look first at the `opened file:` diagnostic + the
+  `results count=N selected=M` pins.** Scenario count 29→33 registered (31
+  passing + 2 known-RED) in spec.md / AGENTS.md / SKILL.md. Commit: `_filled at commit_`.
 - **2026-09-19 — Telescope implementation finder** (Lane: feature, attempt 1, GREEN):
   `ImplementationFinder` + `ImplementationHit` (Telescope, `Name="Implementation"`,
   `Space+F I`) list the **implementations/overrides of the symbol at the caret**

@@ -54,13 +54,14 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 29 scenarios
+pwsh tools/test-e2e.ps1                              # all 33 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (29 total; all currently passing):
+Scenarios (33 total; 31 passing, 2 known-RED — `explorer-open-navigation` +
+`explorer-open-searchbox`, root causes tracked in docs/progress.md):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search
@@ -71,6 +72,10 @@ Scenarios (29 total; all currently passing):
 - `telescope-references` — Space F R: references to the symbol at the caret (read/write access), previews, opens at line
 - `telescope-grep` — Space F G: query-driven search of the solution's files (grep hits per typed query), previews, opens at line
 - `telescope-implementation` — Space F I: implementations/overrides of the symbol at the caret, previews, opens at line
+- `telescope-open-file-searchbox` — insert-mode query, wait for the filtered result, Enter opens it
+- `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
+- `explorer-open-navigation` — (KNOWN-RED) l/j/k tree walk to a file, o opens; blocked on tree-state normalization
+- `explorer-open-searchbox` — (KNOWN-RED) i focuses the search box, query filters the tree, o opens; blocked on the focus-exit gap
 - `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 - `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
 - `telescope-q-close` — q closes the overlay in normal mode

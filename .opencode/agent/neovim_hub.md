@@ -244,12 +244,27 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
      trimming the plan file loses nothing — every subagent handoff re-reads a lean
      plan, never the accumulated loop history.
    - **GREEN** → **append a durable Done entry to `docs/progress.md`** (item name,
-     lane, one-line outcome, attempt count, date) in the `## Done` section (create
+      lane, one-line outcome, attempt count, date) in the `## Done` section (create
 it if missing) — the plan file's Execution Log is overwritten per item, so
       progress.md is the only durable record of completed work — then remove the
       item from the pending queue.
       Record `log/tools-hash.txt` (SHA-256 of every file under `tools/`) so the next
       VERIFY's `tools/`-changed flag is computable.
+      **COMMIT + SHORT SUMMARY (on every GREEN):** commit the item's changes and
+      write a SHORT "what was done / where to look if it breaks" summary so the change
+      is trackable and any later breakage is localizable:
+      1. `git add` the item's changed source/docs/harness files (the feature source,
+         the synced docs, `docs/progress.md`, `docs/spec.md`, `AGENTS.md`, SKILL.md,
+         `tools/*` if touched), then `git commit` with a message naming the item,
+         lane, and one-line outcome. Use the existing `## Done` entry as the commit
+         body.
+      2. **Change summary** — a SHORT block (5-10 lines) appended to the `## Done`
+         entry stating: which files were created/modified, the key diagnostic(s)
+         added/changed, and the ONE place to look first if this feature regresses
+         (the implicated BP step / diagnostic / test). This is the traceability note:
+         if something breaks later, the summary says exactly where to look and what
+         was changed. Keep it terse — not a prose re-report of the verdict.
+      3. Record the commit hash in the `## Done` entry so the change is git-addressable.
       If any build/debug `DEVIATION` reported a renamed or removed symbol that the
       docs reference (AGENTS.md, SKILL.md, spec.md, progress.md, .opencode/agent/*),
       update those references in this same sync pass (grep the docs for the old

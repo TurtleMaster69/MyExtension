@@ -175,22 +175,43 @@ Top of the queue, in priority order:
    picker; the quick-actions menu itself is the native equivalent). Feature
    lane.
 
-9. **Solution Explorer normal-mode `r`/`a`/`m` — refine to VS QoL semantics.**
+9. **Solution Explorer normal-mode `r`/`a`/`m` — refine to VS QoL semantics, or
+   replace the native dialogs with a controlled vim-mode overlay.**
    **Base keys ALREADY EXIST** (`SolutionExplorerController`): `r` rename (F2
    injected), `a` Add Item command, `m` Move command; live scenarios
-   `neovisual-explorer-rename`/`-add`/`-move` PASS. The user's refinements
-   (verify/enhance, feature lane — new diagnostics likely):
-   - **`a` adds a file to the folder the selection is IN** — if on a subfolder
-     or an item inside a subfolder, the Add-Item targets THAT subfolder (not the
-     project root). Verify the native `SolutionExplorer.AddItem` respects the
-     selected node's folder context; add coverage if it does not (the scenario
-     must seed a nested folder + assert the new file lands in the subfolder).
-   - **`m` move (and `r` rename) use VS reference-fixing QoL** — moving a file
-     must update/fix all references (and anything else that could break). The
-     native `SolutionExplorer.Move` dialog + VS rename do this; verify they are
-     NOT bypassed and add coverage proving a moved file's references are fixed.
-   Feature lane (needs a decision on how to assert reference-fixing in the
-   harness — e.g. a post-move build/compile-check or a reference-grep).
+   `neovisual-explorer-rename`/`-add`/`-move` PASS. **The user's refinement:** the
+   native VS dialogs (rename F2 edit box, Move dialog, Add Item dialog) are
+   standard WinForms/WPF controls with **NO vim motions / insert-normal mode** —
+   so if we cannot add vim-mode to them, **build a Telescope-like controlled
+   overlay for rename/move/add** that WE own (with insert/normal mode + vim
+   motions, like the other Telescope surfaces). Design grounded in **LazyVim**
+   (research done 2026-09-19):
+   - **LazyVim rename symbol** (`<leader>cr` = `vim.lsp.buf.rename`): inline LSP
+     symbol rename, insert-mode, renames all references. (VS analog:
+     `Refactor.Rename` / editor F2.)
+   - **LazyVim rename/move FILE** (`<leader>cR` = `Snacks.rename.rename_file`):
+     the **LSP file-rename flow** that fixes references: (1) send
+     `workspace/willRenameFiles` → (2) server returns a `WorkspaceEdit` of all
+     import/reference updates → (3) apply+persist the edit → (4) rename on disk →
+     (5) send `workspace/didRenameFiles`. **Known gotcha:** the edits may only be
+     applied to *loaded buffers*, not persisted to disk before the filesystem
+     rename — unloaded files must get their edits applied directly to disk
+     (Snacks.rename / snacks-rename-fix handle this). This is the reference-fixing
+     QoL the user wants.
+   - **LazyVim code-action** (`<leader>ca` = `vim.lsp.buf.code_action`, mode
+     `{"n","x"}`): normal + visual modes — the **selection-vs-symbol
+     differentiation** maps exactly to the user's item #8 requirement.
+   - **LazyVim add**: file created by entering its path directly (no native
+     "Add New Item" dialog).
+   - **Open feasibility question for the planner:** VS's Roslyn workspace
+     already does file-rename/move-with-reference-fixing natively, but the public
+     trigger is the native `SolutionExplorer.Move` dialog (which has the
+     "update references" option). The item must determine HOW to trigger VS's
+     reference-fixing rename/move **programmatically** (bypassing the native
+     dialog) so it can be wrapped in a controlled vim-mode overlay — OR whether to
+     use VS's Roslyn workspace file-operation APIs directly.
+   Feature lane (new diagnostics for the controlled overlay + the reference-fixing
+   proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
 

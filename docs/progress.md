@@ -138,7 +138,7 @@ Top of the queue, in priority order:
   IQueryFinder branch (debounce + `grep hits` summary) and `GrepFinder`
   `GetCandidates(string)`** — the two BP steps the e2e scenario asserts on.
   Doc sync: Telescope 46→52, scenarios 27→28 across spec.md / AGENTS.md /
-  SKILL.md. Commit: `_filled at commit_`.
+  SKILL.md. Commit: `4faaf88`.
 - **2026-09-19 — Telescope references finder** (Lane: feature, attempt 1, GREEN):
   `ReferencesFinder` + `ReferenceHit` (Telescope, `Name="References"`, `Space+F R`)
   lists every reference to the symbol at the caret with **read/write access**

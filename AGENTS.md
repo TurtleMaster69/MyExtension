@@ -32,7 +32,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   pure state machine), file search (`FzfFilter`), file open (`FileFinder`
   hermetic seam), results formatting, log writer, and the preview-pane vim
   motions (`TextMotionNavigator`). `-- KeyHandler`, `-- Preview`, `-- FileFinder`,
-  `-- Fzf` run subsets. Currently **42 tests, all passing**.
+  `-- Fzf` run subsets. Currently **46 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -60,7 +60,7 @@ pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (26 total; all currently passing):
+Scenarios (27 total; all currently passing):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search
@@ -68,6 +68,7 @@ Scenarios (26 total; all currently passing):
 - `telescope-mode` — insert <-> normal toggling (Esc/i/a)
 - `telescope-open-file` — Enter opens the matched file in the editor
 - `telescope-issues` — Space F D: warnings/errors/TODO finder filters, previews, opens at line
+- `telescope-references` — Space F R: references to the symbol at the caret (read/write access), previews, opens at line
 - `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 - `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
 - `telescope-q-close` — q closes the overlay in normal mode
@@ -127,6 +128,8 @@ Key facts that make this reliable:
   `[Telescope] opened file: ...`, `[Telescope] overlay closed`, `[Telescope] preview file=...`,
   `[Telescope] preview tokens=...` (syntax-highlighted segment count),
   `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...` (code-issues finder),
+  `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
+  (references finder — read/write access from Roslyn FindReferences),
   `[Telescope] focus target=List|Preview`, `[Telescope] preview caret=... line=...`,
   `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions).
 
@@ -175,11 +178,23 @@ Done and tested (live + unit):
   (`TextSelection.GotoLine`). The fzf input is written as explicit UTF-8 bytes (the default ANSI
   StreamWriter mangles non-ASCII display text and breaks the display-keyed payload lookup).
   — `telescope-issues` live test passes.
+- References finder: `ReferencesFinder` (Telescope, `Name="References"`, `Space+F R`)
+  lists every reference to the symbol at the caret in the active document, gathered
+  from Roslyn `SymbolFinder.FindReferencesAsync` (MEF-resolved
+  `VisualStudioWorkspace`; the caret symbol resolved via the active editor view,
+  DTE `TextSelection` fallback). Each row shows file:line:col + **read/write
+  access** (`ReferenceLocation.IsWrittenTo` via reflection — internal in Roslyn
+  4.14 — the repo's established interop pattern); the preview jumps to the
+  reference line; Enter opens the file at the line. Diagnostics:
+  `references gathered reads=... writes=...` (gather summary) and
+  `opened reference: file=... line=... col=... access=read|write`. All Roslyn
+  async calls run inside `ThreadHelper.JoinableTaskFactory.Run` — never
+  `.Result`/`.GetAwaiter().GetResult()` on the UI thread.
+  — `telescope-references` live test passes.
 
 Pending (user-requested, NOT yet implemented):
-- **Telescope finders**: references, grep, fzf, implementation — each with a preview pane;
-  references/implementation preview should jump to the line number; references should show
-  read/write access info from VS.
+- **Telescope finders**: grep, fzf, implementation — each with a preview pane;
+  implementation preview should jump to the line number.
 
 ## Hard requirements that are easy to violate
 

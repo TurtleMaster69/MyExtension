@@ -1,8 +1,10 @@
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Design;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -68,6 +70,9 @@ namespace MyExtension
                 _telescope = new TelescopeController();
                 _telescope.RegisterFinder(new FileFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
                 _telescope.RegisterFinder(new CodeIssuesFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
+                _telescope.RegisterFinder(new ReferencesFinder(
+                    () => GatherReferences(),
+                    hit => OpenReference(hit)));
 
                 // Build WindowManager (current-window tracking + tool-window controller dispatch)
                 // before the hook so InputHandler can consume its cached state from the start.
@@ -421,6 +426,197 @@ namespace MyExtension
                 return null;
             }
             return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        }
+
+        // ================================================================
+        // References finder host: Roslyn find-references gatherer + DTE opener
+        // ================================================================
+
+        /// <summary>
+        /// Opens a reference hit's file in the editor and jumps the caret to the hit's 1-based
+        /// line (line-level ONLY — <see cref="ReferenceHit.Column"/> is reported metadata, not a
+        /// column jump, matching <see cref="CodeIssuesFinder"/>). The finder's
+        /// <c>OnSelected</c> wraps this call and emits the <c>opened reference</c> diagnostic.
+        /// </summary>
+        private void OpenReference(ReferenceHit hit)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!System.IO.File.Exists(hit.FilePath))
+            {
+                return;
+            }
+            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
+            dte.ItemOperations.OpenFile(hit.FilePath);
+            if (dte.ActiveDocument?.Selection is EnvDTE.TextSelection sel && hit.LineNumber > 0)
+            {
+                sel.GotoLine(hit.LineNumber, false);
+            }
+        }
+
+        /// <summary>
+        /// Gathers the read/write references to the symbol at the caret in the active document via
+        /// Roslyn find-references (workspace = MEF <c>VisualStudioWorkspace</c>, symbol resolution
+        /// via <c>SymbolFinder</c>). Runs on the UI thread; every Roslyn async call is wrapped in
+        /// <c>ThreadHelper.JoinableTaskFactory.Run</c> — never a blocking sync-wait, which would
+        /// deadlock the VS UI thread. Returns an empty list on any non-fatal failure.
+        /// </summary>
+        private IReadOnlyList<ReferenceHit> GatherReferences()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
+            var active = dte?.ActiveDocument;
+            if (active == null)
+            {
+                return Array.Empty<ReferenceHit>();
+            }
+
+            var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+            var workspace = componentModel?.GetService<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>();
+            if (workspace == null)
+            {
+                return Array.Empty<ReferenceHit>();
+            }
+
+            var solution = workspace.CurrentSolution;
+            var filePath = active.FullName;
+            var docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
+            if (docId == null)
+            {
+                return Array.Empty<ReferenceHit>();
+            }
+            var document = solution.GetDocument(docId);
+            if (document == null)
+            {
+                return Array.Empty<ReferenceHit>();
+            }
+
+            // Caret offset: prefer the active editor text view (robust under VsVim). Fall back to
+            // DTE TextSelection line/col -> SourceText offset if the view is unavailable.
+            int caret = GetCaretOffset(dte, active, document);
+            if (caret < 0)
+            {
+                return Array.Empty<ReferenceHit>();
+            }
+
+            var root = ThreadHelper.JoinableTaskFactory.Run(
+                () => document.GetSyntaxRootAsync(System.Threading.CancellationToken.None));
+            var semanticModel = ThreadHelper.JoinableTaskFactory.Run(
+                () => document.GetSemanticModelAsync(System.Threading.CancellationToken.None));
+            var symbol = ThreadHelper.JoinableTaskFactory.Run(() =>
+                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindSymbolAtPositionAsync(semanticModel, caret, workspace));
+            if (symbol == null)
+            {
+                return Array.Empty<ReferenceHit>();
+            }
+
+            var refs = ThreadHelper.JoinableTaskFactory.Run(() =>
+                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindReferencesAsync(symbol, solution));
+
+            var hits = new List<ReferenceHit>();
+            foreach (var rs in refs)
+            {
+                foreach (var loc in rs.Locations)
+                {
+                    var span = loc.Location.GetLineSpan();
+                    if (!span.IsValid)
+                    {
+                        continue;
+                    }
+                    string path = span.Path;
+                    int line = span.StartLinePosition.Line + 1;       // 0-based -> 1-based
+                    int col = span.StartLinePosition.Character + 1; // 0-based -> 1-based
+                    hits.Add(new ReferenceHit(path, line, col, IsWriteLocation(loc), symbol.Name, ReadLine(path, line)));
+                }
+            }
+            return hits;
+        }
+
+        /// <summary>
+        /// Resolves the caret's 0-based buffer offset in <paramref name="document"/>: the active
+        /// editor text view's caret position when available (robust under VsVim), else the DTE
+        /// TextSelection line/column mapped through the document's <see cref="Microsoft.CodeAnalysis.Text.SourceText"/>.
+        /// Returns -1 when no reliable caret can be resolved.
+        /// </summary>
+        private int GetCaretOffset(EnvDTE.DTE dte, EnvDTE.Document active, Microsoft.CodeAnalysis.Document document)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                    as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+                if (componentModel == null)
+                {
+                    return -1;
+                }
+
+                var textManager = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.TextManager.Interop.SVsTextManager))
+                    as Microsoft.VisualStudio.TextManager.Interop.IVsTextManager;
+                if (textManager != null)
+                {
+                    textManager.GetActiveView(1, null, out Microsoft.VisualStudio.TextManager.Interop.IVsTextView textView);
+                    if (textView != null)
+                    {
+                        var adapter = componentModel.GetService<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>();
+                        var wpfView = adapter?.GetWpfTextView(textView);
+                        if (wpfView != null)
+                        {
+                            return wpfView.Caret.Position.BufferPosition.Position;
+                        }
+                    }
+                }
+
+                if (active?.Selection is EnvDTE.TextSelection selection)
+                {
+                    int line = selection.ActivePoint.Line;              // 1-based
+                    int column = selection.ActivePoint.DisplayColumn;   // 1-based
+                    var text = ThreadHelper.JoinableTaskFactory.Run(
+                        () => document.GetTextAsync(System.Threading.CancellationToken.None));
+                    if (line >= 1 && line <= text.Lines.Count)
+                    {
+                        return text.Lines[line - 1].Start + Math.Max(0, column - 1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}GetCaretOffset failed: {ex.Message}");
+            }
+            return -1;
+        }
+
+        /// <summary>Reads the given 1-based source line from <paramref name="path"/> for display; defensive.</summary>
+        private static string ReadLine(string path, int line)
+        {
+            try
+            {
+                return System.IO.File.ReadLines(path).Skip(line - 1).FirstOrDefault() ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Resolves a reference location's read/write flag. Roslyn's <c>ReferenceLocation.IsWrittenTo</c>
+        /// (the read/write source of truth from the find-references engine) is public in older Roslyn
+        /// but internal in Roslyn 4.14+ (VS 17.14) — the property name is stable across both, so it is
+        /// read via reflection, mirroring the extension's VsVim interop pattern. False on any failure.
+        /// </summary>
+        private static bool IsWriteLocation(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation loc)
+        {
+            try
+            {
+                var property = typeof(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation).GetProperty(
+                    "IsWrittenTo",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                return property != null && property.GetValue(loc, null) is bool b && b;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowRect")]

@@ -12,6 +12,7 @@
 #   telescope-mode        insert <-> normal mode toggling (Esc/i/a)
 #   telescope-open-file   Enter on a match opens the file in the editor
 #   telescope-issues      Space F D: warnings/errors/TODO finder filters, previews, opens at line
+#   telescope-references  Space F R: lists read/write references to the caret symbol, previews+opens at line
 #   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 #   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
 #   telescope-q-close    q closes the overlay in normal mode
@@ -242,6 +243,27 @@ function Open-TelescopeIssues([object]$vs, [string]$logPath) {
     throw 'Telescope issues finder did not open'
 }
 
+function Open-TelescopeReferences([object]$vs, [string]$logPath) {
+    # Space F R opens the references finder (lists read/write references to the caret symbol).
+    # Same focus discipline as Open-Telescope: hammer Escape first (get VsVim out of insert),
+    # then wait for the overlay to own focus.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Bring-ToForeground $vs.MainWindowHandle
+        foreach ($i in 1..3) { Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 }
+        Start-Sleep -Milliseconds 300
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x46;             Start-Sleep -Milliseconds 150  # F
+        Send-Tap 0x52;                                             # R
+        if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=References" 15000) -and
+            (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
+            Assert-OverlayFocused $vs
+            return
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    throw 'Telescope references finder did not open'
+}
+
 function Close-Telescope([object]$vs, [string]$logPath) {
     # The overlay is a modal dialog that ALREADY owns keyboard focus — do NOT call
     # Bring-ToForeground here (it would SetForegroundWindow the VS main window and steal the
@@ -336,6 +358,13 @@ function Assert-SeedConsistent([string]$scratchDir) {
         'Services/AuthService.cs' = "// Services/AuthService.cs`r`n"
         'TodoProbe.cs'          = "// TODO: fix this issue`r`nclass TodoProbe { }`r`n"
         'Motions.cs'            = "class Motions`n{`n    int alpha = 1;`n    string beta = `"gamma`";`n}"  # pure LF, no trailing newline
+        # Real compilable symbol graph for the references finder (telescope-references): a public
+        # static field `Shared.Value` defined once and referenced from TWO other files — one read
+        # site (Reader.cs) and one write site (Writer.cs) — so Roslyn find-references has an actual
+        # symbol to resolve and the harness can assert read+write coverage. Uniform CRLF.
+        'Models/Shared.cs'      = "class Shared`r`n{`r`n    public static int Value;`r`n}`r`n"
+        'Reader.cs'             = "class Reader`r`n{`r`n    public static int Read()`r`n    {`r`n        return Shared.Value;`r`n    }`r`n}`r`n"
+        'Writer.cs'             = "class Writer`r`n{`r`n    public static void Run()`r`n    {`r`n        Shared.Value = 1;`r`n    }`r`n}`r`n"
     }
 
     # Gather every seeded source file (all *.cs plus *.sln/*.csproj) under the scratch dir.
@@ -414,6 +443,18 @@ function Reset-ScratchSolution([string]$scratchDir) {
     # newline (Set-Content -NoNewline). DO NOT change its EOL — the scenario asserts EXACT
     # caret positions (e.g. 'preview caret=14 line=2') that depend on these seeded line lengths.
     Set-Content -Path (Join-Path $probeDir 'Motions.cs') -NoNewline -Value "class Motions`n{`n    int alpha = 1;`n    string beta = `"gamma`";`n}"
+
+    # Real compilable symbol graph for the references finder (telescope-references): `Shared.Value`
+    # is a public static field defined in Models/Shared.cs and referenced from Reader.cs (read) and
+    # Writer.cs (write). These MUST match the $canonical map in Assert-SeedConsistent byte-for-byte
+    # (uniform CRLF) or the seed-consistency self-check fails the run.
+    New-Item -ItemType Directory -Force -Path (Join-Path $probeDir 'Models') | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $probeDir 'Models/Shared.cs'),
+        "class Shared`r`n{`r`n    public static int Value;`r`n}`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $probeDir 'Reader.cs'),
+        "class Reader`r`n{`r`n    public static int Read()`r`n    {`r`n        return Shared.Value;`r`n    }`r`n}`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $probeDir 'Writer.cs'),
+        "class Writer`r`n{`r`n    public static void Run()`r`n    {`r`n        Shared.Value = 1;`r`n    }`r`n}`r`n")
 
     # Solution + project entry (ALWAYS, not gated on Test-Path).
     dotnet new sln -n TelescopeTest -o $scratchDir --format sln 2>&1 | Out-Null
@@ -964,6 +1005,76 @@ Register-Scenario 'telescope-issues' {
     # Enter opens the file and jumps to the TODO line.
     Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
     Assert-NewLogLine $logPath "$($script:PfxTel)opened issue: .*TodoProbe\.cs line=\d+" 'Enter opened the issue at its line'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-references -------------------------------------------------
+# The references finder (Space F R) lists every reference to the symbol under the caret, showing
+# read/write access. The scratch solution seeds a public static field `Shared.Value` (defined in
+# Models/Shared.cs) with a READ site (Reader.cs) and a WRITE site (Writer.cs). The scenario opens
+# the defining file, positions the caret on `Value`, opens the references finder, and asserts the
+# candidates count (>=2), the read/write gather summary, the preview line-jump, and that Enter
+# opens a reference at its line with its access kind.
+Register-Scenario 'telescope-references' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+
+    # Step 1: open the defining file (Models/Shared.cs) via the overlay.
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Shared'
+    Assert-NewLogLine $logPath "promptChanged query='Shared'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Shared.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Shared\.cs" 'preview shows the Shared.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Shared\.cs" 'Enter opened Models/Shared.cs'
+    Close-Telescope $vs $logPath
+
+    # Step 2: position the caret on the `Value` field symbol with deterministic VsVim normal-mode
+    # motions. Shared.cs is:
+    #   1: class Shared
+    #   2: {
+    #   3:     public static int Value;   <- cols: public=4, static=11, int=18, Value=22
+    #   4: }
+    # After opening, the caret is line 1 col 0. j,j descend to line 3 (col 0); w x4 walks
+    # public -> static -> int -> Value (start of the symbol).
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'references caret positioning'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j -> line 2
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j -> line 3 (the field line)
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w -> public
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w -> static
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w -> int
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w -> Value
+
+    # Step 3: Space+F R -> references finder, >=2 candidates (definition + read + write vs the
+    # current filter; candidates never logged per-row, only the count).
+    Open-TelescopeReferences $vs $logPath
+    Assert-OverlayFocused $vs
+    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=References candidates=(\d+)" 'references finder listed candidates'
+    $cand = 0
+    $lines = Get-Content $logPath
+    foreach ($ln in $lines) { if ($ln -match 'open finder=References candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    if ($cand -lt 2) { throw "expected >=2 references, found $cand" }
+
+    # Step 4: gather summary proves read AND write coverage (seeded read + write sites).
+    Assert-NewLogLine $logPath "$($script:PfxTel)references gathered reads=(\d+) writes=(\d+)" 'references gather summary logged'
+    $reads = 0; $writes = 0
+    foreach ($ln in (Get-Content $logPath)) {
+        if ($ln -match 'references gathered reads=(\d+) writes=(\d+)') { $reads = [int]$Matches[1]; $writes = [int]$Matches[2] }
+    }
+    if ($reads -lt 1) { throw "expected >=1 read reference, found $reads" }
+    if ($writes -lt 1) { throw "expected >=1 write reference, found $writes" }
+
+    # Step 5: preview jumps to the selected reference line.
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*\.cs" 'preview loaded the reference file'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=\d+" 'preview caret jumped to the reference line'
+
+    # Step 6: Enter opens the reference at its line with its read/write access.
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened reference: file=.*\.cs line=\d+ col=\d+ access=(read|write)" 'Enter opened the reference with access kind'
+
+    # Step 7: close.
     Close-Telescope $vs $logPath
 }
 

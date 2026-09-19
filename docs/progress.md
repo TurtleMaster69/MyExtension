@@ -9,11 +9,12 @@ reads at the start of every loop iteration.
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **42 passed**; `tests/NeoVisual.Tests`
+- Offline units: `tests/Telescope.Tests` **46 passed**; `tests/NeoVisual.Tests`
   **25 passed**.
-- Live E2E: `tools/test-e2e.ps1` lists **26 scenarios** (incl. `seed-reset`).
-  The full 26-scenario suite is GREEN (verified 2026-09-19 after the backlog
-  fixes item); **no known-RED scenarios remain**.
+- Live E2E: `tools/test-e2e.ps1` lists **27 scenarios** (incl. `seed-reset`).
+  The full 27-scenario suite is GREEN (verified 2026-09-19 after the references-finder
+  item; one pre-existing flake `neovisual-editor-insert` passes on retry);
+  **no known-RED scenarios remain**.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -99,8 +100,8 @@ Top of the queue, in priority order:
    investigation)~~ — **DONE**: full 26-scenario suite GREEN + both unit suites
    (25/42); see the Done section.
 3. Implement the **Telescope finders** roadmap:
-   - `references` finder — with preview pane; preview jumps to line; shows
-     read/write access info from VS.
+   - ~~`references` finder~~ — **DONE** (see Done section; `Space+F R`,
+     read/write access, preview line-jump).
    - `grep` finder — with preview pane.
    - `fzf` finder — with preview pane.
    - `implementation` finder — with preview pane; preview jumps to line.
@@ -108,6 +109,34 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-19 — Telescope references finder** (Lane: feature, attempt 1, GREEN):
+  `ReferencesFinder` + `ReferenceHit` (Telescope, `Name="References"`, `Space+F R`)
+  lists every reference to the symbol at the caret with **read/write access**
+  (Roslyn `SymbolFinder.FindReferencesAsync` via MEF-resolved
+  `VisualStudioWorkspace`; `IsWrittenTo` via reflection — internal in Roslyn
+  4.14); preview jumps to the reference line; Enter opens the file at the line.
+  New diagnostics: `references gathered reads=N writes=N` and
+  `opened reference: file=... line=... col=... access=read|write`. New e2e
+  scenario `telescope-references` (27th) passes with `candidates=2 reads=1
+  writes=1`; full suite GREEN (one pre-existing flake `neovisual-editor-insert`,
+  retry-pass, count 1/3); units Telescope 46/46, NeoVisual 25/25.
+  **Change summary:** created `Telescope/ReferenceHit.cs` +
+  `Telescope/ReferencesFinder.cs`; edited `Telescope/TelescopeOverlay.cs`
+  (ReferenceHit preview branch), `MyExtension/InputHandler.cs`
+  (ResolveAction case + `OpenTelescopeReferences()`), `MyExtension/MyExtensionPackage.cs`
+  (finder registration + Roslyn gatherer `GatherReferences`/`OpenReference`),
+  `MyExtension/default-keybindings.json` (`F,R` → `telescope-references`),
+  `MyExtension/MyExtension.csproj` (+ `Microsoft.VisualStudio.LanguageServices`
+  4.14.0, `ExcludeAssets="runtime"`), `tools/test-e2e.ps1` (scenario + seeded
+  `Models/Shared.cs`/`Reader.cs`/`Writer.cs` in `$canonical`),
+  `tests/Telescope.Tests/Program.cs` (+4 `Run_ReferencesFinder_*`). 3 DEVIATIONS
+  adjudicated ACCEPT (package version 4.14.0; `IsWrittenTo` via reflection;
+  UI-thread guard for the offline test host) — no contract change.
+  **If this regresses, look first at the `opened reference:` diagnostic +
+  `ReferencesFinder.GetCandidates` (gather summary) and the
+  `GlobalKeyboardHook`-independent overlay preview branch — the two BP steps the
+  e2e scenario asserts on.** Doc sync: Telescope 42→46, scenarios 26→27 across
+  spec.md / AGENTS.md / SKILL.md. Commit: `_filled at commit_`.
 - **2026-09-19 — Fix 4 known-RED backlog items / gate the 26-scenario suite green**
   (Lane: bugfix, attempt 1, GREEN): full 26-scenario e2e suite passes, no
   known-RED scenarios remain; NeoVisual.Tests 21→25 (4 new `Run_InjectedKeyGuard_*`),

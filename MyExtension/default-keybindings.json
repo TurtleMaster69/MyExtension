@@ -15,7 +15,7 @@
     "F,D": "telescope-issues",
     "F,G": "command:Edit.FindinFiles",
     "F,B": "command:Window.NavigateTo",
-    "F,R": "command:File.OpenFile",
+    "F,R": "telescope-references",
     "C,W": "command:View.CommandWindow",
     "C,A": "command:View.QuickActions",
     "C,R": "command:Refactor.Rename",

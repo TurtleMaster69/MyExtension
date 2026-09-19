@@ -660,6 +660,75 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // ReferencesFinder — read/write references to the caret symbol
+        // (hermetic seams: injected gatherer Func<IReadOnlyList<ReferenceHit>> + opener
+        // Action<ReferenceHit>, mirroring CodeIssuesFinder)
+        // ================================================================
+
+        public static void Run_ReferencesFinder_DisplayShowsAccessMarker()
+        {
+            var read = new ReferenceHit(@"C:\p\Reader.cs", 5, 16, isWrite: false, "Value", "return Shared.Value;");
+            var write = new ReferenceHit(@"C:\p\Writer.cs", 5, 5, isWrite: true, "Value", "Shared.Value = 1;");
+            var finder = new ReferencesFinder(() => new[] { read, write }, _ => { });
+
+            var entries = finder.GetCandidates();
+            Assert.Equal(2, entries.Count);
+
+            // The display must show the read/write access deterministically: "(read)" for a read,
+            // "(write)" for a write — this is the per-row access contract (A2).
+            Assert.True(entries[0].Display.Contains("(read)"), $"read hit shows '(read)', got '{entries[0].Display}'");
+            Assert.True(entries[1].Display.Contains("(write)"), $"write hit shows '(write)', got '{entries[1].Display}'");
+            // Display must carry the file name and the symbol so a human can disambiguate the row.
+            Assert.True(entries[0].Display.Contains("Reader.cs"), $"read hit names its file, got '{entries[0].Display}'");
+            Assert.True(entries[0].Display.Contains("Value"), $"read hit names the symbol, got '{entries[0].Display}'");
+        }
+
+        public static void Run_ReferencesFinder_PayloadRoundTrips()
+        {
+            var hit = new ReferenceHit(@"C:\p\Writer.cs", 5, 5, isWrite: true, "Value", "Shared.Value = 1;");
+            var finder = new ReferencesFinder(() => new[] { hit }, _ => { });
+
+            var entry = finder.GetCandidates()[0];
+            // The ReferenceHit payload must round-trip through FinderEntry.Payload so OnSelected can
+            // recover the exact file/line/col/access to open.
+            Assert.True(ReferenceEquals(hit, entry.Payload), "payload must be the exact ReferenceHit instance");
+            var payload = entry.Payload as ReferenceHit;
+            Assert.True(payload != null, "payload is a ReferenceHit");
+            Assert.Equal(@"C:\p\Writer.cs", payload!.FilePath);
+            Assert.Equal(5, payload.LineNumber);
+            Assert.True(payload.IsWrite, "write hit carries IsWrite=true");
+        }
+
+        public static void Run_ReferencesFinder_OnSelectedOpensHitWithAccess()
+        {
+            var write = new ReferenceHit(@"C:\p\Writer.cs", 5, 5, isWrite: true, "Value", "Shared.Value = 1;");
+            ReferenceHit? opened = null;
+            var finder = new ReferencesFinder(() => new[] { write }, hit => opened = hit);
+            var entry = finder.GetCandidates()[0];
+
+            finder.OnSelected(entry);
+            Assert.True(opened != null, "opener invoked");
+            Assert.Equal(@"C:\p\Writer.cs", opened!.FilePath);
+            Assert.Equal(5, opened.LineNumber);
+            Assert.Equal(5, opened.Column);
+            Assert.True(opened.IsWrite, "opened hit preserves its write access");
+        }
+
+        public static void Run_ReferencesFinder_LineNumberDrivesPreviewJump()
+        {
+            // A3 line mapping: the hit's 1-based LineNumber is what positions the preview caret.
+            // Feed a hit whose line is 3 (mid-file) into the shared navigator and prove it lands
+            // on line 3 — the pure mapping the overlay's ReferenceHit preview branch relies on.
+            string text = "one\ntwo\nthree\nfour";
+            var hit = new ReferenceHit(@"C:\p\File.cs", 3, 1, isWrite: false, "Value", "three");
+            var nav = new TextMotionNavigator();
+            nav.SetText(text);
+            nav.MoveToLine(hit.LineNumber);
+            Assert.Equal(3, nav.LineNumber);
+            Assert.Equal(8, nav.Caret); // start of "three"
+        }
+
+        // ================================================================
         // DiagnosticLog — pins the log-prefix constants the harness relies on
         // (F45: Telescope/DiagnosticLog.cs does not exist yet -> this is RED)
         // ================================================================

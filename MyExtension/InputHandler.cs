@@ -162,6 +162,7 @@ namespace MyExtension
                 case "navigate-down": return () => Navigate(CardinalNavigationConstants.DOWN);
                 case "telescope": return () => OpenTelescope();
                 case "telescope-issues": return () => OpenTelescopeIssues();
+                case "telescope-references": return () => OpenTelescopeReferences();
                 case "toggle-solution-explorer": return () => ToggleSolutionExplorer();
                 default:
                     break;
@@ -463,6 +464,28 @@ namespace MyExtension
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope issues: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "References" finder (read/write references to the
+        /// symbol at the caret), centered over the VS main window. The
+        /// <see cref="ReferencesFinder"/> gathers candidates via the host's Roslyn call on the UI
+        /// thread.
+        /// </summary>
+        private void OpenTelescopeReferences()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("References", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope references: {ex.Message}");
             }
         }
 

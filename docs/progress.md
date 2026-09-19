@@ -170,10 +170,27 @@ Top of the queue, in priority order:
    that. It displays all available actions; **the ORDER is TBD, with one fixed
    rule: the FIRST option is always the action that fixes the warning/error**
    when the cursor was on a symbol marked as a warning/error (the fix-it action
-   surfaces first). Diagnostic contract + keybinding (`C,A` →
+   surfaces first).    Diagnostic contract + keybinding (`C,A` →
    `command:View.QuickActions` is CURRENTLY bound — will be REBOUND to this
    picker; the quick-actions menu itself is the native equivalent). Feature
    lane.
+
+9. **Solution Explorer normal-mode `r`/`a`/`m` — refine to VS QoL semantics.**
+   **Base keys ALREADY EXIST** (`SolutionExplorerController`): `r` rename (F2
+   injected), `a` Add Item command, `m` Move command; live scenarios
+   `neovisual-explorer-rename`/`-add`/`-move` PASS. The user's refinements
+   (verify/enhance, feature lane — new diagnostics likely):
+   - **`a` adds a file to the folder the selection is IN** — if on a subfolder
+     or an item inside a subfolder, the Add-Item targets THAT subfolder (not the
+     project root). Verify the native `SolutionExplorer.AddItem` respects the
+     selected node's folder context; add coverage if it does not (the scenario
+     must seed a nested folder + assert the new file lands in the subfolder).
+   - **`m` move (and `r` rename) use VS reference-fixing QoL** — moving a file
+     must update/fix all references (and anything else that could break). The
+     native `SolutionExplorer.Move` dialog + VS rename do this; verify they are
+     NOT bypassed and add coverage proving a moved file's references are fixed.
+   Feature lane (needs a decision on how to assert reference-fixing in the
+   harness — e.g. a post-move build/compile-check or a reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
 

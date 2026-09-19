@@ -128,7 +128,7 @@ Top of the queue, in priority order:
   injected Return means the guard consumed a key it shouldn't; a re-storm means
   the pass-through placement moved. No diagnostic format changed (M-M7 N/A).
   Doc sync: NeoVisual 21→25 in spec.md / AGENTS.md / SKILL.md; AGENTS.md
-  scenario-status line now "all currently passing". Commit hash: _filled at commit_.
+  scenario-status line now "all currently passing". Commit: `1606caf`.
 - **2026-09-19 — Harness seeding hardening** (Lane: bugfix, attempt 1, GREEN):
   `tools/test-e2e.ps1` now always resets the scratch solution
   (`Reset-ScratchSolution`) with uniform line endings; the "normalize line

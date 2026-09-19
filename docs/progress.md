@@ -143,6 +143,20 @@ Top of the queue, in priority order:
 
 ## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
 
+> **FEATURE TRIAGE RULE (user instruction 2026-09-19 — applies to ALL feature
+> backlog items):**
+> 1. **LazyVim is the main reference** for how a feature *should work* — research
+>    its workflow/functionality first and design against it.
+> 2. **Before implementing ANY feature, ASK the user** (via the `question` tool)
+>    whether it is worth the implementation time, OR whether there is a **better
+>    native VS option to extend/reuse** (e.g. VS already updates references when
+>    you move/rename a file in Solution Explorer — extend/reuse that QoL rather
+>    than reimplementing it).
+> 3. The **user decides** (build vs extend/reuse vs skip) BEFORE the loop starts a
+>    feature item. Do not dive into a feature pipeline without this gate.
+> This applies to items 6-9 below (and any future feature). The loop pauses at
+> the triage gate for each new feature.
+
 > These were requested by the user before sleep; they are NEW feature items.
 > Implementation order is TBD (the user said "we will decide the order later"
 > for the code-actions picker). Each needs its own feature-lane pipeline (M-M7

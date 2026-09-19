@@ -141,6 +141,40 @@ Top of the queue, in priority order:
      (KNOWN-RED scenario registered).
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
 
+## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
+
+> These were requested by the user before sleep; they are NEW feature items.
+> Implementation order is TBD (the user said "we will decide the order later"
+> for the code-actions picker). Each needs its own feature-lane pipeline (M-M7
+> applies to any that add a `[Telescope]`/`[NeoVisual]` diagnostic).
+
+6. **Vim motions in the Solution Explorer search box.** (Partially exists — the
+   search box already routes h/l/w/b/e/a/A/I via `TextMotionHelper` while a WPF
+   TextBox is focused; confirm/extend the full motion set — e.g. `j`/`k`/`0`/`$`,
+   block caret — to match the text-input tool-window surfaces. TBD: exact set.)
+   Feature lane.
+
+7. **Ctrl+H/J/K/L navigation INSIDE the Telescope overlay — 3 panes, modal.**
+   The overlay should have **3 windows: input field (prompt), results list,
+   preview pane**. Ctrl+H/J/K/L moves focus BETWEEN these 3 panes WITHOUT giving
+   focus to any VS window below (modal — no `WindowMatrix`/window navigation; the
+   overlay keeps focus). Currently Ctrl+H/Ctrl+L switch List↔Preview
+   (`_focusTarget`); this extends to a 3-way pane switch including the prompt
+   input, with Ctrl+J/K (up/down) also in play. Feature lane (new diagnostics
+   likely, e.g. `[Telescope] focus target=Input|List|Preview`).
+
+8. **`Leader+C+A` — code-actions picker.** Opens a picker of the VS **code
+   actions** available at the caret, navigable with **Ctrl+N/P** (and **hjkl**).
+   It must **differentiate whether it was triggered on a SELECTION (multi-line
+   selected) vs just placed on a symbol** — the set of actions shown depends on
+   that. It displays all available actions; **the ORDER is TBD, with one fixed
+   rule: the FIRST option is always the action that fixes the warning/error**
+   when the cursor was on a symbol marked as a warning/error (the fix-it action
+   surfaces first). Diagnostic contract + keybinding (`C,A` →
+   `command:View.QuickActions` is CURRENTLY bound — will be REBOUND to this
+   picker; the quick-actions menu itself is the native equivalent). Feature
+   lane.
+
 ## Done (durable completion history — appended on every GREEN)
 
 - **2026-09-19 — 2 planned E2E coverage scenarios** (Lane: trivial, GREEN —

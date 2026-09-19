@@ -42,6 +42,10 @@ namespace MyExtension
 
         public void ExitInputMode() => _isInputMode = false;
 
+        /// <summary>The default controller acts on no non-hjkl keys.</summary>
+        public System.Collections.Generic.IReadOnlyCollection<Keys> ActionKeys =>
+            System.Array.Empty<Keys>();
+
         /// <summary>
         /// Handles a normal-mode key. Only hjkl map to arrows (left/down/up/right respectively);
         /// any other key is not consumed here. Returns true when the key was handled.
@@ -54,6 +58,7 @@ namespace MyExtension
                 return false;
             }
 
+            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk}");
             KeyInjection.Press(vk);
             return true;
         }

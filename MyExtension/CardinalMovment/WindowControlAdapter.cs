@@ -83,7 +83,7 @@ namespace CardinalNavigation
                 if (ex is System.InvalidOperationException)
                 {
                     System.Diagnostics.Debug.WriteLine(
-                        $"[NeoVisual] Unable to pair active window '{activeWindow.Caption}': {ex.Message}");
+                        $"{Telescope.DiagnosticLog.NeoVisual}Unable to pair active window '{activeWindow.Caption}': {ex.Message}");
                     return null;
                 }
                 throw;
@@ -129,7 +129,7 @@ namespace CardinalNavigation
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine(
-                    $"[NeoVisual] Window linking failed (dte:{dteWindows?.Count}, frames:{genericWindows?.Count}): {ex.Message}\n{ex.StackTrace}");
+                    $"{Telescope.DiagnosticLog.NeoVisual}Window linking failed (dte:{dteWindows?.Count}, frames:{genericWindows?.Count}): {ex.Message}\n{ex.StackTrace}");
                 throw;
             }
         }

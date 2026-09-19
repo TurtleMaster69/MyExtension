@@ -14,9 +14,22 @@
   <ItemGroup>
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Xaml" />
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
+  </ItemGroup>
+
+  <!--
+    Make internals visible to the unit-test project (tests/Telescope.Tests) so it can exercise
+    the pure logic (ResultsFormatter, FzfFilter, TelescopeLog, TextMotionNavigator,
+    SyntaxHighlighter) without widening public API — and to MyExtension so the text-input tool
+    window controller reuses the shared TextMotionNavigator for its vim caret motions.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Telescope.Tests" />
+    <InternalsVisibleTo Include="MyExtension" />
   </ItemGroup>
 
 </Project>

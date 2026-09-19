@@ -3,4 +3,6 @@
     <Deploy />
   </Project>
   <Project Path="Telescope/Telescope.csproj" />
+  <Project Path="tests/Telescope.Tests/Telescope.Tests.csproj" />
+  <Project Path="tests/NeoVisual.Tests/NeoVisual.Tests.csproj" />
 </Solution>

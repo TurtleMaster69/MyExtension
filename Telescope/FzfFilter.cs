@@ -105,13 +105,13 @@ namespace Telescope
                     return lines;
                 }
 
-                // Feed candidates on stdin, then close it so fzf knows the input is complete.
-                p.StandardInput.NewLine = "\n";
-                foreach (var line in lines)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    p.StandardInput.WriteLine(line);
-                }
+                // Feed candidates on stdin, then close it so fzf knows the input is complete. The
+                // bytes are written explicitly as UTF-8: the StreamWriter's default ANSI encoding
+                // would mangle non-ASCII display text (e.g. the em-dash in code-issue rows), which
+                // would break the display-keyed lookup back to the original entry downstream.
+                var inputBytes = Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n");
+                p.StandardInput.BaseStream.Write(inputBytes, 0, inputBytes.Length);
+                p.StandardInput.BaseStream.Flush();
                 p.StandardInput.Close();
 
                 var outputTask = p.StandardOutput.ReadToEndAsync();

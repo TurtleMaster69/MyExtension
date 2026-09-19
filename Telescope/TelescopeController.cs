@@ -42,16 +42,18 @@ namespace Telescope
 
         /// <summary>
         /// Opens the named finder in the overlay. <paramref name="centerRect"/> (optional, in
-        /// screen pixels) is the area to center over — pass the VS main-window rect. Returns
-        /// false if the finder is unknown. Must run on the UI thread.
+        /// screen pixels) is the area to center over — pass the VS main-window rect.
+        /// <paramref name="ownerHwnd"/> (optional) is the HWND of the host window (the VS main
+        /// window) that should own the overlay, so it reliably activates and captures keyboard
+        /// focus when shown. Returns false if the finder is unknown. Must run on the UI thread.
         /// </summary>
-        public bool Open(string finderName, System.Drawing.Rectangle? centerRect = null)
+        public bool Open(string finderName, System.Drawing.Rectangle? centerRect = null, IntPtr ownerHwnd = default)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
             if (!_finders.TryGetValue(finderName, out var finder))
             {
-                System.Diagnostics.Debug.WriteLine($"[Telescope] Unknown finder '{finderName}'.");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}Unknown finder '{finderName}'.");
                 return false;
             }
 
@@ -60,12 +62,11 @@ namespace Telescope
                 return true; // already showing
             }
 
-            if (_overlay == null)
-            {
-                _overlay = new TelescopeOverlay(_fzf);
-            }
-
-            _overlay.ShowOverlay(finder, centerRect);
+            // Build a fresh overlay every open: a WPF Window cannot be shown again after Close(),
+            // so reusing the cached instance would throw InvalidOperationException on a second
+            // open. The abandoned closed window is simply garbage-collected.
+            _overlay = new TelescopeOverlay(_fzf);
+            _overlay.ShowOverlay(finder, centerRect, ownerHwnd);
             return true;
         }
 

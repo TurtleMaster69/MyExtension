@@ -84,7 +84,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Failed to load built-in keybindings: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to load built-in keybindings: {ex.Message}");
             }
 
             // Optional user overrides, used only when the file exists.
@@ -98,11 +98,24 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Failed to load keybindings from '{path}': {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
             }
 
-            System.Diagnostics.Debug.WriteLine($"[NeoVisual] Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(File.Exists(path) ? path : "none")})");
+            System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(File.Exists(path) ? path : "none")})");
 
+return new KeybindingConfig(leaderKey, bindings);
+        }
+
+        /// <summary>
+        /// Test-only seam: builds a config from an explicit JSON string (no embedded resource, no
+        /// user file). Mirrors the merge logic of <see cref="Load"/>. Internal so the offline
+        /// NeoVisual test project can exercise binding parsing hermetically.
+        /// </summary>
+        internal static KeybindingConfig LoadFromJson(string json)
+        {
+            var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var leaderKey = Keys.Space;
+            ApplyJson(json, ref leaderKey, bindings);
             return new KeybindingConfig(leaderKey, bindings);
         }
 

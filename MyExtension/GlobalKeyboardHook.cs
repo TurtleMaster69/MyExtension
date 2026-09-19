@@ -50,10 +50,6 @@ namespace MyExtension
 
         private readonly InputHandler _inputHandler;
 
-        // The VS Output window pane we write diagnostics to ("NeoVisual").
-        private static IVsOutputWindowPane _pane;
-        private static Guid PaneGuid = new Guid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
-
         // Our process id never changes; cached because the focus check runs for every key.
         private static readonly int CurrentProcessId = Process.GetCurrentProcess().Id;
 
@@ -63,9 +59,9 @@ namespace MyExtension
 
             _inputHandler = new InputHandler(package, telescope, windowManager);
 
-            // Create the output pane eagerly (on the UI thread) so Log() never has to switch
-            // threads afterwards (OutputStringThreadSafe is then usable from any thread).
-            EnsureOutputPane();
+            // Prime the NeoVisual log pane eagerly (on the UI thread) so later any-thread writes
+            // (OutputStringThreadSafe) work without a thread switch.
+            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.Hook}starting");
 
             _proc = HookCallback;
             _hookId = SetHook(_proc);
@@ -74,10 +70,12 @@ namespace MyExtension
             {
                 int error = Marshal.GetLastWin32Error();
                 Log($"FAILED to install keyboard hook. Win32 Error: {error}");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.Hook}INSTALL FAILED error={error}");
             }
             else
             {
                 Log("Keyboard hook installed successfully!");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.Hook}installed");
             }
         }
 
@@ -114,6 +112,8 @@ namespace MyExtension
                 if (IsInteresting(key, ctrl, shift, alt))
                 {
                     bool handled = false;
+
+                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.Hook}key={key} ctrl={ctrl} shift={shift} alt={alt} leader={_inputHandler.IsLeaderActive}");
 
                     // The hook is installed on the main thread, so HandleKey normally runs
                     // directly here. The else is defensive only; its wait must stay bounded
@@ -152,6 +152,13 @@ namespace MyExtension
             // Any modifier chord is a candidate simple shortcut (Ctrl+H, ...), and while a
             // leader sequence is in progress ANY key can extend or break it — both handled.
             if (_inputHandler.IsLeaderActive || ctrl || shift || alt)
+            {
+                return true;
+            }
+
+            // When the current tool window is in normal mode with action keys (Solution Explorer's
+            // o/r/m/a), those keys must reach the handler instead of being skipped as typing keys.
+            if (_inputHandler.HasToolWindowActionKeys)
             {
                 return true;
             }
@@ -207,47 +214,14 @@ namespace MyExtension
         }
 
         /// <summary>
-        /// Writes a diagnostic line to Debug output and the "NeoVisual" pane. Thread-safe, but
-        /// NOT for the per-key path (each write is an interop call).
+        /// Writes a diagnostic line to Debug output, the "NeoVisual" pane, and the log file.
+        /// Thread-safe, but NOT for the per-key path (each write is an interop call).
         /// </summary>
         private void Log(string message)
         {
-            string fullMessage = $"[GlobalKeyboard] {DateTime.Now:HH:mm:ss.fff}  {message}";
+            string fullMessage = $"{Telescope.DiagnosticLog.GlobalKeyboard}{DateTime.Now:HH:mm:ss.fff}  {message}";
             Debug.WriteLine(fullMessage);
-
-            try
-            {
-                WriteToOutputWindow(fullMessage);
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// Lazily creates the "NeoVisual" output pane. Must run on the UI thread; we ensure the
-        /// constructor calls it at the right time so later writes don't need a thread switch.
-        /// </summary>
-        private static void EnsureOutputPane()
-        {
-            if (_pane != null)
-            {
-                return;
-            }
-
-            var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
-            if (outputWindow == null) return;
-
-            outputWindow.CreatePane(ref PaneGuid, "NeoVisual", 1, 1);
-            outputWindow.GetPane(ref PaneGuid, out _pane);
-        }
-
-        /// <summary>
-        /// Thread-safe output-pane write. <c>OutputStringThreadSafe</c> (vs <c>OutputString</c>)
-        /// is specifically the com-callable, any-thread variant — but we still create the pane
-        /// on the UI thread first (above).
-        /// </summary>
-        private static void WriteToOutputWindow(string message)
-        {
-            _pane?.OutputStringThreadSafe(message + Environment.NewLine);
+            Telescope.NeoVisualLog.Log(fullMessage);
         }
 
         public void Dispose()

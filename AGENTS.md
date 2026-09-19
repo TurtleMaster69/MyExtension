@@ -1,8 +1,14 @@
 # AGENTS.md
 
-Visual Studio extension (VSIX) implementing Cardinal-style window navigation and
-leader-key keyboard bindings. Single project: `MyExtension/MyExtension.csproj`,
-opened via `MyExtension.slnx`.
+> **Resume checkpoint:** if the user says "continue" to resume prior work, read
+> `docs/progress.md` first — it holds the in-flight task state, the pending queue,
+> and next steps. (`.opencode/PROGRESS.md` was superseded by it — do not read or
+> recreate that file.)
+
+Visual Studio extension (VSIX) implementing Cardinal-style window navigation,
+leader-key keyboard bindings, a Telescope-style fuzzy finder overlay, and
+tool-window navigation. Single project: `MyExtension/MyExtension.csproj`, opened
+via `MyExtension.slnx`.
 
 More detailed architecture lives in `.opencode/skills/vs-extension-dev/SKILL.md`;
 read it before making changes. This file only covers what's easy to get wrong.
@@ -11,10 +17,170 @@ read it before making changes. This file only covers what's easy to get wrong.
 
 - `dotnet build` (or build in VS). This is a VSIX — a plain `dotnet run` does not work.
 - **Test by running in the VS Experimental Instance**: F5 (or `Start` with the
-  csproj) launches VS with the extension loaded. There is **no test project** and
-  no `test`/`lint`/`typecheck` target.
+  csproj) launches VS with the extension loaded. Unit tests live in the two
+  `tests/` projects (see below); there is no `test`/`lint`/`typecheck` target.
 - Debug log output: `Debug.WriteLine` plus a custom **"NeoVisual"** VS Output
   window pane (created in `GlobalKeyboardHook`). Look there for hook/input logs.
+
+## Offline unit tests (no VS needed)
+
+Two hermetic test projects, both run with `dotnet run` and both supporting a
+**substring filter** as the first arg (and `--list` to print tests):
+
+- `dotnet run --project tests/Telescope.Tests` — Telescope overlay logic.
+  Covers overlay navigation + insert/normal mode (`OverlayKeyHandler`, extracted
+  pure state machine), file search (`FzfFilter`), file open (`FileFinder`
+  hermetic seam), results formatting, log writer, and the preview-pane vim
+  motions (`TextMotionNavigator`). `-- KeyHandler`, `-- Preview`, `-- FileFinder`,
+  `-- Fzf` run subsets. Currently **42 tests, all passing**.
+- `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
+  parsing (`KeybindingConfig`), tool-window type + mode classification
+  (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
+  helpers. `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, etc. run
+  subsets. Currently **21 tests, all passing**.
+
+`InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
+for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
+class, mirror the `OverlayKeyHandler` / `TextMotionNavigator` pattern
+(dependency-free state machine the UI delegates to) so it stays unit-testable.
+The E2E behavior is verified by the live harness (`tools/test-e2e.ps1`).
+
+## Live E2E tests (experimental instance)
+
+`tools/test-e2e.ps1` boots the VS Experimental Instance with the extension deployed and a real
+solution open, then runs every functionality scenario against that **live** instance, asserting on
+the runtime log (with per-scenario focus verification so keys are never typed into the wrong
+window):
+
+```
+pwsh tools/test-e2e.ps1                              # all 26 scenarios
+pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
+pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
+pwsh tools/test-e2e.ps1 -List                        # list scenarios
+```
+
+Scenarios (26 total; all currently passing except the 4 documented known-RED /
+backlog items in docs/progress.md — `neovisual-explorer-open`/-`open-o` Enter-storm,
+`telescope-prompt-motions` caret, `telescope-open-file-normal` key name):
+- `telescope-open` — Space F T opens overlay, prompt focused insert
+- `telescope-search` — typing filters candidates (promptChanged + results)
+- `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search
+- `telescope-wrap` — selection wraps around the result list (k at 0 -> last, j at last -> 0)
+- `telescope-mode` — insert <-> normal toggling (Esc/i/a)
+- `telescope-open-file` — Enter opens the matched file in the editor
+- `telescope-issues` — Space F D: warnings/errors/TODO finder filters, previews, opens at line
+- `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
+- `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
+- `telescope-q-close` — q closes the overlay in normal mode
+- `telescope-open-file-normal` — Enter selects the match in NORMAL mode
+- `telescope-no-selection` — j/k on an empty result list is a no-op (selection stays 0)
+- `telescope-preview` — preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview; syntax-highlighted tokens
+- `neovisual-window-nav` — Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
+- `neovisual-leader` — Space+W/Space+E fire leader bindings
+- `neovisual-toolwindow` — Solution Explorer hjkl navigation + i/Esc input-mode
+- `neovisual-explorer-toggle` — Space+E opens/closes Solution Explorer (toggle)
+- `neovisual-explorer-open` — l expands fold, j/k navigate, Enter opens a file
+- `neovisual-explorer-open-o` — o opens the selected file
+- `neovisual-explorer-collapse` — h collapses the fold
+- `neovisual-explorer-rename` — r starts rename (F2), Escape cancels
+- `neovisual-explorer-add` — a runs the Add Item command
+- `neovisual-explorer-move` — m runs the Move command
+- `neovisual-editor-insert` — insert-mode typing reaches the editor (hook must not swallow text)
+- `neovisual-textinput-motions` — Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret in normal mode
+- `seed-reset` — seeding always resets the scratch solution (a stale edit is removed) and every seeded file has uniform EOL (no "normalize line endings?" focus-steal)
+
+Exit code 0 = all selected passed.
+
+Key facts that make this reliable:
+- The scratch solution (`%TEMP%\telescope_scratch`) is seeded with many source files including
+  nested folders (`Models/`, `Services/`), so navigation/search scenarios exercise 10 candidates.
+  Seeding is **always reset** each run (`Reset-ScratchSolution`) and every seeded file is written
+  with **uniform** line endings; a bootstrap `Assert-SeedConsistent` self-check fails fast on a
+  mixed-EOL/drifted seed so VS never shows the "normalize line endings?" modal (which would steal
+  focus and break a test). `Motions.cs` stays pure LF to preserve preview caret-position pins.
+- The overlay **closes on focus loss** (`TelescopeOverlay.Deactivated` → `CloseOverlay`), so a
+  stale open overlay can never swallow the next leader sequence. This also means the harness's
+  "is the overlay still open?" check is deterministic (asserts on the `[Telescope] overlay closed`
+  log line).
+- The harness verifies the foreground window belongs to the experimental VS instance
+  (`Assert-VsFocused` / `Assert-OverlayFocused`) before every key sequence, and hammers Escape
+  before leader sequences to guarantee the editor is not in VsVim insert mode (where Space would
+  type a literal space instead of starting a leader).
+- Per-scenario assertions use a **fixed log baseline** (`Reset-LogBaseline`, `Wait-NewLogLine`
+  searches lines after the baseline WITHOUT advancing) so stale lines from an earlier scenario can
+  never satisfy a later assertion. Do NOT reintroduce a cursor that advances on match.
+- `Open-Telescope` waits for BOTH `open finder` AND `Focus prompt => True, mode=insert` before
+  returning, so injected keys are guaranteed to land in the overlay, not the editor. It hammers
+  Escape first to get VsVim out of insert mode.
+- `Close-Telescope` does NOT call `Bring-ToForeground` (that would deactivate the modal overlay
+  and trigger the Deactivated->close); it just sends Escapes until `overlay closed` is seen.
+- Diagnostics added so the harness can assert each feature: `[NeoVisual] navigate direction=...`,
+  `[NeoVisual] leader-binding executed: ...`, `[NeoVisual] shortcut-binding executed: ...`,
+  `[NeoVisual] toolwindow-move key=... -> arrow vk=...`, `[NeoVisual] toolwindow-enter-input` /
+  `toolwindow-exit-input`, `[NeoVisual] solution-explorer toggled open/closed`,
+  `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`,
+  `[NeoVisual] editor-view-opened file=...` (logged from `VimModeTracker.TextViewCreated`),
+  `[NeoVisual] vim-mode=Insert|Normal|Replace` (logged from `VimModeTracker.UpdateTypingFromMode`),
+  `[NeoVisual] text-motion key=... caret=...` / `[NeoVisual] textinput-enter-input start|end|after caret=...`
+  (text-input window motions + Solution Explorer search-box motions via the shared `TextMotionHelper`),
+  `[NeoVisual] block-caret active=True|False` (editor-view block caret),
+  `[NeoVisual] solution-explorer search-focus` (i focused the search box),
+  `[Telescope] opened file: ...`, `[Telescope] overlay closed`, `[Telescope] preview file=...`,
+  `[Telescope] preview tokens=...` (syntax-highlighted segment count),
+  `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...` (code-issues finder),
+  `[Telescope] focus target=List|Preview`, `[Telescope] preview caret=... line=...`,
+  `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions).
+
+## Feature status / roadmap (work in progress)
+
+Done and tested (live + unit):
+- Leader-key binding system; user-configurable `keybindings.json`.
+- Cardinal window navigation (Ctrl+H/J/K/L).
+- Telescope overlay: open, search, navigate, insert/normal mode, open-file, wrap, preview pane.
+- Solution Explorer controller: `o`/`Enter` open, `r` rename, `m` move, `a` add, `h`/`l` collapse/expand folds, j/k navigate, i/Esc input mode.
+- `Space+E` toggles Solution Explorer open/close (action `toggle-solution-explorer`).
+- Telescope preview pane: `TextMotionNavigator` (shared pure vim motions h/l/j/k/w/b/e/0/$/gg/G
+  + a/A/I insert placements), Ctrl+H/L focus switch between List/Preview, read-only (no insert),
+  and **syntax highlighting** (`SyntaxHighlighter` tokenizer → colored runs in a RichTextBox) —
+  `telescope-preview` live test passes and asserts `preview tokens=...`.
+- Telescope prompt vim motions: in NORMAL mode the prompt box supports h/l/w/b/e/0/$ caret motions
+  (`TryPromptMotion`, logged `prompt-motion key=... caret=...`) and draws a **white block caret**
+  (`ApplyPromptCaretStyle`), line caret in insert — matching the tool-window surfaces.
+- Editor insert-mode swallowing regression guard: `neovisual-editor-insert` live test types
+  h/i/j/k + Space in VsVim INSERT mode and proves every char lands in the saved file (the
+  `IsInteresting` pre-filter, leader key, and hjkl/I routing all pass through while
+  `VimModeTracker.IsInTypingMode`). `vim-mode=...` diagnostic logs every mode switch.
+- Vim text motions in text-input tool windows: `TextInputToolWindowController` (registered for
+  `IsTextInputType` windows in `WindowManager.GetController`) gives Command Window / FindReplace /
+  Immediate Window ... normal-mode h/l/w/b/e caret motions over the focused text box (WPF TextBox,
+  VS editor `IWpfTextView`, or WinForms TextBoxBase), `A`/`I` insert at end/start, `a` after the
+  caret, generic `i` at the caret; **block caret in normal mode** (white `CaretBrush` for WPF TextBox,
+  white `BlockCaretAdornment` with the caret's character in black for editor views), line caret in
+  insert. Shift is read via `GetAsyncKeyState` (not `Keyboard.Modifiers`, which lags injected keys),
+  and InputHandler routes `I` through `TryMove` first and no longer gates shift in the tool-window
+  branch. The caret is now a **solid white block** (vim-style, not a translucent selection-looking
+  rect), and the adornment removes only its own layer tag — it must never `RemoveAllAdornments()`
+  (that deletes the editor's native caret too, leaving NO caret in insert mode).
+  `Space+C W` (new default binding) opens the Command Window. — `neovisual-textinput-motions` live
+  test passes.
+- Solution Explorer search box: `i` (normal mode) **focuses the search box** via the native
+  `Window.SolutionExplorerSearch` command and enters input mode (so `i` types a query, Escape
+  returns focus to the tree). While a WPF TextBox (the search box) is focused, the controller acts
+  like a text-input window: h/l/w/b/e/a/A/I move the caret (shared `TextMotionHelper`) and all
+  other keys fall through into the box — no tree actions/arrow injection. Exiting input mode
+  refocuses the tree (`View.SolutionExplorer`). — `neovisual-explorer-*` live tests pass.
+- Code-issues finder: `CodeIssuesFinder` (Telescope, `Name="Issues"`, `Space+F D`) lists the VS
+  Error List warnings/errors plus TODO/FIXME/HACK/XXX markers scanned from the solution's project
+  files (`ProjectFiles` shared enumeration). Each row shows kind + line + message; the preview
+  jumps to the issue's line (`TextMotionNavigator.MoveToLine`); Enter opens the file at the line
+  (`TextSelection.GotoLine`). The fzf input is written as explicit UTF-8 bytes (the default ANSI
+  StreamWriter mangles non-ASCII display text and breaks the display-keyed payload lookup).
+  — `telescope-issues` live test passes.
+
+Pending (user-requested, NOT yet implemented):
+- **Telescope finders**: references, grep, fzf, implementation — each with a preview pane;
+  references/implementation preview should jump to the line number; references should show
+  read/write access info from VS.
 
 ## Hard requirements that are easy to violate
 
@@ -25,9 +191,12 @@ read it before making changes. This file only covers what's easy to get wrong.
   `SwitchToMainThreadAsync()`. Never touch VS objects from a background thread;
   add `ThrowIfNotOnUIThread()` to any new VS API method.
 - **Target framework is `net472`** (not modern .NET). Avoid .NET 5+/BCL-only APIs;
-  the repo hand-rolls `DistinctBy` for this reason. `LangVersion` 14, `Nullable` enabled.
+  the repo hand-rolls `DistinctBy` for this reason. `IReadOnlySet<T>` is NOT available —
+  use `IReadOnlyCollection<Keys>` for controller action keys. `LangVersion` 14, `Nullable` enabled.
 - `Microsoft.VisualStudio.SDK` is referenced with `ExcludeAssets="runtime"` — VS
   supplies it at load time; do not expect SDK assemblies in the build output.
+  The test projects add `Microsoft.VisualStudio.Interop` + `Shell.Framework` with
+  runtime assets so they can resolve DTE/VS types.
 
 ## Key architecture / gotchas
 
@@ -41,6 +210,17 @@ read it before making changes. This file only covers what's easy to get wrong.
   `command:<VsCommandName>` runs any VS command by name (this is how the
   LazyVim-style leader bindings like `w`→save are wired). To add a *new built-in
   action*, add a case there and a line in `default-keybindings.json`.
+- **`toggle-solution-explorer`** is a built-in action (`InputHandler.ToggleSolutionExplorer`)
+  that opens/focuses Solution Explorer when hidden and closes it when visible, via
+  `dte.Windows.Item(vsWindowKindSolutionExplorer)`. `Space+E` is bound to it.
+- **Tool-window controllers**: `WindowManager.GetController(type)` returns a registered
+  controller or a per-type `GeneralToolWindowController`. `SolutionExplorerController` is
+  registered in `MyExtensionPackage` for `ToolWindowType.SolutionExplorer` and adds action keys
+  (`o`/Enter open, `r` rename, `m` move, `a` add) plus `h`/`l` fold expand/collapse. The
+  controller interface exposes `ActionKeys` (`IReadOnlyCollection<Keys>`, net472 has no
+  `IReadOnlySet<T>`): `InputHandler` routes hjkl + `controller.ActionKeys` to `TryMove`, and the
+  hook's `IsInteresting` pre-filter returns true for any key while a tool window with action keys
+  is in normal mode (`InputHandler.HasToolWindowActionKeys`).
 - Handled keys are *blocked* from VS by returning `(IntPtr)1` from the hook callback.
 - VsVim 2022 mode-awareness: `VimModeTracker` (a shared MEF part) tracks the focused
   editor's mode **event-driven** — no per-keystroke polling. It is an
@@ -66,7 +246,7 @@ read it before making changes. This file only covers what's easy to get wrong.
   `Edit.LineDown`, which moves the caret), gated on `_windowManager.IsToolWindow()`. To
   stop VS dimming the completion list while Ctrl is held, `InputHandler` swallows the
   Ctrl key-down itself when `IsCompletionActive()` (via MEF `ICompletionBroker`).
-- Tool-window `hjkl` navigation: `ToolWindowNavigation` translates `j/k/h/l`→arrow
+- Tool-window `hjkl` navigation: `GeneralToolWindowController` translates `j/k/h/l`→arrow
   keys (via `KeyInjection`/`keybd_event`). Focus is classified in-process with WPF
   `Keyboard.FocusedElement` (inject unless focus is a `TextBoxBase` text input or a
   VsVim editor). Never mid leader-sequence.

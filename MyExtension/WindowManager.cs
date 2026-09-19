@@ -51,7 +51,7 @@ public sealed class WindowManager : IDisposable
 
     private IToolWindowController GetController(ToolWindowType type)
     {
-        // Return a stable per-type general controller so mode is remembered per window type.
+        // Return a stable per-type controller so mode is remembered per window type.
         if (_controllers.TryGetValue(type, out var registered))
         {
             return registered;
@@ -60,6 +60,15 @@ public sealed class WindowManager : IDisposable
         if (type == ToolWindowType.Unknown)
         {
             return _defaultController;
+        }
+
+        // Text-input surfaces (Command Window, Find and Replace, Immediate Window, ...) get the
+        // vim text-motion controller: normal-mode h/l/w/b/e/a/A/I caret motions over the text box.
+        if (GeneralToolWindowController.IsTextInputType(type))
+        {
+            var text = new TextInputToolWindowController(type);
+            _controllers[type] = text;
+            return text;
         }
 
         var general = new GeneralToolWindowController(type);

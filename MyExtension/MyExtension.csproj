@@ -34,4 +34,10 @@
   <ItemGroup>
     <EmbeddedResource Include="default-keybindings.json" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Allow the offline NeoVisual test project to exercise internal logic (KeybindingConfig,
+         ToolWindowTypeResolver, GeneralToolWindowController, helpers) hermetically. -->
+    <InternalsVisibleTo Include="NeoVisual.Tests" />
+  </ItemGroup>
 </Project>

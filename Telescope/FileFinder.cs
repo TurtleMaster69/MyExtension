@@ -19,6 +19,11 @@ namespace Telescope
     {
         private readonly Func<DTE> _dteFactory;
 
+        // Hermetic-test seam: when set, candidate enumeration and file opening go through these
+        // instead of DTE, so the finder's logic can be unit-tested without Visual Studio.
+        private readonly Func<IReadOnlyList<string>>? _testCandidateSource;
+        private readonly Action<string>? _testOpener;
+
         public string Name => "Files";
 
         /// <param name="dteFactory">
@@ -31,8 +36,27 @@ namespace Telescope
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
         }
 
+        /// <summary>Test-only constructor: drives candidate enumeration and opening without DTE.</summary>
+        internal FileFinder(Func<IReadOnlyList<string>> candidateSource, Action<string> opener)
+        {
+            _testCandidateSource = candidateSource;
+            _testOpener = opener;
+            _dteFactory = () => null!;
+        }
+
         public IReadOnlyList<FinderEntry> GetCandidates()
         {
+            if (_testCandidateSource != null)
+            {
+                // Hermetic test path: no VS thread affinity.
+                var testEntries = new List<FinderEntry>();
+                foreach (string path in _testCandidateSource())
+                {
+                    testEntries.Add(new FinderEntry(Path.GetFileName(path), path));
+                }
+                return testEntries;
+            }
+
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var entries = new List<FinderEntry>();
@@ -53,7 +77,7 @@ namespace Telescope
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Telescope] FileFinder failed to enumerate: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}FileFinder failed to enumerate: {ex.Message}");
             }
 
             return entries;
@@ -61,6 +85,17 @@ namespace Telescope
 
         public void OnSelected(FinderEntry entry)
         {
+            if (_testOpener != null)
+            {
+                // Hermetic test path: no VS thread affinity.
+                if (entry.Payload is string path && File.Exists(path))
+                {
+                    _testOpener(path);
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened file: {path}");
+                }
+                return;
+            }
+
             ThreadHelper.ThrowIfNotOnUIThread();
 
             try
@@ -68,11 +103,13 @@ namespace Telescope
                 if (entry.Payload is string path && File.Exists(path))
                 {
                     _dteFactory()?.ItemOperations.OpenFile(path);
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened file: {path}");
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Telescope] FileFinder failed to open '{entry.Display}': {ex.Message}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open file failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}FileFinder failed to open '{entry.Display}': {ex.Message}");
             }
         }
 

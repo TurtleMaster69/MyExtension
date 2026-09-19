@@ -51,6 +51,16 @@ namespace MyExtension
         /// </summary>
         public bool IsLeaderActive => _leaderActive;
 
+        /// <summary>
+        /// True when the current tool window (in normal mode) has action keys beyond hjkl (e.g.
+        /// Solution Explorer's o/r/m/a). Used by the hook's cheap pre-filter so those keys reach
+        /// <see cref="HandleKey"/> instead of being skipped as plain typing keys.
+        /// </summary>
+        public bool HasToolWindowActionKeys =>
+            _windowManager.IsToolWindow &&
+            _windowManager.CurrentController is { IsInputMode: false } c &&
+            c.ActionKeys.Count > 0;
+
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
 
@@ -95,7 +105,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Failed to resolve VimModeTracker: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to resolve VimModeTracker: {ex.Message}");
                 return new VimModeTracker();
             }
         }
@@ -116,7 +126,7 @@ namespace MyExtension
                 var action = ResolveAction(pair.Value);
                 if (action == null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[NeoVisual] Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
+                    System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
                     continue;
                 }
 
@@ -151,6 +161,8 @@ namespace MyExtension
                 case "navigate-up": return () => Navigate(CardinalNavigationConstants.UP);
                 case "navigate-down": return () => Navigate(CardinalNavigationConstants.DOWN);
                 case "telescope": return () => OpenTelescope();
+                case "telescope-issues": return () => OpenTelescopeIssues();
+                case "toggle-solution-explorer": return () => ToggleSolutionExplorer();
                 default:
                     break;
             }
@@ -185,7 +197,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Command '{command}' failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
 
@@ -243,17 +255,32 @@ namespace MyExtension
                         return false;
                     }
 
-                    // Normal mode: i enters input mode; hjkl move the focused surface.
-                    if (!ctrl && !shift && !alt)
+                    // Normal mode: i/I enter input mode (the controller may position the caret
+                    // first, e.g. I = insert at line start in text-input windows); hjkl move the
+                    // focused surface; the controller's action keys (e.g. Solution Explorer
+                    // o/r/m/a, text-input w/b/e) act on it. Shift is NOT gated here so text-input
+                    // controllers can tell I/i and A/a apart — they return false for any key they
+                    // do not consume, which then falls through to VS.
+                    if (!ctrl && !alt)
                     {
+                        // A controller-specific insert key (text-input I = insert at line start) is
+                        // handled by TryMove first; the generic 'i' below is the plain-insert
+                        // fallback for controllers that don't consume it.
                         if (key == Keys.I)
                         {
+                            if (controller.TryMove(key))
+                            {
+                                return true;
+                            }
+
+                            NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-enter-input");
                             controller.EnterInputMode();
                             return true;
                         }
 
                         if (!_leaderActive &&
-                            (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L) &&
+                            (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L ||
+                             controller.ActionKeys.Contains(key)) &&
                             controller.TryMove(key))
                         {
                             return true;
@@ -287,6 +314,7 @@ namespace MyExtension
 
                 if (_leaderBindings.TryGetValue(sequence, out var action))
                 {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding executed: {sequence}");
                     action();
                     ResetSequence();
                     return true;
@@ -309,6 +337,7 @@ namespace MyExtension
 
             if (_simpleBindings.TryGetValue(simple, out var simpleAction))
             {
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}shortcut-binding executed: {simple}");
                 simpleAction();
                 return true;
             }
@@ -333,6 +362,7 @@ namespace MyExtension
                 var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)
                 {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-exit-input");
                     controller.ExitInputMode();
                     return true;
                 }
@@ -387,6 +417,7 @@ namespace MyExtension
         /// <summary>Performs Cardinal window navigation in a compass direction (see WindowMatrix).</summary>
         private void Navigate(char direction)
         {
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}navigate direction={direction}");
             // Rebuild the window matrix each navigation (windows can be resized/opened/closed),
             // but source the active window from WindowManager's cached frame rather than re-deriving
             // it from DTE.
@@ -406,11 +437,61 @@ namespace MyExtension
             {
                 var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
                 var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope.Open("Files", centerRect);
+                _telescope.Open("Files", centerRect, dte.MainWindow.HWnd);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Failed to open Telescope: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Issues" finder (warnings/errors/TODO markers),
+        /// centered over the VS main window. The <see cref="CodeIssuesFinder"/> gathers candidates
+        /// via DTE on the UI thread.
+        /// </summary>
+        private void OpenTelescopeIssues()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Issues", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope issues: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Toggles the Solution Explorer tool window: opens + focuses it when hidden, closes it
+        /// when visible. Backed by the DTE <c>View.SolutionExplorer</c> command and window Close.
+        /// </summary>
+        private void ToggleSolutionExplorer()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var window = dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer);
+                if (window.Visible)
+                {
+                    window.Close();
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer toggled closed");
+                }
+                else
+                {
+                    window.Activate();
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer toggled open");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
             }
         }
 
@@ -424,7 +505,7 @@ namespace MyExtension
             return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
         }
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowRect")]
         [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
         private static extern bool GetWindowRectNative(IntPtr hWnd, out NativeRect rect);
 

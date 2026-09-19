@@ -42,5 +42,12 @@ namespace MyExtension
         /// should be swallowed; false to let it pass through.
         /// </summary>
         bool TryMove(Keys key);
+
+        /// <summary>
+        /// The set of non-hjkl keys this controller acts on in normal mode (e.g. Solution Explorer's
+        /// <c>o/r/m/a</c>). <see cref="InputHandler"/> routes only these + hjkl to
+        /// <see cref="TryMove"/>, so plain typing keys in other tool windows are never swallowed.
+        /// </summary>
+        System.Collections.Generic.IReadOnlyCollection<Keys> ActionKeys { get; }
     }
 }

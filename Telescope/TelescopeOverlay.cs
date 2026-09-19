@@ -2,46 +2,73 @@ using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace Telescope
 {
     /// <summary>
-    /// A Telescope-style overlay popup: a borderless, dark panel centered over the VS host that
-    /// shows a prompt row (finder name + a filter <see cref="TextBox"/>) above a ranked results
-    /// list. Typing filters the candidates via fzf on a background task; Enter selects; Esc closes.
+    /// A Telescope-style overlay: a modal dialog with a TextBox prompt and a read-only results
+    /// pane, with a small built-in vim mode. Normal mode intercepts <c>j/k/gg/G/Enter/Esc/q</c>
+    /// (and <c>i/a/A/I</c> to enter insert); insert mode types into the prompt and live-filters
+    /// the candidates with fzf. Selecting an entry calls the finder's <c>OnSelected</c>.
     ///
     /// <para/>
-    /// <b>Why a plain WPF Window (not a ToolWindowPane):</b> the original Telescope is an overlay
-    /// centered in the editor, so we mirror that with a borderless <see cref="Window"/> — no tool
-    /// window registration, docking, or VSIX asset work required for the UI itself.
-    ///
-    /// <para/>
-    /// <b>Focus / hook interplay:</b> while open this window owns keyboard focus. The global
-    /// keyboard hook must be told to pass keys through (the controller flips a flag) so Space,
-    /// hjkl and the leader key reach this window instead of being swallowed by the extension.
-    ///
-    /// <para/>
-    /// <b>Threading:</b> the filter runs off the UI thread (fzf subprocess, no VS calls) and
-    /// results are marshaled back with <see cref="Dispatcher"/>. Enter selection runs on the UI
-    /// thread and may touch VS.
+    /// <b>Why not a hosted VS editor view / VsVim:</b> hosting a fully-wired editable editor view
+    /// programmatically requires the VS editor document infrastructure (<c>IVsTextManager</c>/
+    /// <c>IVsTextDocData</c>) that a standalone dialog doesn't have, so the view never activates
+    /// and VsVim never drives input. A plain TextBox with manual vim motions is simple and
+    /// reliable for a fuzzy finder prompt.
     /// </summary>
     internal sealed class TelescopeOverlay : Window
     {
         private readonly FzfFilter _fzf;
-        private readonly TextBox _prompt;
-        private readonly ListBox _results;
-        private readonly TextBlock _promptLabel;
 
+        // ---- UI chrome ----
+        private readonly TextBlock _modeLabel;
+        private readonly DockPanel _layout;
+        private readonly TextBox _promptBox;
+        private readonly TextBox _resultsBox;
+        private readonly RichTextBox _previewBox;
+
+        // ---- Finder / results state ----
         private IReadOnlyList<FinderEntry> _candidates = Array.Empty<FinderEntry>();
-        private CancellationTokenSource? _filterCts;
+        private IReadOnlyList<FinderEntry> _results = Array.Empty<FinderEntry>();
         private IFinder? _activeFinder;
+        private int _selectedIndex;
+
+        // ---- Prompt mode / rendering state ----
+        private readonly OverlayKeyHandler _keyHandler = new();
+        private readonly TextMotionNavigator _previewNavigator = new();
+        private bool _activationHandled;
+        private CancellationTokenSource? _filterCts;
+
+        // Line caret brush for insert mode; white block brush for normal mode (white block, black
+        // text via the TextBox's native glyph render under a white fill, matching the tool windows).
+        private static readonly Brush PromptLineCaretBrush = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde));
+        private static readonly Brush PromptBlockCaretBrush = CreatePromptBlockBrush();
+
+        private static DrawingBrush CreatePromptBlockBrush()
+        {
+            var rect = new System.Windows.Rect(0, 0, 8, 16);
+            var drawing = new DrawingBrush(new GeometryDrawing(
+                Brushes.White, null, new RectangleGeometry(rect)));
+            drawing.Freeze();
+            return drawing;
+        }
+
+        // Where the overlay's keyboard focus currently lives: the results list (default, where
+        // j/k select) or the file preview (where h/l/j/k/w/b/e/gg/G navigate the code read-only).
+        private enum FocusTarget { List, Preview }
+        private FocusTarget _focusTarget = FocusTarget.List;
 
         public TelescopeOverlay(FzfFilter fzf)
         {
@@ -49,13 +76,16 @@ namespace Telescope
 
             Title = "Telescope";
             WindowStyle = WindowStyle.None;
-            AllowsTransparency = true;
-            Background = Brushes.Transparent;
+            AllowsTransparency = false;
+            Background = new SolidColorBrush(Color.FromRgb(0x21, 0x25, 0x2b));
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
             Topmost = true;
+            ShowActivated = true;
             Focusable = true;
             SizeToContent = SizeToContent.Manual;
+            Width = 760;
+            Height = 420;
 
             var root = new Border
             {
@@ -65,91 +95,183 @@ namespace Telescope
                 CornerRadius = new CornerRadius(6),
             };
 
-            var layout = new DockPanel();
+            _layout = new DockPanel();
 
-            var promptBar = new Border
+            // Title bar with the finder name + current mode.
+            var titleBar = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(0x28, 0x2c, 0x34)),
-                Padding = new Thickness(12, 10, 12, 10),
+                Padding = new Thickness(12, 8, 12, 8),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x41)),
                 BorderThickness = new Thickness(0, 0, 0, 1),
             };
-            DockPanel.SetDock(promptBar, Dock.Top);
-
-            var promptStack = new StackPanel { Orientation = Orientation.Horizontal };
-
-            _promptLabel = new TextBlock
+            _modeLabel = new TextBlock
             {
-                Text = "Telescope >",
                 Foreground = new SolidColorBrush(Color.FromRgb(0x8b, 0x9d, 0xc3)),
                 FontFamily = new FontFamily("Cascadia Code, Consolas"),
-                FontSize = 15,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 8, 0),
+                FontSize = 14,
             };
+            titleBar.Child = _modeLabel;
+            DockPanel.SetDock(titleBar, Dock.Top);
+            _layout.Children.Add(titleBar);
 
-            _prompt = new TextBox
+            // Prompt TextBox — the query input. It is editable in insert mode and read-only in
+            // normal mode (normal-mode keys are intercepted at the window level).
+            var promptHost = new Border
             {
-                Background = Brushes.Transparent,
+                Padding = new Thickness(10, 6, 10, 6),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x41)),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+            };
+            _promptBox = new TextBox
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1f, 0x24)),
                 BorderThickness = new Thickness(0),
                 Foreground = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde)),
-                CaretBrush = new SolidColorBrush(Color.FromRgb(0x8b, 0x9d, 0xc3)),
-                FontFamily = new FontFamily("Cascadia Code, Consolas"),
-                FontSize = 15,
-                VerticalContentAlignment = VerticalAlignment.Center,
-            };
-
-            promptStack.Children.Add(_promptLabel);
-            promptStack.Children.Add(_prompt);
-            promptBar.Child = promptStack;
-
-            _results = new ListBox
-            {
-                Background = new SolidColorBrush(Color.FromRgb(0x21, 0x25, 0x2b)),
-                BorderThickness = new Thickness(0),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde)),
+                CaretBrush = PromptLineCaretBrush,
                 FontFamily = new FontFamily("Cascadia Code, Consolas"),
                 FontSize = 14,
-                MaxHeight = 320,
+                AcceptsReturn = false,
+                VerticalContentAlignment = VerticalAlignment.Center,
             };
-            ScrollViewer.SetHorizontalScrollBarVisibility(_results, ScrollBarVisibility.Auto);
-            ScrollViewer.SetVerticalScrollBarVisibility(_results, ScrollBarVisibility.Auto);
+            _promptBox.TextChanged += OnPromptTextChanged;
+            promptHost.Child = _promptBox;
+            DockPanel.SetDock(promptHost, Dock.Top);
+            _layout.Children.Add(promptHost);
 
-            layout.Children.Add(promptBar);
-            layout.Children.Add(_results);
-            root.Child = layout;
+            // Results list rendered as read-only text, and a read-only file preview beside it.
+            // The bottom area is a Grid: results on the left (narrower), preview on the right.
+            var bottom = new Grid
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1f, 0x24)),
+            };
+            bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+
+            _resultsBox = new TextBox
+            {
+                IsReadOnly = true,
+                Focusable = false,
+                IsTabStop = false,
+                Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1f, 0x24)),
+                BorderThickness = new Thickness(0),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde)),
+                FontFamily = new FontFamily("Cascadia Code, Consolas"),
+                FontSize = 13,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.NoWrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            };
+            Grid.SetColumn(_resultsBox, 0);
+            bottom.Children.Add(_resultsBox);
+
+            // Read-only file preview beside the results list, rendered with basic syntax
+            // highlighting (keywords/strings/comments/numbers via SyntaxHighlighter) in a
+            // RichTextBox so each token gets its own color.
+            _previewBox = new RichTextBox
+            {
+                IsReadOnly = true,
+                Focusable = true,
+                IsTabStop = true,
+                Background = new SolidColorBrush(Color.FromRgb(0x10, 0x14, 0x18)),
+                BorderThickness = new Thickness(1, 0, 0, 0),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x41)),
+                CaretBrush = PromptBlockCaretBrush,
+                FontFamily = new FontFamily("Cascadia Code, Consolas"),
+                FontSize = 13,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            };
+            Grid.SetColumn(_previewBox, 1);
+            bottom.Children.Add(_previewBox);
+
+            _layout.Children.Add(bottom);
+
+            root.Child = _layout;
             Content = root;
 
-            Width = 620;
-            Height = 400;
+            // Trace incoming characters so the harness can confirm whether text reaches the
+            // prompt (the core "does typing filter" assertion).
+            PreviewTextInput += (_, e) =>
+            {
+                if (IsOpen)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}textinput='{e.Text}' focused={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
+                }
+            };
 
-            _prompt.TextChanged += OnPromptChanged;
-            _prompt.KeyDown += OnPromptKeyDown;
-            _results.PreviewKeyDown += OnResultsKeyDown;
+            Activated += (_, _) =>
+            {
+                if (_activationHandled)
+                {
+                    return;
+                }
+                _activationHandled = true;
+                FocusPrompt();
+            };
+
+            ContentRendered += (_, _) =>
+                Dispatcher.BeginInvoke(new Action(FocusPrompt), DispatcherPriority.ApplicationIdle);
+
+            // If the overlay ever loses focus while open, close it. A modal overlay that lost
+            // focus to the window underneath is broken (keystrokes would go to the wrong surface),
+            // and leaving it open would also swallow the NEXT leader sequence. Closing on focus
+            // loss guarantees we never leave a stale open overlay behind — and makes the E2E
+            // harness's "is the overlay still open?" check deterministic.
+            Deactivated += (_, _) =>
+            {
+                if (IsOpen)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}deactivated -> closing overlay");
+                    CloseOverlay();
+                }
+            };
         }
 
         /// <summary>True while the overlay is open and owns keyboard focus.</summary>
         public bool IsOpen { get; private set; }
 
-        /// <summary>Raised when the overlay is closed (by Esc or programmatically).</summary>
+        /// <summary>Raised when the overlay is closed (by Esc, q, or programmatically).</summary>
         public event EventHandler? OverlayClosed;
 
         /// <summary>
         /// Opens the overlay for the given finder, centered over <paramref name="centerRect"/>
-        /// (screen pixels; the VS main-window rect) or the work area if none. Runs on the UI
-        /// thread. Candidates are gathered on the UI thread; filtering happens in the background
-        /// as the user types.
+        /// (screen pixels; the VS main-window rect) or the work area if none.
+        /// <paramref name="ownerHwnd"/>, when non-zero, is the fallback owner HWND. The overlay is
+        /// shown as a modal dialog so VS handles focus/key routing. Runs on the UI thread.
         /// </summary>
-        public void ShowOverlay(IFinder finder, System.Drawing.Rectangle? centerRect)
+        public void ShowOverlay(IFinder finder, System.Drawing.Rectangle? centerRect, IntPtr ownerHwnd = default)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
             _activeFinder = finder;
-            _promptLabel.Text = finder.Name + " >";
             _candidates = finder.GetCandidates();
+            _results = _candidates;
+            _selectedIndex = 0;
+            _keyHandler.Reset();
+            _keyHandler.SetResults(_candidates.Count);
+            _focusTarget = FocusTarget.List;
+            _previewNavigator.SetText(string.Empty);
+            _promptBox.Text = string.Empty;
+            UpdateModeLabel();
+            RenderResults();
 
-            _prompt.Clear();
-            RefreshResults(string.Empty);
+            NeoVisualLog.Clear();
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open finder={finder.Name} candidates={_candidates.Count}");
+
+            // Own the dialog to the VS main window (the Code Search / InstaSearch pattern). A
+            // modal dialog owned by VS is OS-guaranteed to be the focused window and disables the
+            // owner while open — so keys go here, never to the editor underneath.
+            var mainWindow = Application.Current?.MainWindow;
+            if (mainWindow != null)
+            {
+                Owner = mainWindow;
+            }
+            else if (ownerHwnd != IntPtr.Zero)
+            {
+                new System.Windows.Interop.WindowInteropHelper(this).Owner = ownerHwnd;
+            }
 
             // Center over the given rect (the VS main window), converting pixels to DIPs.
             if (centerRect.HasValue)
@@ -168,9 +290,12 @@ namespace Telescope
             }
 
             IsOpen = true;
-            Show();
-            _prompt.Focus();
-            _prompt.SelectAll();
+
+            // Show as a modal dialog. Deferred out of the global keyboard hook callback
+            // (leader-key path) to ApplicationIdle; the modal loop runs there while hook
+            // callbacks stay fast. Do NOT pre-focus: ShowDialog() activates this window, firing
+            // the one-shot Activated handler, which focuses the prompt in insert mode.
+            Dispatcher.BeginInvoke(new Action(() => ShowDialog()), DispatcherPriority.ApplicationIdle);
         }
 
         public void CloseOverlay()
@@ -185,30 +310,23 @@ namespace Telescope
             {
                 // window may already be closed
             }
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}overlay closed");
             OverlayClosed?.Invoke(this, EventArgs.Empty);
         }
 
-        protected override void OnDeactivated(EventArgs e)
-        {
-            base.OnDeactivated(e);
-            // Lost focus (clicked elsewhere in VS) => dismiss, like Telescope.
-            CloseOverlay();
-        }
+        // ================================================================
+        // Prompt filtering (fzf)
+        // ================================================================
 
-        protected override void OnPreviewKeyDown(KeyEventArgs e)
+        private void OnPromptTextChanged(object sender, TextChangedEventArgs e)
         {
-            if (e.Key == Key.Escape)
+            if (!IsOpen)
             {
-                e.Handled = true;
-                CloseOverlay();
                 return;
             }
-            base.OnPreviewKeyDown(e);
-        }
-
-        private void OnPromptChanged(object sender, TextChangedEventArgs e)
-        {
-            RefreshResults(_prompt.Text);
+            string query = _promptBox.Text;
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}promptChanged query='{query}'");
+            RefreshResults(query);
         }
 
         private void RefreshResults(string query)
@@ -236,14 +354,16 @@ namespace Telescope
                     return;
                 }
 
-                var byDisplay = snapshot.ToDictionary(x => x.Display, StringComparer.OrdinalIgnoreCase);
-                var items = matched.Select(m => byDisplay.TryGetValue(m, out var e) ? e : new FinderEntry(m)).ToList();
+                var byDisplay = snapshot
+                    .GroupBy(x => x.Display, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                var items = matched
+                    .Select(m => byDisplay.TryGetValue(m, out var entry) ? entry : new FinderEntry(m))
+                    .ToList();
 
-                _results.ItemsSource = items;
-                if (items.Count > 0)
-                {
-                    _results.SelectedIndex = 0;
-                }
+                _results = items;
+                _keyHandler.SetResults(items.Count);
+                RenderResults();
             }));
         }
 
@@ -262,74 +382,469 @@ namespace Telescope
             }
         }
 
-        private void OnPromptKeyDown(object sender, KeyEventArgs e)
+        // ================================================================
+        // Rendering
+        // ================================================================
+
+        private void RenderResults()
         {
-            switch (e.Key)
-            {
-                case Key.Escape:
-                    e.Handled = true;
-                    CloseOverlay();
-                    return;
-                case Key.Enter:
-                    e.Handled = true;
-                    SelectCurrent();
-                    return;
-                case Key.Down:
-                    e.Handled = true;
-                    MoveSelection(1);
-                    return;
-                case Key.Up:
-                    e.Handled = true;
-                    MoveSelection(-1);
-                    return;
-                case Key.J:
-                    if (Keyboard.Modifiers == ModifierKeys.Control)
-                    {
-                        e.Handled = true;
-                        MoveSelection(1);
-                    }
-                    return;
-                case Key.K:
-                    if (Keyboard.Modifiers == ModifierKeys.Control)
-                    {
-                        e.Handled = true;
-                        MoveSelection(-1);
-                    }
-                    return;
-            }
+            _selectedIndex = _keyHandler.SelectedIndex;
+            _resultsBox.Text = ResultsFormatter.ToText(_results, _selectedIndex);
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}results count={_results.Count} selected={_selectedIndex} boxText={_resultsBox.Text.Length}");
+            LoadPreviewForSelection();
         }
 
-        private void OnResultsKeyDown(object sender, KeyEventArgs e)
+        /// <summary>
+        /// Loads the currently selected result's file content into the preview pane (when the
+        /// finder entry carries a file path in its payload), syntax-highlighted. For code-issue
+        /// entries the preview caret jumps to the issue's line. Resets otherwise to the top.
+        /// </summary>
+        private void LoadPreviewForSelection()
         {
-            switch (e.Key)
+            if (_selectedIndex < 0 || _selectedIndex >= _results.Count)
             {
-                case Key.Enter:
-                    e.Handled = true;
-                    SelectCurrent();
-                    return;
-                case Key.Escape:
-                    e.Handled = true;
-                    CloseOverlay();
-                    return;
-            }
-        }
-
-        private void MoveSelection(int delta)
-        {
-            if (_results.Items.Count == 0)
-            {
+                SetPreviewContent(string.Empty);
                 return;
             }
-            int idx = Math.Max(0, _results.SelectedIndex);
-            idx = (idx + delta + _results.Items.Count) % _results.Items.Count;
-            _results.SelectedIndex = idx;
-            _results.ScrollIntoView(_results.SelectedItem);
+
+            object payload = _results[_selectedIndex].Payload;
+            if (payload is CodeIssue issue && System.IO.File.Exists(issue.FilePath))
+            {
+                try
+                {
+                    string content = System.IO.File.ReadAllText(issue.FilePath);
+                    SetPreviewContent(content);
+                    if (issue.LineNumber > 0)
+                    {
+                        _previewNavigator.MoveToLine(issue.LineNumber);
+                        ApplyPreviewCaret();
+                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
+                    }
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={issue.FilePath} chars={content.Length}");
+                }
+                catch (Exception ex)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
+                }
+                return;
+            }
+
+            if (payload is string path && System.IO.File.Exists(path))
+            {
+                try
+                {
+                    string content = System.IO.File.ReadAllText(path);
+                    SetPreviewContent(content);
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={path} chars={content.Length}");
+                }
+                catch (Exception ex)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
+                }
+                return;
+            }
+
+            SetPreviewContent(string.Empty);
+        }
+
+        private void UpdateModeLabel()
+        {
+            string name = _activeFinder?.Name ?? "Telescope";
+            _modeLabel.Text = _keyHandler.IsNormalMode ? name + " [NORMAL]" : name + " [INSERT]";
+        }
+
+        // ================================================================
+        // Focus + key interception (manual vim motions)
+        // ================================================================
+
+        private void FocusPrompt()
+        {
+            try
+            {
+                _promptBox.IsReadOnly = _keyHandler.IsNormalMode;
+                ApplyPromptCaretStyle();
+                bool focused = _promptBox.Focus();
+                _promptBox.CaretIndex = _promptBox.Text.Length;
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}Focus prompt => {focused}, mode={( _keyHandler.IsNormalMode ? "normal" : "insert")}, focusedElement={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
+            }
+            catch (Exception ex)
+            {
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}Focus failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>Applies an insert-mode caret placement to the prompt box.</summary>
+        private void ApplyInsertCaret(int caretPlacement)
+        {
+            switch (caretPlacement)
+            {
+                case 1: // a (append): caret at end
+                    _promptBox.CaretIndex = _promptBox.Text.Length;
+                    break;
+                case 2: // I (insert at start)
+                    _promptBox.CaretIndex = 0;
+                    break;
+                default: // i (current/end)
+                    _promptBox.CaretIndex = Math.Min(_promptBox.CaretIndex, _promptBox.Text.Length);
+                    break;
+            }
+        }
+
+        protected override void OnPreviewKeyDown(KeyEventArgs e)
+        {
+            // Only act on keys while the overlay is open (modal).
+            if (!IsOpen)
+            {
+                base.OnPreviewKeyDown(e);
+                return;
+            }
+
+            string mode = _keyHandler.IsNormalMode ? "normal" : "insert";
+
+            // Ctrl+H / Ctrl+L move focus between the results list and the file preview.
+            if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && (e.Key == Key.H || e.Key == Key.L))
+            {
+                e.Handled = true;
+                _focusTarget = e.Key == Key.H ? FocusTarget.List : FocusTarget.Preview;
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}focus target={_focusTarget}");
+                FocusTargetUi();
+                return;
+            }
+
+            if (_focusTarget == FocusTarget.Preview)
+            {
+                // Preview: vim motions navigate the code read-only; Escape returns to the list.
+                if (e.Key == Key.Escape)
+                {
+                    e.Handled = true;
+                    _focusTarget = FocusTarget.List;
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}focus target={_focusTarget}");
+                    FocusTargetUi();
+                    return;
+                }
+                bool handled = HandlePreviewKey(e.Key);
+                if (handled)
+                {
+                    e.Handled = true;
+                    ApplyPreviewCaret();
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
+                }
+                base.OnPreviewKeyDown(e);
+                return;
+            }
+
+            // Prompt box has focus (List target). In normal mode, h/l/w/b/e/0/$ move the prompt
+            // caret; everything else routes through the list/mode state machine.
+            if (_keyHandler.IsNormalMode && TryPromptMotion(e.Key))
+            {
+                e.Handled = true;
+                base.OnPreviewKeyDown(e);
+                return;
+            }
+
+            // Translate the WPF key into the logic's normalized gesture, run the state machine,
+            // then apply whatever UI action the logic requests.
+            var action = _keyHandler.Handle(MapKey(e.Key));
+            ApplyAction(action, mode, e);
+
+            // Always continue routing: handled keys were swallowed above (e.Handled = true), but
+            // unhandled keys (e.g. typing in insert mode) must reach the TextBox beneath.
+            base.OnPreviewKeyDown(e);
+        }
+
+        /// <summary>
+        /// Applies a normal-mode prompt text motion (h/l/w/b/e/0/$) to the prompt box's caret,
+        /// mirroring the text-input tool-window motions. Returns true when the key was consumed.
+        /// </summary>
+        private bool TryPromptMotion(Key key)
+        {
+            var navigator = new TextMotionNavigator();
+            navigator.SetText(_promptBox.Text);
+            navigator.MoveTo(_promptBox.CaretIndex);
+
+            switch (key)
+            {
+                case Key.H: navigator.Left(); break;
+                case Key.L: navigator.Right(); break;
+                case Key.W: navigator.NextWord(); break;
+                case Key.B: navigator.PrevWord(); break;
+                case Key.E: navigator.EndWord(); break;
+                case Key.D0: navigator.LineStartHome(); break; // 0
+                case Key.D4 when (Keyboard.Modifiers & ModifierKeys.Shift) != 0: navigator.LineEnd(); break; // $
+                default: return false;
+            }
+
+            _promptBox.CaretIndex = navigator.Caret;
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}prompt-motion key={key} caret={navigator.Caret}");
+            return true;
+        }
+
+        /// <summary>
+        /// Draws a <b>block</b> caret on the prompt box in normal mode (white block, black text) and
+        /// a thin line caret in insert mode, mirroring the text-input tool windows.
+        /// </summary>
+        private void ApplyPromptCaretStyle()
+        {
+            try
+            {
+                _promptBox.CaretBrush = _keyHandler.IsNormalMode ? PromptBlockCaretBrush : PromptLineCaretBrush;
+            }
+            catch
+            {
+                // caret styling is best-effort
+            }
+        }
+
+        /// <summary>Applies vim motions to the preview navigator for a list-mode key.</summary>
+        private bool HandlePreviewKey(Key key)
+        {
+            switch (key)
+            {
+                case Key.H: _previewNavigator.Left(); return true;
+                case Key.L: _previewNavigator.Right(); return true;
+                case Key.J: _previewNavigator.Down(); return true;
+                case Key.K: _previewNavigator.Up(); return true;
+                case Key.W: _previewNavigator.NextWord(); return true;
+                case Key.B: _previewNavigator.PrevWord(); return true;
+                case Key.E: _previewNavigator.EndWord(); return true;
+                case Key.D0: _previewNavigator.LineStartHome(); return true;
+                case Key.D4: _previewNavigator.LineEnd(); return true; // $ (Shift+4)
+                case Key.G:
+                    if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+                    {
+                        _previewNavigator.Bottom();
+                    }
+                    else
+                    {
+                        _previewNavigator.Top();
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void ApplyPreviewCaret()
+        {
+            _previewBox.CaretPosition = CaretToPointer(_previewNavigator.Caret);
+            // Scroll so the caret's line is visible (RichTextBox has no ScrollToCaret).
+            try
+            {
+                Rect caretRect = _previewBox.CaretPosition.GetCharacterRect(LogicalDirection.Forward);
+                _previewBox.ScrollToVerticalOffset(caretRect.Top);
+            }
+            catch
+            {
+                // scroll is best-effort
+            }
+        }
+
+        /// <summary>
+        /// Replaces the preview content: tokenizes <paramref name="content"/> into colored runs
+        /// (one paragraph per line) and feeds the same plain text to the motion navigator, so the
+        /// caret index model and the rendered document stay in lockstep.
+        /// </summary>
+        private void SetPreviewContent(string content)
+        {
+            content ??= string.Empty;
+            _previewNavigator.SetText(content);
+
+            var doc = new FlowDocument
+            {
+                PagePadding = new Thickness(0),
+                FontFamily = new FontFamily("Cascadia Code, Consolas"),
+                FontSize = 13,
+                Background = new SolidColorBrush(Color.FromRgb(0x10, 0x14, 0x18)),
+            };
+
+            var segments = SyntaxHighlighter.Segment(content);
+            var para = NewPreviewParagraph();
+            foreach (var segment in segments)
+            {
+                string[] lines = segment.Text.Split('\n');
+                for (int k = 0; k < lines.Length; k++)
+                {
+                    if (k > 0)
+                    {
+                        doc.Blocks.Add(para);
+                        para = NewPreviewParagraph();
+                    }
+                    if (lines[k].Length > 0)
+                    {
+                        para.Inlines.Add(new Run(lines[k])
+                        {
+                            Foreground = ColorFor(segment.Category),
+                        });
+                    }
+                }
+            }
+            doc.Blocks.Add(para);
+
+            _previewBox.Document = doc;
+            _previewBox.CaretPosition = doc.ContentStart;
+            _previewBox.ScrollToHome();
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview tokens={segments.Count}");
+        }
+
+        private static Paragraph NewPreviewParagraph()
+        {
+            return new Paragraph
+            {
+                Margin = new Thickness(0),
+                Padding = new Thickness(0),
+            };
+        }
+
+        private static SolidColorBrush ColorFor(SyntaxCategory category)
+        {
+            // One-Dark/GitHub-dark palette that matches the overlay's dark chrome.
+            switch (category)
+            {
+                case SyntaxCategory.Keyword: return new SolidColorBrush(Color.FromRgb(0xc7, 0x92, 0xea));
+                case SyntaxCategory.String: return new SolidColorBrush(Color.FromRgb(0x98, 0xc3, 0x79));
+                case SyntaxCategory.Comment: return new SolidColorBrush(Color.FromRgb(0x7f, 0x84, 0x8e));
+                case SyntaxCategory.Number: return new SolidColorBrush(Color.FromRgb(0xd1, 0x9a, 0x66));
+                default: return new SolidColorBrush(Color.FromRgb(0xc9, 0xd1, 0xd9));
+            }
+        }
+
+        /// <summary>
+        /// Maps a plain-text caret index (the navigator's model) to a <see cref="TextPointer"/>
+        /// inside the currently rendered document. The document is one paragraph per line with one
+        /// run per token, so the mapping walks paragraphs/runs accumulating plain-text length —
+        /// each paragraph boundary counts as the '\n' between lines.
+        /// </summary>
+        private TextPointer CaretToPointer(int index)
+        {
+            FlowDocument doc = _previewBox.Document;
+            int plain = 0;
+            int blockCount = doc.Blocks.Count;
+            int blockIndex = 0;
+
+            foreach (var block in doc.Blocks)
+            {
+                bool lastBlock = ++blockIndex == blockCount;
+                if (block is Paragraph para)
+                {
+                    foreach (var inline in para.Inlines)
+                    {
+                        if (inline is Run run)
+                        {
+                            int len = run.Text.Length;
+                            if (index <= plain + len)
+                            {
+                                return run.ContentStart.GetPositionAtOffset(index - plain, LogicalDirection.Forward);
+                            }
+                            plain += len;
+                        }
+                    }
+                }
+                if (!lastBlock)
+                {
+                    plain += 1; // the '\n' separating this line from the next
+                }
+            }
+
+            return doc.ContentEnd;
+        }
+
+        private void FocusTargetUi()
+        {
+            if (_focusTarget == FocusTarget.Preview)
+            {
+                _previewBox.Focus();
+                ApplyPreviewCaret();
+            }
+            else
+            {
+                FocusPrompt();
+            }
+        }
+
+        private static OverlayKey MapKey(Key key)
+        {
+            switch (key)
+            {
+                case Key.Escape: return OverlayKey.Escape;
+                case Key.Q: return OverlayKey.Q;
+                case Key.Enter: return OverlayKey.Enter;
+                case Key.Up: return OverlayKey.Up;
+                case Key.Down: return OverlayKey.Down;
+                case Key.J: return OverlayKey.J;
+                case Key.K: return OverlayKey.K;
+                case Key.G:
+                    return (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? OverlayKey.ShiftG : OverlayKey.G;
+                case Key.I: return OverlayKey.I;
+                case Key.A: return OverlayKey.A;
+                default: return OverlayKey.Other;
+            }
+        }
+
+        private void ApplyAction(OverlayAction action, string mode, KeyEventArgs e)
+        {
+            bool handled = false;
+
+            switch (action)
+            {
+                case OverlayAction.Close:
+                    handled = true;
+                    CloseOverlay();
+                    break;
+                case OverlayAction.SelectCurrent:
+                    handled = true;
+                    SelectCurrent();
+                    break;
+                case OverlayAction.EnterInsert:
+                    handled = true;
+                    _promptBox.IsReadOnly = false;
+                    UpdateModeLabel();
+                    FocusPrompt();
+                    ApplyInsertCaret(0);
+                    break;
+                case OverlayAction.EnterInsertAppend:
+                    handled = true;
+                    _promptBox.IsReadOnly = false;
+                    UpdateModeLabel();
+                    FocusPrompt();
+                    ApplyInsertCaret(1);
+                    break;
+                case OverlayAction.EnterInsertStart:
+                    handled = true;
+                    _promptBox.IsReadOnly = false;
+                    UpdateModeLabel();
+                    FocusPrompt();
+                    ApplyInsertCaret(2);
+                    break;
+                case OverlayAction.EnterNormal:
+                    handled = true;
+                    UpdateModeLabel();
+                    _promptBox.IsReadOnly = true;
+                    ApplyPromptCaretStyle();
+                    break;
+                case OverlayAction.MoveDown:
+                case OverlayAction.MoveUp:
+                case OverlayAction.MoveToFirst:
+                case OverlayAction.MoveToLast:
+                    handled = true;
+                    RenderResults();
+                    break;
+                default:
+                    break;
+            }
+
+            // Preserve the original logging contract: log handled keys (and the Escape/Enter/J/K
+            // chords even when unhandled in insert mode) so the harness assertions stay stable.
+            if (handled || e.Key == Key.J || e.Key == Key.K || e.Key == Key.Escape || e.Key == Key.Enter)
+            {
+                e.Handled = handled;
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}key={e.Key} mode={mode} handled={handled}");
+            }
         }
 
         private void SelectCurrent()
         {
             var finder = _activeFinder;
-            var entry = _results.SelectedItem as FinderEntry;
+            var entry = _selectedIndex >= 0 && _selectedIndex < _results.Count ? _results[_selectedIndex] : null;
             CloseOverlay();
             if (finder != null && entry != null)
             {
@@ -339,7 +854,7 @@ namespace Telescope
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[Telescope] OnSelected failed: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}OnSelected failed: {ex.Message}");
                 }
             }
         }

@@ -87,7 +87,7 @@ namespace CardinalNavigation
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine(
-                    $"[NeoVisual] Window matrix initialization failed: {ex.Message}\n{ex.StackTrace}");
+                    $"{Telescope.DiagnosticLog.NeoVisual}Window matrix initialization failed: {ex.Message}\n{ex.StackTrace}");
                 m_ActiveWindows = new List<WindowControlAdapter>();
                 m_activeWindow = null!;
             }
@@ -125,7 +125,7 @@ namespace CardinalNavigation
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine(
-                    $"[NeoVisual] Unable to get DTE for window navigation: {ex.Message}\n{ex.StackTrace}");
+                    $"{Telescope.DiagnosticLog.NeoVisual}Unable to get DTE for window navigation: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -451,7 +451,7 @@ namespace CardinalNavigation
                 // Navigation is best-effort: never throw into the keyboard hook or pop a modal
                 // dialog mid-typing. Log and move on.
                 System.Diagnostics.Debug.WriteLine(
-                    $"[NeoVisual] Window navigation failed: {ex.Message}\n{ex.StackTrace}");
+                    $"{Telescope.DiagnosticLog.NeoVisual}Window navigation failed: {ex.Message}\n{ex.StackTrace}");
             }
         }
 

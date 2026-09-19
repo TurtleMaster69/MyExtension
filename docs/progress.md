@@ -157,6 +157,16 @@ Top of the queue, in priority order:
 > This applies to items 6-9 below (and any future feature). The loop pauses at
 > the triage gate for each new feature.
 
+> **FOLLOW-UP (after the in-flight + queued work completes):** run a **LazyVim
+> gap-analysis pass** over ALL the already-implemented features (leader-key
+> bindings, window nav, Telescope finders, tool-window controllers, vim motions,
+> etc.) to catch anything MISSED compared to LazyVim. Every gap found goes
+> through the SAME feature-triage gate (ask the user: build vs extend/reuse
+> native VS) before implementation. Schedule this AFTER:
+> (a) the in-flight tree-select item is GREEN (`explorer-open-navigation`), and
+> (b) `explorer-open-searchbox` is fixed. This is a review/triage pass, not an
+> auto-implement task.
+
 > These were requested by the user before sleep; they are NEW feature items.
 > Implementation order is TBD (the user said "we will decide the order later"
 > for the code-actions picker). Each needs its own feature-lane pipeline (M-M7

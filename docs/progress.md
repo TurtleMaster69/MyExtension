@@ -136,7 +136,7 @@ Top of the queue, in priority order:
   `ReferencesFinder.GetCandidates` (gather summary) and the
   `GlobalKeyboardHook`-independent overlay preview branch — the two BP steps the
   e2e scenario asserts on.** Doc sync: Telescope 42→46, scenarios 26→27 across
-  spec.md / AGENTS.md / SKILL.md. Commit: `_filled at commit_`.
+  spec.md / AGENTS.md / SKILL.md. Commit: `a623e09`.
 - **2026-09-19 — Fix 4 known-RED backlog items / gate the 26-scenario suite green**
   (Lane: bugfix, attempt 1, GREEN): full 26-scenario e2e suite passes, no
   known-RED scenarios remain; NeoVisual.Tests 21→25 (4 new `Run_InjectedKeyGuard_*`),

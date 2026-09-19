@@ -123,7 +123,8 @@ Bindings live in `InputHandler` (built from `KeybindingConfig`): leader sequence
 matched only after the leader key (e.g. `W`, `F,F`), and simple modifier
 shortcuts (e.g. `Ctrl+H`, distinguished by a `+`). Action names resolve in
 `InputHandler.ResolveAction`: `navigate-left/right/up/down`, `telescope`,
-`telescope-issues`, `telescope-references`, `toggle-solution-explorer`, or
+`telescope-issues`, `telescope-references`, `telescope-grep`,
+`toggle-solution-explorer`, or
 `command:<VsCommandName>`. To add a *new built-in
 action*, add a case in `ResolveAction` and a line in `default-keybindings.json`.
 

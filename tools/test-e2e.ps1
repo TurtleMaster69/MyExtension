@@ -45,6 +45,14 @@
 # -KeepVs      keep the spawned VS instances alive on exit (default: kill ONLY the spawned PIDs).
 # -NoBootstrap reuse an already-booted Experimental instance (no kill/reseed/main-VS/Debug.Start);
 #              requires a prior boot without -NoBootstrap. Use for retries/batches to avoid a reboot.
+#
+# Side effects (M-N5 — this is NOT a read-only run):
+#   - Writes per-run logs to log/<index>-neovisual-{exp,main}.log.
+#   - Reseeds the scratch solution at %TEMP%\telescope_scratch (delete + recreate).
+#   - Sets NEOVISUAL_TEST_SOLUTION / NEOVISUAL_LOG_DIR / NEOVISUAL_LOG_INDEX in PROCESS scope only
+#     (the spawned main VS inherits them; they do NOT persist past this run).
+#   - May kill devenv instances this run spawned (or harness-spawned 'MyExtension'/'Experimental'
+#     VS during the fresh bootstrap) — never unrelated devenv on the machine.
 
 param(
     [string[]]$Tests = @(),
@@ -1233,9 +1241,12 @@ $devenv = Join-Path $vsRoot 'Common7\IDE\devenv.exe'
 Write-Info "VS root: $vsRoot"
 
 # Env for the extension + harness log wiring.
-[Environment]::SetEnvironmentVariable('NEOVISUAL_TEST_SOLUTION', $slnPath, 'User')
+# M-N5: Process scope ONLY — the main VS is spawned by this script (inherits $env:), and
+# Debug.Start's exp instance inherits from main VS. USER scope is unnecessary and persists across
+# sessions (a silent machine mutation); 'Process' scopes the vars to this run and its children.
+[Environment]::SetEnvironmentVariable('NEOVISUAL_TEST_SOLUTION', $slnPath, 'Process')
 $env:NEOVISUAL_TEST_SOLUTION = $slnPath
-[Environment]::SetEnvironmentVariable('NEOVISUAL_LOG_DIR', $logDir, 'User')
+[Environment]::SetEnvironmentVariable('NEOVISUAL_LOG_DIR', $logDir, 'Process')
 $env:NEOVISUAL_LOG_DIR = $logDir
 $env:NEOVISUAL_LOG_INDEX = $runIndex
 

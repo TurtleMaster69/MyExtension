@@ -286,14 +286,27 @@ picks each fix or ignores; the hub implements + verifies, one item at a time).
     `neovim_review_hub.md` now has the same **Compaction re-pin (Compaction-Cliff guard)**
     as `neovim_hub.md` — after any compaction, re-read `docs/progress.md` + its own agent file
     and re-pin before continuing the audit.
-11. **M-N3 — The entire orchestration layer is untracked.** `git status` shows
-    `?? .opencode/agent/`, `?? .opencode/command/`, all 13 skill dirs, and new source
-    files. Fix: `git add` them.
-12. **M-N4 — Execution Log + append-only Build Plan accumulate per attempt.**
-    RE-PLAN trims superseded execution-log entries to one line each (keep the
-    `delegations:|VS boots:|iterations:` cost line).
-13. **M-N5 — "Read-only" verification still mutates the machine.** The harness writes
-    USER-scope env vars, logs, %TEMP% seeds, kills devenv. Fix: document side effects;
-    use `'Process'` scope for the env vars.
-14. **M-N6 — "Prompt rule (MANDATORY)" duplicated hub-to-hub.** Factor into one shared
-    reference.
+11. **M-N3 — The entire orchestration layer is untracked.** ✅ DONE
+    Committed `a37242e`: 38 orchestration-layer files (`.opencode/agent/*`, `.opencode/command/*`,
+    13 `.opencode/skills/*` dirs, `docs/*`, `tools/*`, `tests/*`) now tracked. MyExtension/Telescope
+    feature source deliberately left untracked (separate concern). A `git clean`/clone no longer
+    loses the loop.
+12. **M-N4 — Execution Log + append-only Build Plan accumulate per attempt.** ✅ DONE
+    `neovim_hub.md` step 9 + `implementation-planner.md` Re-planning now trim each SUPERSEDED
+    Execution-Log attempt to ONE line (verdict + `delegations:|VS boots:|iterations:` cost line),
+    keeping only the latest attempt in full — the plan file stays lean across a multi-attempt item
+    (durable record is `docs/progress.md`).
+13. **M-N5 — "Read-only" verification still mutates the machine.** ✅ DONE
+    `tools/test-e2e.ps1` env vars switched from `'User'` to `'Process'` scope (main VS spawned by
+    the script inherits them; no cross-session persistence), and a **Side effects** header note
+    documents the run's writes (per-run logs, %TEMP% reseed, process-scope env vars, scoped
+    devenv kills). Parse OK, no USER-scope writes remain.
+14. **M-N6 — "Prompt rule (MANDATORY)" duplicated hub-to-hub.** ✅ DONE
+    Created the single authoritative `.opencode/agent/prompt-rule.md`; both `neovim_hub.md` and
+    `neovim_review_hub.md` now reference it with a one-line pointer instead of duplicating the rule
+    inline. Lint passes (14 docs scanned, prompt-rule.md now part of the scanned set).
+
+---
+**Meta-review backlog COMPLETE (2026-09-19).** All 5 major + 8 minor items (M-M1..M-M5,
+M-C1, M-M6, M-M7, M-N1..M-N6) fixed, verified, and recorded. Committed orchestration layer
+`a37242e`; feature source (MyExtension/Telescope) still untracked.

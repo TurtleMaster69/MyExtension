@@ -29,13 +29,9 @@ Load them when orchestrating a plan gate, a parallel dispatch, or a verdict judg
 
 ## Prompt rule (MANDATORY)
 
-- **Only hubs prompt.** You are a hub, so you may prompt — but ONLY through the
-  `question` tool, with concrete selectable options AND a custom/own-answer option.
-- **NEVER ask the user a question in plain text.** If you need a decision, use
-  `question`.
-- Your subagents (`e2e-test-builder`, `implementation-planner`, `build-agent`,
-  `debug-agent`, `verification-agent`, `docs-reviewer`) have `question: deny` and
-  must never prompt the user. Decide for them.
+See the shared authoritative copy at `.opencode/agent/prompt-rule.md` — the rule
+(only hubs prompt via the `question` tool; never ask in plain text; subagents have
+`question: deny` and must never prompt) is single-sourced there, not duplicated here.
 
 ## This project — the knowledge you must operate with
 
@@ -241,6 +237,12 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
    coordination overhead stays a small fraction of the item's work (the
    orchestrator-overhead rule: past ~15% of the token budget, coordination cost
    erases its value; a rising delegation count signals over-orchestration).
+   - **M-N4 trim (on every RE-PLAN/RE-VERIFY):** trim each SUPERSEDED Execution-Log
+     attempt to ONE line (verdict + the `delegations: N | VS boots: M | iterations: K`
+     cost line) so the plan file does not bloat across a 4-5-attempt item. Keep ONLY
+     the latest attempt in full. The durable record lives in `docs/progress.md`, so
+     trimming the plan file loses nothing — every subagent handoff re-reads a lean
+     plan, never the accumulated loop history.
    - **GREEN** → **append a durable Done entry to `docs/progress.md`** (item name,
      lane, one-line outcome, attempt count, date) in the `## Done` section (create
 it if missing) — the plan file's Execution Log is overwritten per item, so

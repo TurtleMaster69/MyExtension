@@ -98,7 +98,10 @@ When the hub passes verification feedback after a failed build, revise ONLY the
 sections of the Build Plan and Verification Trace that caused the failure. Update
 the implicated BP step(s) with the NEW Verify-with / Fails-if evidence from the
 verifier. Keep everything that already passed unchanged. Never regenerate the whole
-plan from scratch.
+plan from scratch. **M-N4:** when you re-plan, trim each SUPERSEDED Execution-Log
+attempt to ONE line (verdict + the `delegations: N | VS boots: M | iterations: K`
+cost line), keeping only the latest attempt in full, so the plan file stays lean
+across a multi-attempt item (the durable record is `docs/progress.md`).
 
 ## Return format (final message)
 

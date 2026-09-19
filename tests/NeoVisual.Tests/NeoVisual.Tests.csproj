@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <RootNamespace>NeoVisual.Tests</RootNamespace>
+    <StartupObject>NeoVisual.Tests.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\MyExtension\MyExtension.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- MyExtension references the VS SDK with ExcludeAssets="runtime" (VS supplies it at load
+         time). The pure-logic tests here don't touch VS services, but the assemblies must be
+         resolvable so the MyExtension types can be JIT'd. Pull the interop + shell framework in
+         for runtime resolution, mirroring the Telescope test project. -->
+    <PackageReference Include="Microsoft.VisualStudio.Interop" Version="17.14.40260" ExcludeAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" ExcludeAssets="build;analyzers" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+</Project>

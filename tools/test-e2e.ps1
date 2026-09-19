@@ -1,0 +1,1306 @@
+# test-e2e.ps1
+#
+# Live end-to-end test suite. Boots the VS Experimental Instance with the extension deployed and a
+# real solution open, then runs every functionality scenario against that LIVE instance — asserting
+# on the runtime trace log (the same oracle iterate-telescope.ps1 uses).
+#
+# Scenarios (all run against one live instance by default; use -Tests to run a subset):
+#   telescope-open        Space F T opens the Telescope overlay
+#   telescope-search      typing filters candidates (promptChanged + results count)
+#   telescope-navigate    normal-mode j/k move selection across many files; i returns to search
+#   telescope-wrap        selection wraps around the result list (k at 0 -> last, j at last -> 0)
+#   telescope-mode        insert <-> normal mode toggling (Esc/i/a)
+#   telescope-open-file   Enter on a match opens the file in the editor
+#   telescope-issues      Space F D: warnings/errors/TODO finder filters, previews, opens at line
+#   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
+#   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
+#   telescope-q-close    q closes the overlay in normal mode
+#   telescope-open-file-normal  Enter selects the match in NORMAL mode
+#   telescope-no-selection  j/k on an empty result list is a no-op (selection stays 0)
+#   neovisual-window-nav  Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
+#   neovisual-leader      Space+W fires a leader binding (leader-binding executed: W)
+#   neovisual-toolwindow  Solution Explorer: hjkl navigation + i/Esc input-mode (search box)
+#   neovisual-explorer-toggle  Space+E opens, then closes, then reopens Solution Explorer
+#   neovisual-explorer-open    l expands the fold, j/k navigate, Enter opens a file
+#   neovisual-explorer-open-o  o opens the selected file
+#   neovisual-explorer-collapse  h collapses the fold (after l expands it)
+#   neovisual-explorer-rename  r starts rename (F2), Escape cancels
+#   neovisual-explorer-add     a runs the Add Item command
+#   neovisual-explorer-move    m runs the Move command
+#   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview
+#   neovisual-editor-insert  insert-mode typing reaches the editor (hook must not swallow text)
+#   neovisual-textinput-motions  Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret
+#   seed-reset    filesystem-only: scratch seeding always resets (stale edits removed) + uniform EOL
+#
+# Exit code: 0 = all selected scenarios passed, 1 = any failed.
+#
+# Usage:
+#   pwsh tools/test-e2e.ps1                       # all scenarios
+#   pwsh tools/test-e2e.ps1 -Tests telescope-open # a single scenario
+#   pwsh tools/test-e2e.ps1 -Tests telescope-navigate,telescope-mode
+#   pwsh tools/test-e2e.ps1 -Tests telescope-open -KeepVs
+#   pwsh tools/test-e2e.ps1 -List                 # list available scenarios
+#   pwsh tools/test-e2e.ps1 -Tests telescope-search -NoBootstrap   # reuse an already-booted instance
+#
+# -KeepVs      keep the spawned VS instances alive on exit (default: kill ONLY the spawned PIDs).
+# -NoBootstrap reuse an already-booted Experimental instance (no kill/reseed/main-VS/Debug.Start);
+#              requires a prior boot without -NoBootstrap. Use for retries/batches to avoid a reboot.
+
+param(
+    [string[]]$Tests = @(),
+    [switch]$KeepVs,
+    [switch]$List,
+    [switch]$NoBootstrap,
+    [int]$TimeoutSec = 300
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$logDir = Join-Path $root 'log'
+
+function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
+function Write-Info($msg) { Write-Host "    $msg" }
+function Write-Pass($msg) { Write-Host "    PASS: $msg" -ForegroundColor Green }
+function Write-Fail($msg) { Write-Host "    FAIL: $msg" -ForegroundColor Red }
+
+# Scenario registry: name -> scriptblock. Each scriptblock receives the VS process object and must
+# throw (or return $false) on failure; the runner reports and continues.
+$script:Scenarios = [ordered]@{}
+
+# M-M5: PIDs of the VS instances THIS run spawned (main VS + experimental instance). The harness
+# must never kill a devenv it did not spawn — scope every cleanup kill to this set only, so a run
+# does not terminate the user's other open VS instances.
+$script:SpawnedVsPids = [System.Collections.Generic.List[int]]::new()
+
+function Add-SpawnedVs([object]$proc) {
+    if ($proc -and $proc.Id -and -not $script:SpawnedVsPids.Contains($proc.Id)) {
+        $script:SpawnedVsPids.Add($proc.Id)
+    }
+}
+
+function Stop-SpawnedVs {
+    # Kill ONLY the VS instances this run spawned (M-M5). Never a blanket `Get-Process devenv`.
+    foreach ($id in $script:SpawnedVsPids) {
+        try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    $script:SpawnedVsPids.Clear()
+}
+
+function Stop-HarnessVs {
+    # Pre-spawn cleanup (M-M5): kill ONLY devenv instances that look harness-spawned — a main VS
+    # window titled 'MyExtension' or an 'Experimental' window. Never a blanket `Get-Process devenv
+    # | Stop-Process`, which would terminate the user's unrelated open VS instances.
+    Get-Process devenv -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -match 'MyExtension' -or $_.MainWindowTitle -match 'Experimental' } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+function Write-ToolsHash {
+    # M-C1: materialize log/tools-hash.txt on every harness run, so the hub's VERIFY `tools/`-changed
+    # flag is always computable against a FRESH hash (and check-doc-refs.ps1 no longer allowlists the
+    # file's absence — a genuinely missing hash now fails the lint). SHA-256 of every file under tools/.
+    $toolsDir = Join-Path $PSScriptRoot '.'
+    $hashPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'log\tools-hash.txt'
+    $lines = Get-ChildItem -LiteralPath $toolsDir -Recurse -File |
+        ForEach-Object { "{0}|{1}" -f $_.FullName.Substring((Resolve-Path $toolsDir).Path.Length + 1), (Get-FileHash $_.FullName -Algorithm SHA256).Hash } |
+        Sort-Object
+    New-Item -ItemType Directory -Force -Path (Split-Path $hashPath) | Out-Null
+    $lines | Set-Content -LiteralPath $hashPath
+}
+
+function Register-Scenario([string]$name, [scriptblock]$body) {
+    $script:Scenarios[$name] = $body
+}
+
+# ---------------------------------------------------------------------------
+# Scenario definitions
+# ---------------------------------------------------------------------------
+
+# Helpers used inside scenarios (defined at script scope).
+$script:VkEscape = 0x1B
+$script:VkSpace = 0x20
+$script:VkEnter = 0x0D
+$script:VkTab = 0x09
+
+# Per-scenario log baseline: assertions search the whole post-baseline window (never advance), so
+# an assert may re-match a line that an earlier helper (e.g. Open-Telescope) already confirmed.
+$script:LogBaseline = 0
+
+# Single source for log prefixes (regex-escaped) — keep in sync with
+# Telescope/DiagnosticLog.cs; pinned by unit test Run_LogPrefixes_Pinned.
+$script:PfxNeo = '\[NeoVisual\] '
+$script:PfxTel = '\[Telescope\] '
+$script:PfxHook = '\[Hook\] '
+$script:PfxMyExt = '\[MyExtension\] '
+
+function Reset-LogBaseline([string]$logPath) {
+    $script:LogBaseline = if (Test-Path $logPath) { (Get-Content $logPath).Count } else { 0 }
+}
+
+function Send-Tap([int]$vk) { [KbInject]::TapVk([uint16]$vk) }
+function Send-Shift([int]$vk) {
+    # Shift+<key> chord (e.g. G = move to last) via keybd_event.
+    [Win32.Kbd]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero)
+    [KbInject]::TapVk([uint16]$vk)
+    [Win32.Kbd]::keybd_event(0x10, 0, 2, [UIntPtr]::Zero)  # KEYEVENTF_KEYUP
+}
+function Send-Text([string]$text) {
+    foreach ($ch in $text.ToCharArray()) {
+        [KbInject]::TapVk([int][char]::ToUpper($ch))
+        Start-Sleep -Milliseconds 60
+    }
+}
+function Send-Ctrl([int]$vk) {
+    # Ctrl+<key> chord via keybd_event.
+    [Win32.Kbd]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
+    [KbInject]::TapVk([uint16]$vk)
+    [Win32.Kbd]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)  # KEYEVENTF_KEYUP
+}
+function Bring-ToForeground([IntPtr]$hwnd) {
+    [KbInject]::TapVk(0x12) | Out-Null   # Alt resets the foreground lock
+    Start-Sleep -Milliseconds 150
+    [Win32.Fg]::SetForegroundWindow($hwnd) | Out-Null
+    Start-Sleep -Milliseconds 300
+}
+
+function Enter-NormalContext([object]$vs) {
+    # Ensure the focused editor is NOT in VsVim insert mode (where Space types a literal space
+    # instead of acting as the leader key). Multiple Escapes guarantee a non-typing context.
+    Bring-ToForeground $vs.MainWindowHandle
+    foreach ($i in 1..3) { Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Milliseconds 300
+}
+
+function Assert-VsFocused([object]$vs, [string]$what) {
+    # Verify the foreground window belongs to the experimental VS instance before sending keys,
+    # so we know we are giving input to the right window (never to the main VS or another app).
+    $h = [Win32.Fg]::GetForegroundWindow()
+    if ($h -eq [IntPtr]::Zero) { throw "no foreground window when expecting: $what" }
+    $pid2 = 0
+    [Win32.Fg]::GetWindowThreadProcessId($h, [ref]$pid2) | Out-Null
+    if ([int]$pid2 -ne $vs.Id) {
+        throw "foreground window is PID $pid2 but expected VS PID $($vs.Id) when: $what"
+    }
+}
+
+function Assert-OverlayFocused([object]$vs) {
+    # The overlay is modal and owns focus while open; verify we are not about to type into the
+    # editor underneath. A foreground window that is NOT our VS instance means the overlay closed.
+    Assert-VsFocused $vs 'Telescope overlay should own focus'
+}
+
+function Open-Telescope([object]$vs, [string]$logPath) {
+    # After a previous overlay close, focus returns to the editor, which VsVim may leave in
+    # INSERT mode — where Space types a literal space instead of starting a leader sequence.
+    # Hammer Escape a few times first so the editor is in a non-typing (normal) context, then
+    # try the leader sequence (Space F T).
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Bring-ToForeground $vs.MainWindowHandle
+        foreach ($i in 1..3) { Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 }
+        Start-Sleep -Milliseconds 300
+        Send-Tap $script:VkSpace;  Start-Sleep -Milliseconds 150
+        Send-Tap 0x46;             Start-Sleep -Milliseconds 150  # F
+        Send-Tap 0x54;                                             # T
+        # The overlay is open only once it owns focus (modal + prompt focused). Waiting for BOTH
+        # the open line AND the focused prompt guarantees subsequent injected keys land in the
+        # overlay, not in the editor underneath.
+        if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Files" 15000) -and
+            (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
+            Assert-OverlayFocused $vs
+            return
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    throw 'Telescope overlay did not open'
+}
+
+function Open-TelescopeIssues([object]$vs, [string]$logPath) {
+    # Space F D opens the code-issues finder. Same focus discipline as Open-Telescope: hammer
+    # Escape first (get VsVim out of insert), then wait for the overlay to own focus.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Bring-ToForeground $vs.MainWindowHandle
+        foreach ($i in 1..3) { Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 }
+        Start-Sleep -Milliseconds 300
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x46;             Start-Sleep -Milliseconds 150  # F
+        Send-Tap 0x44;                                             # D
+        if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Issues" 15000) -and
+            (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
+            Assert-OverlayFocused $vs
+            return
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    throw 'Telescope issues finder did not open'
+}
+
+function Close-Telescope([object]$vs, [string]$logPath) {
+    # The overlay is a modal dialog that ALREADY owns keyboard focus — do NOT call
+    # Bring-ToForeground here (it would SetForegroundWindow the VS main window and steal the
+    # Escapes away from the modal). Esc in insert mode -> normal; Esc in normal mode closes.
+    # Send Escape pairs (with a retry) until the "overlay closed" line appears after our cursor.
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 250
+        Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 500
+        if (Wait-NewLogLine $logPath "$($script:PfxTel)overlay closed" 5000) { return }
+    }
+    throw 'Telescope overlay did not close'
+}
+
+function Wait-NewLogLine([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
+    # Searches lines appended after the per-scenario baseline (does NOT advance — an assert may
+    # re-confirm a line another helper already saw). Returns true when the pattern matches.
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
+        if (Test-Path $logPath) {
+            $lines = Get-Content $logPath
+            $count = $lines.Count
+            if ($count -gt $script:LogBaseline) {
+                $tail = $lines[$script:LogBaseline..($count - 1)] -join "`n"
+                if ($tail -match $pattern) { return $true }
+            }
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+
+function Wait-LogContains([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
+    # Whole-file matcher (bootstrap/startup waits); does not use the scenario cursor.
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
+        if (Test-Path $logPath) {
+            $line = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+            if ($line -and $line -match $pattern) { return $true }
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+
+function Assert-NewLogLine([string]$logPath, [string]$pattern, [string]$what, [int]$maxMs = 20000) {
+    if (-not (Wait-NewLogLine $logPath $pattern $maxMs)) {
+        throw "never saw: $what (pattern: $pattern)"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Seeding consistency check (pure filesystem; used by bootstrap + seed-reset).
+# ---------------------------------------------------------------------------
+function Assert-SeedConsistent([string]$scratchDir) {
+    # Verify every source file the harness seeds under $scratchDir has UNIFORM line endings and, for
+    # the files the seeding writes, byte-identical canonical content. A mixed-EOL file (e.g.
+    # TodoProbe.cs seeded with Set-Content -Value "...`n..." which appends the platform CRLF) makes
+    # VS show the "normalize line endings?" modal when opened -> steals focus -> breaks scenarios.
+    # Stale edits survive because seeding is gated on Test-Path; this catches them.
+    # Throws on the first violation (never swallows) so the runner catch converts it into exit 1.
+    $probeDir = Join-Path $scratchDir 'Probe'
+
+    # Canonical content of the files the seeding writes (uniform CRLF; Motions.cs stays pure LF).
+    $canonical = @{
+        'Program.cs'            = "// Program.cs`r`n"
+        'Alpha.cs'              = "// Alpha.cs`r`n"
+        'Beta.cs'               = "// Beta.cs`r`n"
+        'Gamma.cs'              = "// Gamma.cs`r`n"
+        'Delta.cs'              = "// Delta.cs`r`n"
+        'Epsilon.cs'            = "// Epsilon.cs`r`n"
+        'Service.cs'            = "// Service.cs`r`n"
+        'Models/User.cs'        = "// Models/User.cs`r`n"
+        'Models/Order.cs'       = "// Models/Order.cs`r`n"
+        'Services/AuthService.cs' = "// Services/AuthService.cs`r`n"
+        'TodoProbe.cs'          = "// TODO: fix this issue`r`nclass TodoProbe { }`r`n"
+        'Motions.cs'            = "class Motions`n{`n    int alpha = 1;`n    string beta = `"gamma`";`n}"  # pure LF, no trailing newline
+    }
+
+    # Gather every seeded source file (all *.cs plus *.sln/*.csproj) under the scratch dir.
+    $seedFiles = @(
+        Get-ChildItem -Path $scratchDir -Recurse -Filter '*.cs' -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $scratchDir -Recurse -Filter '*.sln' -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $scratchDir -Recurse -Filter '*.csproj' -ErrorAction SilentlyContinue
+    )
+    if ($seedFiles.Count -eq 0) { throw "no seeded source files found under: $scratchDir" }
+
+    # PASS 1 — EOL uniformity: any file with BOTH a CRLF and a lone LF is mixed.
+    foreach ($f in $seedFiles) {
+        $b = [System.IO.File]::ReadAllBytes($f.FullName)
+        $crlf = 0; $lone = 0
+        for ($i = 0; $i -lt $b.Length; $i++) {
+            if ($b[$i] -eq 0x0A) {
+                if ($i -gt 0 -and $b[$i - 1] -eq 0x0D) { $crlf++ } else { $lone++ }
+            }
+        }
+        if ($crlf -gt 0 -and $lone -gt 0) {
+            throw "seed file has MIXED line endings (CRLF=$crlf loneLF=$lone): $($f.FullName)"
+        }
+    }
+
+    # PASS 2 — canonical content for the files the seeding writes (detects stale edits).
+    foreach ($rel in $canonical.Keys) {
+        $p = Join-Path $probeDir $rel
+        if (-not (Test-Path $p)) { throw "seeded file missing: $p" }
+        $expected = $canonical[$rel]
+        $actual = [System.IO.File]::ReadAllText($p)
+        if ($actual -ne $expected) {
+            throw "seeded file content differs from canonical (stale edit?): $p"
+        }
+    }
+}
+
+function Reset-ScratchSolution([string]$scratchDir) {
+    # ALWAYS reset: delete + recreate. Seeding is NOT gated on Test-Path, so stale edits from a
+    # prior run can never leak into the next run. Every file is written with UNIFORM line
+    # endings (explicit CRLF for the extra files + TodoProbe.cs; Motions.cs stays pure LF).
+    if (Test-Path $scratchDir) { Remove-Item $scratchDir -Recurse -Force -ErrorAction Stop }
+    New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+    $probeDir = Join-Path $scratchDir 'Probe'
+
+    # Probe console project (ALWAYS; $probeDir is fresh, so dotnet new never hits a non-empty dir).
+    dotnet new console -n Probe -o $probeDir 2>&1 | Out-Null
+
+    # The 10 extra files: single line "// <rel>" + explicit uniform CRLF; parent dirs created.
+    # This OVERWRITES the dotnet-new-generated Program.cs with the canonical content.
+    $extraFiles = @(
+        'Program.cs',
+        'Alpha.cs',
+        'Beta.cs',
+        'Gamma.cs',
+        'Delta.cs',
+        'Epsilon.cs',
+        'Service.cs',
+        'Models/User.cs',
+        'Models/Order.cs',
+        'Services/AuthService.cs'
+    )
+    foreach ($rel in $extraFiles) {
+        $p = Join-Path $probeDir $rel
+        New-Item -ItemType Directory -Force -Path (Split-Path $p) | Out-Null
+        [System.IO.File]::WriteAllText($p, "// $rel`r`n")
+    }
+
+    # TODO marker for the code-issues finder: EXPLICIT uniform CRLF. The old
+    # Set-Content -Value "...`n..." appended the platform CRLF and produced a MIXED-EOL file
+    # (CRLF=1 loneLF=2) that made VS show the "normalize line endings?" modal and steal focus.
+    [System.IO.File]::WriteAllText(
+        (Join-Path $probeDir 'TodoProbe.cs'),
+        "// TODO: fix this issue`r`nclass TodoProbe { }`r`n")
+
+    # Deterministic multi-line file for telescope-preview-motions: KEEP pure LF, NO trailing
+    # newline (Set-Content -NoNewline). DO NOT change its EOL — the scenario asserts EXACT
+    # caret positions (e.g. 'preview caret=14 line=2') that depend on these seeded line lengths.
+    Set-Content -Path (Join-Path $probeDir 'Motions.cs') -NoNewline -Value "class Motions`n{`n    int alpha = 1;`n    string beta = `"gamma`";`n}"
+
+    # Solution + project entry (ALWAYS, not gated on Test-Path).
+    dotnet new sln -n TelescopeTest -o $scratchDir --format sln 2>&1 | Out-Null
+    dotnet sln (Join-Path $scratchDir 'TelescopeTest.sln') add (Join-Path $probeDir 'Probe.csproj') 2>&1 | Out-Null
+}
+
+# --- telescope-open -------------------------------------------------------
+Register-Scenario 'telescope-open' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 'prompt focused in insert mode'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-search -----------------------------------------------------
+Register-Scenario 'telescope-search' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath   # confirms open + focused prompt
+    Assert-OverlayFocused $vs     # never type while the overlay may have lost focus
+    Send-Text 'pro'
+    Assert-NewLogLine $logPath "promptChanged query='pro'" "typing reached the prompt (query='pro')"
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=(\d+)" 'results rendered after filter'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-navigate ---------------------------------------------------
+# With many candidate files, j/k move the selection across them in NORMAL mode, and pressing i
+# returns to INSERT mode (search) so you can type a new query — then j/k no longer move selection.
+Register-Scenario 'telescope-navigate' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+
+    # Sanity: the scratch solution must expose several files, otherwise this scenario is vacuous.
+    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Files candidates=(\d+)" 'overlay listed candidates'
+    $cand = 0
+    $lines = Get-Content $logPath
+    foreach ($ln in $lines) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    if ($cand -lt 4) { throw "expected >=4 candidate files for navigation, found $cand" }
+
+    # Insert -> normal, then j moves down one file at a time across multiple results.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200              # j
+    Assert-NewLogLine $logPath 'results count=(\d+) selected=1' 'j moved selection to 1'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200              # j again
+    Assert-NewLogLine $logPath 'results count=(\d+) selected=2' 'j moved selection to 2'
+    Send-Tap 0x4B; Start-Sleep -Milliseconds 200              # k
+    Assert-NewLogLine $logPath 'results count=(\d+) selected=1' 'k moved selection back to 1'
+    Send-Tap 0x4B; Start-Sleep -Milliseconds 200              # k again
+    Assert-NewLogLine $logPath 'results count=(\d+) selected=0' 'k moved selection back to 0'
+
+    # G -> last, gg -> first.
+    Send-Shift 0x47
+    Assert-NewLogLine $logPath "results count=(\d+) selected=$($cand - 1)" 'G moved selection to the last entry'
+    Send-Tap 0x47; Start-Sleep -Milliseconds 150             # g
+    Send-Tap 0x47; Start-Sleep -Milliseconds 200             # g
+    Assert-NewLogLine $logPath 'results count=(\d+) selected=0' 'gg moved selection back to the first entry'
+
+    # i returns to INSERT (search) mode: the prompt becomes editable and typing filters again.
+    Send-Tap 0x49; Start-Sleep -Milliseconds 300              # i
+    Assert-NewLogLine $logPath 'Focus prompt => True, mode=insert' 'i returned to insert (search) mode'
+    Send-Text 'alpha'
+    Assert-NewLogLine $logPath "promptChanged query='alpha'" 'typing after i filtered results again'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'alpha matched exactly one file'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-mode -------------------------------------------------------
+Register-Scenario 'telescope-mode' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 'starts in insert mode'
+    Assert-OverlayFocused $vs
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc handled in insert mode'
+    Send-Tap 0x49;                                              # i (back to insert)
+    Assert-NewLogLine $logPath 'Focus prompt => True, mode=insert' 'i returns to insert mode'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # normal again
+    Send-Tap 0x41;                                              # a (append insert)
+    Assert-NewLogLine $logPath 'Focus prompt => True, mode=insert' 'a returns to insert mode'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-open-file --------------------------------------------------
+Register-Scenario 'telescope-open-file' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Program'                                          # unique match in the scratch solution
+    Assert-NewLogLine $logPath "promptChanged query='Program'" 'typed query reached prompt'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800     # Enter selects -> opens file
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Program\.cs" 'Enter opened Program.cs in the editor'
+    Close-Telescope $vs $logPath
+}
+
+# --- neovisual-window-nav ------------------------------------------------
+Register-Scenario 'neovisual-window-nav' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'window navigation (Ctrl chords)'
+Send-Ctrl 0x48                                              # Ctrl+H -> navigate left
+    Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+H" 'Ctrl+H fired the shortcut binding'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=L" 'Ctrl+H fired navigate left'
+    Send-Ctrl 0x4C                                              # Ctrl+L -> navigate right
+    Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+L" 'Ctrl+L fired the shortcut binding'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=R" 'Ctrl+L fired navigate right'
+    Send-Ctrl 0x4A                                              # Ctrl+J -> navigate down
+    Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+J" 'Ctrl+J fired the shortcut binding'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=D" 'Ctrl+J fired navigate down'
+    Send-Ctrl 0x4B                                              # Ctrl+K -> navigate up
+    Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+K" 'Ctrl+K fired the shortcut binding'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=U" 'Ctrl+K fired navigate up'
+}
+
+# --- neovisual-leader -----------------------------------------------------
+Register-Scenario 'neovisual-leader' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'leader key bindings'
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap 0x57                                               # W -> File.SaveSelectedItems
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: W" 'Space+W fired the W leader binding'
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+    Send-Tap 0x45                                               # E -> View.SolutionExplorer
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: E" 'Space+E fired the E leader binding'
+}
+
+# --- neovisual-toolwindow ------------------------------------------------
+# Solution Explorer: j/k/h/l navigate the tree (hjkl -> arrows), and i/Esc toggle input mode so
+# you can type into the explorer search box.
+Register-Scenario 'neovisual-toolwindow' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'tool-window navigation'
+    # Ensure Solution Explorer is OPEN and focused: Space+E toggles it, and the persisted
+    # experimental-instance layout may leave it open or closed from a previous run — so toggle
+    # until the "toggled open" log appears (same pattern as the explorer-* scenarios).
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: E" 'Space+E opened Solution Explorer'
+    # j/k navigate the tree (injected arrows).
+    Send-Tap 0x4A
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j in Solution Explorer injected a Down arrow'
+    Send-Tap 0x4B
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=K" 'k in Solution Explorer injected an Up arrow'
+    # i enters input mode (for the search box); Escape exits back to normal-mode navigation.
+    Send-Tap 0x49
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-enter-input" 'i entered tool-window input mode'
+    Send-Tap $script:VkEscape
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-exit-input" 'Escape exited tool-window input mode'
+    # Back in normal mode: j navigates again.
+    Send-Tap 0x4A
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j navigates again after exiting input mode'
+}
+
+# --- neovisual-explorer-toggle ------------------------------------------
+# Space+E toggles Solution Explorer: if closed it opens, if open it closes. Because scenarios
+# share one live instance, the starting state may already be open — so we verify the toggle is a
+# genuine open/close pair by pressing it until we observe a close, then confirm the next opens.
+Register-Scenario 'neovisual-explorer-toggle' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer toggle'
+
+    # Press Space+E repeatedly until we've observed both a close and an open in this scenario.
+    $closed = $false
+    $opened = $false
+    for ($i = 0; $i -lt 6 -and -not ($closed -and $opened); $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled closed" 3000) { $closed = $true }
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $closed) { throw 'never observed Solution Explorer closing on Space+E' }
+    if (-not $opened) { throw 'never observed Solution Explorer opening on Space+E' }
+    Write-Pass 'Space+E toggles both open and closed'
+}
+
+# --- neovisual-explorer-open --------------------------------------------
+# In Solution Explorer, l expands a collapsed folder, h collapses it, and Enter opens a file.
+Register-Scenario 'neovisual-explorer-open' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer open'
+    # Ensure Solution Explorer is open and focused (toggle until the open log appears).
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+
+    # Walk the tree: expand (l), step down (j), and try Enter; repeat until a code editor view
+    # opens. The tree is solution -> project -> files, so several expand+down steps are needed.
+    $openedView = $false
+    for ($step = 0; $step -lt 8 -and -not $openedView; $step++) {
+        Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand current fold
+        Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> move into the next node
+        Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened" 4000) { $openedView = $true }
+    }
+    if (-not $openedView) { throw 'could not open a file from Solution Explorer (no editor view created)' }
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'Enter fired solution-explorer open'
+}
+
+# --- neovisual-explorer-collapse ----------------------------------------
+# h collapses the expanded fold (Left arrow), making the tree show fewer items.
+Register-Scenario 'neovisual-explorer-collapse' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer collapse'
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+    # Expand first so there is something to collapse.
+    Send-Tap 0x4C   # l -> expand
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer expand" 'l expanded the selected fold'
+    Send-Tap 0x48   # h -> collapse
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer collapse" 'h collapsed the selected fold'
+    Send-Tap 0x4C   # expand again so later scenarios see the files
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer expand" 'l re-expanded the selected fold'
+}
+
+# --- neovisual-explorer-rename ------------------------------------------
+# In Solution Explorer, r starts rename (F2 injected).
+Register-Scenario 'neovisual-explorer-rename' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer rename'
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+    Send-Tap 0x52   # r
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer rename" 'r fired solution-explorer rename'
+    # F2 opened the rename text box; Escape cancels it so the tree returns to normal.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300
+}
+
+# --- neovisual-explorer-add ---------------------------------------------
+# In Solution Explorer, a runs the Add Item command.
+Register-Scenario 'neovisual-explorer-add' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer add'
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+    Send-Tap 0x41   # a
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer add" 'a fired solution-explorer add'
+    # Escape dismisses any dialog the Add Item command opened.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+}
+
+# --- neovisual-explorer-open-o ------------------------------------------
+# In Solution Explorer the o key opens the selected item (the same action as Enter, per the
+# SolutionExplorerController action keys — covers Run_SolutionExplorer_ActionKeys' o branch).
+Register-Scenario 'neovisual-explorer-open-o' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer open (o)'
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+
+    # Walk the tree exactly like neovisual-explorer-open but open with o instead of Enter.
+    $openedView = $false
+    for ($step = 0; $step -lt 8 -and -not $openedView; $step++) {
+        Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand current fold
+        Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> move into the next node
+        Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened" 4000) { $openedView = $true }
+    }
+    if (-not $openedView) { throw 'could not open a file from Solution Explorer with o (no editor view created)' }
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
+}
+
+# --- neovisual-explorer-move --------------------------------------------
+# In Solution Explorer the m key runs the Move command (covers Run_SolutionExplorer_ActionKeys' m
+# branch). The Move dialog that opens is dismissed with Escape so the tree stays navigable.
+Register-Scenario 'neovisual-explorer-move' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer move'
+    $opened = $false
+    for ($i = 0; $i -lt 4 -and -not $opened; $i++) {
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x45; Start-Sleep -Milliseconds 1200
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)solution-explorer toggled open" 3000) { $opened = $true }
+    }
+    if (-not $opened) { throw 'could not ensure Solution Explorer open' }
+    Send-Tap 0x4D   # m
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer move" 'm fired solution-explorer move'
+    # The Move dialog opened; Escape dismisses it.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+}
+
+# --- telescope-wrap ------------------------------------------------------
+# Selection wraps around the result list: j past the last goes to 0, k past the first goes to last.
+Register-Scenario 'telescope-wrap' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    $lines = Get-Content $logPath
+    $cand = 0
+    foreach ($ln in $lines) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    if ($cand -lt 3) { throw "expected >=3 candidates for wrap test, found $cand" }
+
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # normal mode
+    # k from the first entry wraps to the last; j at the last wraps to the first.
+    Send-Tap 0x4B
+    Assert-NewLogLine $logPath "results count=(\d+) selected=$($cand - 1)" 'k at index 0 wrapped to the last entry'
+    Send-Tap 0x4A
+    Assert-NewLogLine $logPath 'results count=(\d+) selected=0' 'j at the last entry wrapped to 0'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-preview ---------------------------------------------------
+# The selected file's content shows in the preview pane; Ctrl+L moves focus into the preview
+# where vim motions navigate the code read-only; Ctrl+H returns to the list.
+Register-Scenario 'telescope-preview' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+
+    # The selected (first) candidate must be a real file so the preview has content.
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*\.cs" 'preview loaded the selected file content'
+    # The preview renders the file as syntax-highlighted tokens (>= 1 token proves the
+    # SyntaxHighlighter ran and colored the content).
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview tokens=\d+" 'preview rendered syntax-highlighted tokens'
+    # Ctrl+L moves focus to the preview.
+    Send-Ctrl 0x4C
+    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+L moved focus to the preview'
+    # j moves the preview caret down a line (vim motion over the code).
+    Send-Tap 0x4A
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=2" 'j moved the preview caret to line 2'
+    # Escape returns to the list.
+    Send-Tap $script:VkEscape
+    Assert-NewLogLine $logPath 'focus target=List' 'Escape returned focus to the list'
+    Close-Telescope $vs $logPath
+}
+
+# --- neovisual-editor-insert ---------------------------------------------
+# Regression guard: the global hook must NOT swallow/steal typed characters while the VsVim
+# editor is in INSERT mode. This is the risk area — IsInteresting marks h/j/k/l/i/Space/Escape
+# as interesting, and the leader key (Space) + hjkl/I routing must all pass through when the
+# focused editor is in a typing mode (VimModeTracker.IsInTypingMode). We type a string that
+# contains those very keys and prove every character lands in the saved file on disk.
+Register-Scenario 'neovisual-editor-insert' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+
+    # Open Beta.cs (NOT auto-opened at startup — Program.cs is) through the Telescope overlay, so
+    # a brand-new editor view is created for it and the editor gets focus.
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Beta'
+    Assert-NewLogLine $logPath "promptChanged query='Beta'" 'typed query reached prompt'
+    # The filter is async — WAIT for it to render before pressing Enter, otherwise the selection
+    # is still on the first (unfiltered) candidate and Enter opens the wrong file.
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Beta.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Beta\.cs" 'preview shows the Beta.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Beta\.cs" 'Enter opened Beta.cs'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*Beta\.cs" 'editor view for Beta.cs created'
+    Close-Telescope $vs $logPath
+
+    # The editor has Beta.cs focused. Get VsVim into NORMAL mode, then press i to enter INSERT.
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'editor insert-mode typing'
+    Send-Tap 0x49; Start-Sleep -Milliseconds 400                     # i -> insert mode
+    Assert-NewLogLine $logPath "$($script:PfxNeo)vim-mode=Insert" 'i switched the editor into insert mode'
+
+    # Type a marker containing the "interesting" keys (h, i, j, k, and a Space). Each key is
+    # marked interesting by the hook pre-filter, so any swallow/misroute here breaks the file check.
+    $run = [regex]::Match((Split-Path $logPath -Leaf), '^(\d+)').Groups[1].Value
+    $marker = "hi jk $run"
+    Send-Text $marker
+    Start-Sleep -Milliseconds 300
+
+    # Exit insert mode and save the buffer; the file content is the ground-truth proof the text
+    # reached the editor (a swallowed Space/hjkl/i would have made the marker partial).
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300         # insert -> normal
+    Assert-NewLogLine $logPath "$($script:PfxNeo)vim-mode=Normal" 'Esc switched the editor back to normal mode'
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150          # leader
+    Send-Tap 0x57; Start-Sleep -Milliseconds 1000                    # W -> File.SaveSelectedItems
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: W" 'Space+W saved the file'
+
+    $probeDir = Join-Path (Join-Path $env:TEMP 'telescope_scratch') 'Probe'
+    $file = Join-Path $probeDir 'Beta.cs'
+    if (-not (Test-Path $file)) { throw "editor file missing: $file" }
+    $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
+    if (-not $content) { throw 'editor file is empty after save' }
+    if (-not $content.Contains($marker)) {
+        $preview = if ($content.Length -gt 200) { $content.Substring(0, 200) } else { $content }
+        throw "typed text was swallowed/not inserted (file lacks marker '$marker'). Content: $preview"
+    }
+    Write-Pass "typed text reached the editor (file contains '$marker')"
+}
+
+# --- neovisual-textinput-motions -----------------------------------------
+# Vim text motions in a text-input tool window (Command Window): after Esc (exit insert) it stays
+# in the text input and h/l/w/b/e move the caret (swallowed, not typed), while A/I enter insert at
+# the end/start of the line. The caret positions are logged by the controller and asserted below.
+Register-Scenario 'neovisual-textinput-motions' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'text-input tool window motions'
+
+    # Open the Command Window (a text-input tool window) via the Space+C W leader binding (wired to
+    # View.CommandWindow in default-keybindings.json). Opening is async and focus lags by a few
+    # seconds, so poll with Escapes until one lands while the window's input is in insert mode
+    # (logged as toolwindow-exit-input). NEVER retry the leader sequence itself — once the window
+    # is open, re-sending Space/C/W would type into its input.
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150        # leader
+    Send-Tap 0x43; Start-Sleep -Milliseconds 150                   # C
+    Send-Tap 0x57                                                  # W -> View.CommandWindow
+    $opened = $false
+    for ($i = 0; $i -lt 8 -and -not $opened; $i++) {
+        Start-Sleep -Milliseconds 800
+        Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 250
+        if (Wait-NewLogLine $logPath "$($script:PfxNeo)toolwindow-exit-input" 1200) { $opened = $true }
+    }
+    if (-not $opened) { throw 'Command Window did not open and take focus' }
+    # Normal mode in a text-input window draws a BLOCK caret over the editor view.
+    Assert-NewLogLine $logPath "$($script:PfxNeo)block-caret active=True" 'normal mode shows the block caret'
+
+    # Back to insert mode (generic i), then type a known string. The Command Window's editor
+    # buffer includes the '>' prompt, so 'hello' yields text '>hello' (length 6, caret 6).
+    Send-Tap 0x49; Start-Sleep -Milliseconds 300                       # i
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-enter-input" 'i re-entered insert mode'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)block-caret active=False" 'insert mode restores the line caret'
+    Send-Text 'hello'; Start-Sleep -Milliseconds 300
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300           # insert -> normal
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-exit-input" 'Esc left insert mode with hello typed'
+
+    # h/l move by character over '>hello' (caret 6 -> 5, then back), swallowed (never typed).
+    Send-Tap 0x48; Start-Sleep -Milliseconds 200                       # h
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=H caret=5" 'h moved the caret left to 5'
+    # a (bare a) enters insert AFTER the caret: from caret 5 the caret lands at 6 (after 'o').
+    Send-Tap 0x41; Start-Sleep -Milliseconds 250                       # a
+    Assert-NewLogLine $logPath "$($script:PfxNeo)textinput-enter-input after caret=6" 'a entered insert after the caret'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300           # insert -> normal
+    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-exit-input" 'Esc left the a-insert'
+    Send-Tap 0x4C; Start-Sleep -Milliseconds 200                       # l
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=L caret=6" 'l moved the caret right to 6'
+
+    # w -> end of the single word, b -> back to the start (before the prompt), e -> end again.
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200                       # w
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=W caret=6" 'w moved to the end of the word'
+    Send-Tap 0x42; Start-Sleep -Milliseconds 200                       # b
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=B caret=0" 'b moved back to the start'
+    Send-Tap 0x45; Start-Sleep -Milliseconds 200                       # e
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=E caret=6" 'e moved to the end of the word'
+
+    # A (Shift+a) enters insert at the END of the line; typing appends.
+    Send-Shift 0x41; Start-Sleep -Milliseconds 250                     # A
+    Assert-NewLogLine $logPath "$($script:PfxNeo)textinput-enter-input end caret=6" 'A entered insert at the line end'
+    Send-Text ' world'; Start-Sleep -Milliseconds 300
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300
+
+    # I (Shift+i) enters insert at the START of the line (caret 0). Note: the Command Window's '>'
+    # prompt is a read-only region, so typing there is rejected — we just verify the caret jumps.
+    Send-Shift 0x49; Start-Sleep -Milliseconds 250                     # I
+    Assert-NewLogLine $logPath "$($script:PfxNeo)textinput-enter-input start caret=0" 'I entered insert at the line start'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300
+
+    # Text is now '>hello world': w from the start jumps to the next word, e to its end, A
+    # appends, and b jumps back to the word start.
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200                       # w
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=W caret=7" 'w jumped to the next word (world)'
+    Send-Tap 0x45; Start-Sleep -Milliseconds 200                       # e
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=E caret=12" 'e jumped to the end of world'
+    Send-Shift 0x41; Start-Sleep -Milliseconds 250                     # A
+    Assert-NewLogLine $logPath "$($script:PfxNeo)textinput-enter-input end caret=12" 'A entered insert at the end again'
+    Send-Text '!'; Start-Sleep -Milliseconds 300
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300           # insert -> normal
+    Send-Tap 0x42; Start-Sleep -Milliseconds 200                       # b
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=B caret=7" 'b moved back to the start of world'
+
+    Write-Pass 'text-input window vim motions moved the caret and entered insert at A/I positions'
+}
+
+# --- telescope-issues ----------------------------------------------------
+# The code-issues finder (Space F D) lists warnings/errors/TODO markers. A seeded TODO in
+# TodoProbe.cs is found, filtered, previewed (jumping to the issue line), and opened at that line.
+Register-Scenario 'telescope-issues' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-TelescopeIssues $vs $logPath
+    Assert-OverlayFocused $vs
+    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Issues candidates=(\d+)" 'issues finder listed candidates'
+
+    # Filter to the seeded TODO marker.
+    Send-Text 'fix this'
+    Assert-NewLogLine $logPath "promptChanged query='fix this'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'TODO marker filtered to a single result'
+    # The preview loads the issue file and jumps the caret to the TODO line (line 1).
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*TodoProbe\.cs" 'preview shows the issue file'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=1" 'preview caret jumped to the issue line'
+
+    # Enter opens the file and jumps to the TODO line.
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened issue: .*TodoProbe\.cs line=\d+" 'Enter opened the issue at its line'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-prompt-motions --------------------------------------------
+# In NORMAL mode the prompt supports vim caret motions (h/l/w/b/e/0/$) over the typed query,
+# mirroring the text-input tool windows (covers Run_PromptMotion_*: character, word, line
+# start/end, end-word). Each motion logs prompt-motion key=... caret=...
+Register-Scenario 'telescope-prompt-motions' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    # Type a multi-word query so word motions have something to cross.
+    Send-Text 'find my file'
+    Assert-NewLogLine $logPath "promptChanged query='find my file'" 'typed query reached prompt'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode'
+
+    # h/l move by character over 'find my file' (length 12, caret 12 -> 11 -> 12).
+    Send-Tap 0x48; Start-Sleep -Milliseconds 200   # h
+    Assert-NewLogLine $logPath 'prompt-motion key=H caret=11' 'h moved the prompt caret left to 11'
+    Send-Tap 0x4C; Start-Sleep -Milliseconds 200   # l
+    Assert-NewLogLine $logPath 'prompt-motion key=L caret=12' 'l moved the prompt caret right to 12'
+
+    # b walks back across word starts: file(8) -> my(5) -> 0.
+    Send-Tap 0x42; Start-Sleep -Milliseconds 200   # b
+    Assert-NewLogLine $logPath 'prompt-motion key=B caret=8' 'b moved to the start of file'
+    Send-Tap 0x42; Start-Sleep -Milliseconds 200   # b
+    Assert-NewLogLine $logPath 'prompt-motion key=B caret=5' 'b moved to the start of my'
+    Send-Tap 0x42; Start-Sleep -Milliseconds 200   # b
+    Assert-NewLogLine $logPath 'prompt-motion key=B caret=0' 'b moved to the start of the line'
+
+    # e -> end of the first word (find -> caret 5); w crosses the word starts.
+    Send-Tap 0x45; Start-Sleep -Milliseconds 200   # e
+    Assert-NewLogLine $logPath 'prompt-motion key=E caret=5' 'e moved to the end of find'
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w
+    Assert-NewLogLine $logPath 'prompt-motion key=W caret=8' 'w moved to the start of file'
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w
+    Assert-NewLogLine $logPath 'prompt-motion key=W caret=12' 'w moved past the last word'
+
+    # 0 -> line start, $ (Shift+4) -> line end.
+    Send-Tap 0x30; Start-Sleep -Milliseconds 200   # 0
+    Assert-NewLogLine $logPath 'prompt-motion key=D0 caret=0' '0 moved the caret to the line start'
+    Send-Shift 0x34; Start-Sleep -Milliseconds 200  # $
+    Assert-NewLogLine $logPath 'prompt-motion key=D4 caret=12' '$ moved the caret to the line end'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-preview-motions -------------------------------------------
+# The preview pane supports the full vim motion set (h/l/j/k/w/b/e/0/$/g/G) read-only over the
+# selected file. We filter to the seeded Motions.cs (deterministic 5-line content) and assert the
+# EXACT caret/line for each motion — covering the Run_Preview_* unit-test motions live.
+Register-Scenario 'telescope-preview-motions' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Motions'
+    Assert-NewLogLine $logPath "promptChanged query='Motions'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Motions.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Motions\.cs" 'preview shows the Motions.cs match'
+    Send-Ctrl 0x4C
+    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+L moved focus to the preview'
+
+    # j/k step down/up a line at a time over the 5-line file.
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j
+    Assert-NewLogLine $logPath 'preview caret=14 line=2' 'j moved the preview caret to line 2'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j
+    Assert-NewLogLine $logPath 'preview caret=16 line=3' 'j moved the preview caret to line 3'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j
+    Assert-NewLogLine $logPath 'preview caret=35 line=4' 'j moved the preview caret to line 4'
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j
+    Assert-NewLogLine $logPath 'preview caret=62 line=5' 'j moved the preview caret to the last line'
+    Send-Tap 0x4B; Start-Sleep -Milliseconds 200   # k
+    Assert-NewLogLine $logPath 'preview caret=35 line=4' 'k moved the preview caret up to line 4'
+    Send-Tap 0x4B; Start-Sleep -Milliseconds 200   # k
+    Assert-NewLogLine $logPath 'preview caret=16 line=3' 'k moved the preview caret up to line 3'
+
+    # g -> top (line 1), G (Shift+g) -> bottom (line 5).
+    Send-Tap 0x47; Start-Sleep -Milliseconds 200   # g
+    Assert-NewLogLine $logPath 'preview caret=0 line=1' 'g moved the preview caret to the top'
+    Send-Shift 0x47; Start-Sleep -Milliseconds 200 # G
+    Assert-NewLogLine $logPath 'preview caret=63 line=5' 'G moved the preview caret to the last line'
+
+    # Back to line 4 (the 'string beta' line) for the word motions: w/b/e/h/l/0/$.
+    Send-Tap 0x47; Start-Sleep -Milliseconds 200   # g -> top
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j -> line 2
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j -> line 3
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200   # j -> line 4
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w
+    Assert-NewLogLine $logPath 'preview caret=39 line=4' 'w moved to the start of string'
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w
+    Assert-NewLogLine $logPath 'preview caret=46 line=4' 'w moved to the start of beta'
+    Send-Tap 0x45; Start-Sleep -Milliseconds 200   # e
+    Assert-NewLogLine $logPath 'preview caret=50 line=4' 'e moved to the end of beta'
+    Send-Tap 0x48; Start-Sleep -Milliseconds 200   # h
+    Assert-NewLogLine $logPath 'preview caret=49 line=4' 'h moved one char left'
+    Send-Tap 0x4C; Start-Sleep -Milliseconds 200   # l
+    Assert-NewLogLine $logPath 'preview caret=50 line=4' 'l moved one char right'
+    Send-Tap 0x42; Start-Sleep -Milliseconds 200   # b
+    Assert-NewLogLine $logPath 'preview caret=46 line=4' 'b moved back to the start of beta'
+    Send-Tap 0x30; Start-Sleep -Milliseconds 200   # 0
+    Assert-NewLogLine $logPath 'preview caret=35 line=4' '0 moved to the line start'
+    Send-Shift 0x34; Start-Sleep -Milliseconds 200  # $
+    Assert-NewLogLine $logPath 'preview caret=61 line=4' '$ moved to the line end'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200
+    Assert-NewLogLine $logPath 'focus target=List' 'Escape returned focus to the list'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-q-close ---------------------------------------------------
+# In NORMAL mode both q and Escape close the overlay (Run_KeyHandler_QAndEscapeCloseInNormal).
+Register-Scenario 'telescope-q-close' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode'
+    Send-Tap 0x51   # q
+    Assert-NewLogLine $logPath "$($script:PfxTel)key=Q mode=normal handled=True" 'q was handled in normal mode'
+    Assert-NewLogLine $logPath "$($script:PfxTel)overlay closed" 'q closed the overlay'
+}
+
+# --- telescope-open-file-normal ------------------------------------------
+# Enter selects the current result in NORMAL mode too (Run_KeyHandler_EnterSelectsInInsertAndNormal).
+Register-Scenario 'telescope-open-file-normal' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Program'
+    Assert-NewLogLine $logPath "promptChanged query='Program'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Program.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Program\.cs" 'preview shows the Program.cs match'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800   # Enter selects in normal mode
+    Assert-NewLogLine $logPath "$($script:PfxTel)key=Enter mode=normal handled=True" 'Enter was handled in normal mode'
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Program\.cs" 'Enter opened Program.cs in normal mode'
+}
+
+# --- telescope-no-selection ----------------------------------------------
+# Movement on an EMPTY result list is a no-op that keeps the selection at 0
+# (Run_KeyHandler_NoSelectionWithoutResults).
+Register-Scenario 'telescope-no-selection' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'zzzznomatch'
+    Assert-NewLogLine $logPath "promptChanged query='zzzznomatch'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=0 selected=0" 'filter returned no results'
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Send-Tap 0x4A; Start-Sleep -Milliseconds 200              # j on the empty list
+    Assert-NewLogLine $logPath 'key=J mode=normal handled=True' 'j was handled in normal mode'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=0 selected=0" 'selection stayed at 0 on an empty list'
+    Close-Telescope $vs $logPath
+}
+
+# --- seed-reset -----------------------------------------------------------
+# Filesystem-only (no keystrokes, no [Telescope]/[NeoVisual] log assertions): proves the scratch
+# seeding ALWAYS resets (stale edits removed) and writes UNIFORM line endings (no mixed CRLF/LF,
+# which would make VS show the "normalize line endings?" modal and steal focus). Uses a TEMP dir,
+# never the live $scratch the running VS has open, so this never disturbs the instance.
+Register-Scenario 'seed-reset' {
+    param($vs, $logPath)
+    $testDir = Join-Path $env:TEMP ("scratch_seed_test_" + $PID)
+    try {
+        Reset-ScratchSolution $testDir
+        Assert-SeedConsistent $testDir          # uniform EOL + canonical content after a reset
+
+        # Mutate a seeded file, then reset again and prove the stale edit is removed.
+        $beta = Join-Path $testDir 'Probe\Beta.cs'
+        if (-not (Test-Path $beta)) { throw "expected seeded file missing: $beta" }
+        [System.IO.File]::AppendAllText($beta, "// STALE-MARKER`r`n")
+        if (-not (Select-String -Path $beta -Pattern 'STALE-MARKER' -Quiet)) {
+            throw "failed to append stale marker to $beta"
+        }
+
+        Reset-ScratchSolution $testDir
+        if (Select-String -Path $beta -Pattern 'STALE-MARKER' -Quiet) {
+            throw "reset did not remove stale edit: $beta still contains STALE-MARKER"
+        }
+        Assert-SeedConsistent $testDir          # still uniform + canonical after the second reset
+        Write-Pass 'seed-reset: reset is idempotent and seed EOL is uniform'
+    } finally {
+        if (Test-Path $testDir) { Remove-Item $testDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Runner: list, filter, boot, run
+# ---------------------------------------------------------------------------
+
+if ($List) {
+    Write-Host 'Available scenarios:'
+    foreach ($name in $script:Scenarios.Keys) { Write-Host "  $name" }
+    exit 0
+}
+
+$allNames = @($script:Scenarios.Keys)
+$selected = if ($Tests.Count -gt 0) { $Tests | Where-Object { $allNames -contains $_ } } else { $allNames }
+if ($selected.Count -lt $Tests.Count) {
+    $unknown = $Tests | Where-Object { $allNames -notcontains $_ }
+    Write-Fail "Unknown scenario(s): $($unknown -join ', ')"
+    Write-Host "Valid: $($allNames -join ', ')"
+    exit 1
+}
+
+Write-Step "E2E scenarios: $($selected -join ', ')"
+
+# --- key injection helper (keybd_event, like the repo's KeyInjection) -----
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class KbInject
+{
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    public static void TapVk(ushort vk)
+    {
+        keybd_event((byte)vk, 0, 0, UIntPtr.Zero);
+        keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
+}
+'@ -Language CSharp
+Add-Type -Namespace Win32 -Name Fg -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);'
+Add-Type -Namespace Win32 -Name Kbd -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'
+
+# ---------------------------------------------------------------------------
+# Bootstrap: scratch solution with multiple source files, deploy, launch exp
+# ---------------------------------------------------------------------------
+# M-C1: refresh the tools/ hash up front so check-doc-refs.ps1 can enforce its presence and the
+# hub's VERIFY `tools/`-changed flag is always computed against a fresh hash.
+Write-ToolsHash
+
+if ($NoBootstrap) {
+    # Reuse mode (M-M5): the instance is ALREADY booted — discover it instead of killing, reseeding,
+    # and re-spawning. Retries/batches against the same instance reuse this boot, so a -Tests
+    # re-run no longer does a full VS reboot. The scratch is NOT reset here (the running VS has it
+    # open); run seed-reset if you need a clean reseed.
+    Write-Step 'Reusing an already-booted instance (-NoBootstrap)'
+    $vsProc = Get-Process devenv -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -match 'Experimental' -and $_.MainWindowHandle -ne 0 } |
+        Select-Object -First 1
+    $mainVs = Get-Process devenv -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -match 'MyExtension' } |
+        Select-Object -First 1
+    if (-not $vsProc) { Write-Fail 'No running Experimental instance found (boot without -NoBootstrap first)'; exit 1 }
+    Add-SpawnedVs $vsProc
+    if ($mainVs) { Add-SpawnedVs $mainVs }
+    # Point at the newest existing exp log (the running instance's log), else the fresh run path.
+    $logPath = Get-ChildItem $logDir -Filter '*-neovisual-exp.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $logPath) { Write-Fail 'No existing exp log found to reuse'; exit 1 }
+    $runIndex = if ($logPath -match '(\d+)-neovisual') { [int]$Matches[1] } else { 1 }
+    $debugLogPath = Join-Path $logDir "$runIndex-neovisual-main.log"
+    Write-Pass "reusing Experimental instance (PID $($vsProc.Id)), log: $(Split-Path $logPath -Leaf)"
+} else {
+# HARD ORDERING REQUIREMENT: stop ANY prior harness VS BEFORE the scratch reset below, so the
+# delete cannot fight a live solution or be blocked by a locked scratch dir. Scoped (M-M5) to
+# harness-looking VS only — never the user's other devenv instances.
+Stop-HarnessVs
+Start-Sleep -Seconds 3
+Write-Step 'Ensure scratch solution (multiple source files)'
+$scratch = Join-Path $env:TEMP 'telescope_scratch'
+$slnPath = Join-Path $scratch 'TelescopeTest.sln'
+Reset-ScratchSolution $scratch
+# Bootstrap self-check: must pass once the seed is uniform + canonical. Throws -> exit 1.
+Assert-SeedConsistent $scratch
+Write-Pass "solution ready: $slnPath"
+
+# Run index: auto-incrementing integer from existing logs.
+$existingLogs = Get-ChildItem $logDir -Filter '*-neovisual-*.log' -ErrorAction SilentlyContinue
+$runIndex = 1
+foreach ($f in $existingLogs) {
+    if ($f.BaseName -match '^(\d+)-neovisual') {
+        $n = [int]$Matches[1]
+        if ($n -ge $runIndex) { $runIndex = $n + 1 }
+    }
+}
+$logPath = Join-Path $logDir "$runIndex-neovisual-exp.log"
+$debugLogPath = Join-Path $logDir "$runIndex-neovisual-main.log"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+# Resolve VS install root.
+$candidates = @('C:\Program Files\Microsoft Visual Studio\18\Community','C:\Program Files\Microsoft Visual Studio\2022\Community')
+$vsRoot = $candidates | Where-Object { Test-Path (Join-Path $_ 'Common7\IDE\devenv.exe') } | Select-Object -First 1
+if (-not $vsRoot) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) { $vsRoot = (& $vswhere -products '*' -property installationPath | Select-Object -First 1) }
+}
+if (-not $vsRoot) { throw 'No Visual Studio installation found.' }
+$devenv = Join-Path $vsRoot 'Common7\IDE\devenv.exe'
+Write-Info "VS root: $vsRoot"
+
+# Env for the extension + harness log wiring.
+[Environment]::SetEnvironmentVariable('NEOVISUAL_TEST_SOLUTION', $slnPath, 'User')
+$env:NEOVISUAL_TEST_SOLUTION = $slnPath
+[Environment]::SetEnvironmentVariable('NEOVISUAL_LOG_DIR', $logDir, 'User')
+$env:NEOVISUAL_LOG_DIR = $logDir
+$env:NEOVISUAL_LOG_INDEX = $runIndex
+
+# Fresh main VS that carries the env vars into the experimental instance it spawns.
+Write-Info 'opening main VS with the solution...'
+Start-Process $devenv -ArgumentList "`"$(Join-Path $root 'MyExtension.slnx')`"" -ErrorAction Stop
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$mainVs = $null
+while ($sw.Elapsed.TotalSeconds -lt 60) {
+    $mainVs = Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'MyExtension' } | Select-Object -First 1
+    if ($mainVs) { break }
+    Start-Sleep -Milliseconds 500
+}
+if (-not $mainVs) { Write-Fail 'Main VS did not open'; exit 1 }
+Add-SpawnedVs $mainVs
+Write-Pass "main VS open (PID $($mainVs.Id))"
+Start-Sleep -Seconds 10
+
+Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Experimental' } | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+if (Test-Path $logPath) { Remove-Item $logPath -Force }
+
+# Deploy via VS's own Debug.Start (guaranteed latest code), then wait for the exp instance.
+& (Join-Path $PSScriptRoot 'dte-command.ps1') -DevenvPid $mainVs.Id -Command 'Debug.Start' | Out-Null
+Write-Pass 'Debug.Start issued'
+$vsProc = $null
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+while ($sw.Elapsed.TotalSeconds -lt 90) {
+    $vsProc = Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Experimental' -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($vsProc) { break }
+    Start-Sleep -Milliseconds 400
+}
+if (-not $vsProc) { Write-Fail 'Experimental instance did not appear'; exit 1 }
+Add-SpawnedVs $vsProc
+Write-Pass "Experimental instance found (PID $($vsProc.Id))"
+
+# Wait for the extension to be live: hook installed + solution auto-opened.
+if (-not (Wait-LogContains $logPath "$($script:PfxHook)installed" 90000)) { Write-Fail 'keyboard hook not installed'; exit 1 }
+if (-not (Wait-LogContains $logPath "$($script:PfxMyExt)auto-opened solution" 30000)) { Write-Fail 'solution not auto-opened'; exit 1 }
+Write-Pass 'extension live (hook + solution open)'
+}
+
+# ---------------------------------------------------------------------------
+# Run the selected scenarios against the live instance
+# ---------------------------------------------------------------------------
+$failures = @()
+foreach ($name in $selected) {
+    Write-Step "Scenario: $name"
+    $ok = $false
+    try {
+        & $script:Scenarios[$name] $vsProc $logPath
+        $ok = $true
+    } catch {
+        $failures += "$name : $($_.Exception.Message)"
+    }
+    if ($ok) { Write-Pass "scenario '$name' passed" } else { Write-Fail "scenario '$name' FAILED" }
+}
+
+Write-Host ''
+if ($failures.Count -gt 0) {
+    foreach ($f in $failures) { Write-Fail $f }
+    Write-Host "RESULT: FAIL ($($failures.Count) failed)" -ForegroundColor Red
+    if (-not $KeepVs) { Stop-SpawnedVs }
+    exit 1
+}
+Write-Host "RESULT: PASS (all $($selected.Count) scenario(s))" -ForegroundColor Green
+if (-not $KeepVs) { Stop-SpawnedVs }
+exit 0

@@ -94,7 +94,8 @@ $bareNameAllowlist = @(
     'Alpha.cs', 'Beta.cs', 'Gamma.cs', 'Delta.cs', 'Epsilon.cs',
     'Service.cs', 'User.cs', 'Order.cs', 'AuthService.cs',
     'Probe.cs', 'TelescopeTest.sln',
-    'Shared.cs', 'Reader.cs', 'Writer.cs'   # references-finder seed files (Models/Shared.cs + readers/writers)
+    'Shared.cs', 'Reader.cs', 'Writer.cs',   # references-finder seed files (Models/Shared.cs + readers/writers)
+    'GrepProbe.cs'                            # grep-finder seed file (Probe/GrepProbe.cs, GREPME marker)
 )
 
 # Proposed-future symbols / files named in the backlog's fix suggestions — they

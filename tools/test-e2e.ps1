@@ -13,6 +13,7 @@
 #   telescope-open-file   Enter on a match opens the file in the editor
 #   telescope-issues      Space F D: warnings/errors/TODO finder filters, previews, opens at line
 #   telescope-references  Space F R: lists read/write references to the caret symbol, previews+opens at line
+#   telescope-grep      Space F G: grep finder searches files for the query, previews + opens at the hit line
 #   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 #   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
 #   telescope-q-close    q closes the overlay in normal mode
@@ -264,6 +265,28 @@ function Open-TelescopeReferences([object]$vs, [string]$logPath) {
     throw 'Telescope references finder did not open'
 }
 
+function Open-TelescopeGrep([object]$vs, [string]$logPath) {
+    # Space F G opens the grep finder (query-driven live search over the solution's files).
+    # Same focus discipline as Open-Telescope: hammer Escape first (get VsVim out of insert),
+    # then wait for the overlay to own focus. NOTE: F,G is currently bound to the old
+    # command:Edit.FindinFiles, so during the RED run this opens VS's Find-in-Files dialog instead.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Bring-ToForeground $vs.MainWindowHandle
+        foreach ($i in 1..3) { Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 }
+        Start-Sleep -Milliseconds 300
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x46;             Start-Sleep -Milliseconds 150  # F
+        Send-Tap 0x47;                                             # G
+        if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Grep" 15000) -and
+            (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
+            Assert-OverlayFocused $vs
+            return
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    throw 'Telescope grep finder did not open'
+}
+
 function Close-Telescope([object]$vs, [string]$logPath) {
     # The overlay is a modal dialog that ALREADY owns keyboard focus — do NOT call
     # Bring-ToForeground here (it would SetForegroundWindow the VS main window and steal the
@@ -365,6 +388,10 @@ function Assert-SeedConsistent([string]$scratchDir) {
         'Models/Shared.cs'      = "class Shared`r`n{`r`n    public static int Value;`r`n}`r`n"
         'Reader.cs'             = "class Reader`r`n{`r`n    public static int Read()`r`n    {`r`n        return Shared.Value;`r`n    }`r`n}`r`n"
         'Writer.cs'             = "class Writer`r`n{`r`n    public static void Run()`r`n    {`r`n        Shared.Value = 1;`r`n    }`r`n}`r`n"
+        # Distinctive marker for the grep finder (telescope-grep): "GREPME" appears on exactly TWO
+        # lines of GrepProbe.cs (line 4 and line 6), so `grep hits=2` is exact and the first hit
+        # (line 4) pins the preview + opened-line assertions. Uniform CRLF.
+        'GrepProbe.cs'          = "// GrepProbe.cs`r`nclass GrepProbe`r`n{`r`n    // GREPME first hit line 4`r`n    int alpha = 1;`r`n    // GREPME second hit line 6`r`n    string beta = `"gamma`";`r`n}`r`n"
     }
 
     # Gather every seeded source file (all *.cs plus *.sln/*.csproj) under the scratch dir.
@@ -455,6 +482,12 @@ function Reset-ScratchSolution([string]$scratchDir) {
         "class Reader`r`n{`r`n    public static int Read()`r`n    {`r`n        return Shared.Value;`r`n    }`r`n}`r`n")
     [System.IO.File]::WriteAllText((Join-Path $probeDir 'Writer.cs'),
         "class Writer`r`n{`r`n    public static void Run()`r`n    {`r`n        Shared.Value = 1;`r`n    }`r`n}`r`n")
+
+    # Distinctive marker for the grep finder (telescope-grep): "GREPME" on exactly TWO lines
+    # (line 4 and line 6). MUST match the $canonical map byte-for-byte (uniform CRLF) or the
+    # seed-consistency self-check fails the run.
+    [System.IO.File]::WriteAllText((Join-Path $probeDir 'GrepProbe.cs'),
+        "// GrepProbe.cs`r`nclass GrepProbe`r`n{`r`n    // GREPME first hit line 4`r`n    int alpha = 1;`r`n    // GREPME second hit line 6`r`n    string beta = `"gamma`";`r`n}`r`n")
 
     # Solution + project entry (ALWAYS, not gated on Test-Path).
     dotnet new sln -n TelescopeTest -o $scratchDir --format sln 2>&1 | Out-Null
@@ -1075,6 +1108,40 @@ Register-Scenario 'telescope-references' {
     Assert-NewLogLine $logPath "$($script:PfxTel)opened reference: file=.*\.cs line=\d+ col=\d+ access=(read|write)" 'Enter opened the reference with access kind'
 
     # Step 7: close.
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-grep -------------------------------------------------------
+# The grep finder (Space F G) live-searches the solution's source files for the typed query
+# (query-driven, case-insensitive substring — NOT fzf-filtered), shows each hit's file/line/text,
+# previews the hit file with the caret jumped to the hit line, and opens the file at that line on
+# Enter. The scratch solution seeds a distinctive marker "GREPME" on exactly TWO lines of
+# GrepProbe.cs (line 4 and line 6), so `grep hits=2` is exact and the first hit (line 4) pins the
+# preview + opened-line assertions end-to-end.
+Register-Scenario 'telescope-grep' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-TelescopeGrep $vs $logPath
+    Assert-OverlayFocused $vs
+
+    # Step 1: empty query -> deterministic 0 candidates.
+    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Grep candidates=0" 'grep finder opened with empty query -> 0 candidates'
+
+    # Step 2: type the token. The debounce re-runs the query-driven gather after typing settles,
+    # logging exactly one 'grep hits=2' for the two seeded GREPME lines (harness polls for seconds,
+    # so the settled count is asserted, not per-keystroke).
+    Send-Text 'GREPME'
+    Assert-NewLogLine $logPath "$($script:PfxTel)grep hits=2" 'grep found the 2 seeded GREPME lines'
+
+    # Step 3: preview jumps to the first hit's file/line (GrepProbe.cs, line 4).
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*GrepProbe\.cs" 'preview shows the grep hit file'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=4" 'preview caret jumped to the first hit line'
+
+    # Step 4: Enter opens the file at the pinned hit line (line 4).
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened grep: file=.*GrepProbe\.cs line=4" 'Enter opened the grep hit at line 4'
+
+    # Step 5: close.
     Close-Telescope $vs $logPath
 }
 

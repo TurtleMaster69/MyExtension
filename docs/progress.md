@@ -9,12 +9,13 @@ reads at the start of every loop iteration.
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **46 passed**; `tests/NeoVisual.Tests`
+- Offline units: `tests/Telescope.Tests` **52 passed**; `tests/NeoVisual.Tests`
   **25 passed**.
-- Live E2E: `tools/test-e2e.ps1` lists **27 scenarios** (incl. `seed-reset`).
-  The full 27-scenario suite is GREEN (verified 2026-09-19 after the references-finder
-  item; one pre-existing flake `neovisual-editor-insert` passes on retry);
-  **no known-RED scenarios remain**.
+- Live E2E: `tools/test-e2e.ps1` lists **28 scenarios** (incl. `seed-reset`).
+  The full 28-scenario suite is GREEN (verified 2026-09-19 after the grep-finder
+  item; one pre-existing flake `neovisual-editor-insert` passes on retry, count
+  2/3 — below the M-M2 3-flaky regression threshold); **no known-RED scenarios
+  remain**.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -102,13 +103,42 @@ Top of the queue, in priority order:
 3. Implement the **Telescope finders** roadmap:
    - ~~`references` finder~~ — **DONE** (see Done section; `Space+F R`,
      read/write access, preview line-jump).
-   - `grep` finder — with preview pane.
+   - ~~`grep` finder~~ — **DONE** (see Done section; `Space+F G`, query-driven
+     with a debounce, preview line-jump).
    - `fzf` finder — with preview pane.
    - `implementation` finder — with preview pane; preview jumps to line.
 4. Add the 4 new planned E2E scenarios (above) and their offline unit tests.
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-19 — Telescope grep finder** (Lane: feature, attempt 1, GREEN):
+  `GrepFinder` + `GrepHit` (Telescope, `Name="Grep"`, `Space+F G`) search the
+  solution's project files for the typed query — **query-driven** via a new
+  `IQueryFinder` capability seam in the overlay (per-keystroke re-gather with a
+  200ms debounce, skipping fzf for query finders; the fzf path for
+  Files/Issues/References untouched — A6 verified). Empty query → 0 candidates;
+  case-insensitive substring scan (`ProjectFiles.Enumerate`), `HitCap=200`;
+  preview jumps to the hit line; Enter opens the file at the line. New
+  diagnostics: `grep hits=N` (per-query gather summary) and
+  `opened grep: file=... line=...`. New e2e scenario `telescope-grep` (28th)
+  passes with the pinned chain `candidates=0 → hits=2 → preview line=4 →
+  opened line=4` (seeded `GrepProbe.cs`, GREPME ×2); full suite GREEN (one
+  pre-existing flake `neovisual-editor-insert`, retry-pass, count 2/3); units
+  Telescope 52/52, NeoVisual 25/25.
+  **Change summary:** created `Telescope/GrepHit.cs` +
+  `Telescope/GrepFinder.cs` + `Telescope/IQueryFinder.cs`; edited
+  `Telescope/TelescopeOverlay.cs` (debounce + `RefreshQueryDrivenAsync` +
+  GrepHit preview branch), `MyExtension/InputHandler.cs`
+  (ResolveAction case + `OpenTelescopeGrep()`), `MyExtension/MyExtensionPackage.cs`
+  (finder registration), `MyExtension/default-keybindings.json`
+  (`F,G` → `telescope-grep`), `tools/test-e2e.ps1` (scenario + `GrepProbe.cs`
+  seed in `$canonical`), `tests/Telescope.Tests/Program.cs` (+6
+  `Run_GrepFinder_*`). No DEVIATIONS.
+  **If this regresses, look first at `TelescopeOverlay.RefreshResults`'s
+  IQueryFinder branch (debounce + `grep hits` summary) and `GrepFinder`
+  `GetCandidates(string)`** — the two BP steps the e2e scenario asserts on.
+  Doc sync: Telescope 46→52, scenarios 27→28 across spec.md / AGENTS.md /
+  SKILL.md. Commit: `_filled at commit_`.
 - **2026-09-19 — Telescope references finder** (Lane: feature, attempt 1, GREEN):
   `ReferencesFinder` + `ReferenceHit` (Telescope, `Name="References"`, `Space+F R`)
   lists every reference to the symbol at the caret with **read/write access**

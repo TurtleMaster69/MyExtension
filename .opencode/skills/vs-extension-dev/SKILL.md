@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 27 live E2E scenarios, feature status/roadmap, and the
+> test commands, the 28 live E2E scenarios, feature status/roadmap, and the
 > hard requirements. This file covers the durable architecture.
 
 ## Architecture
@@ -53,7 +53,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `CardinalMovment/CardinalNavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `CardinalMovment/RectCoordinate.cs` | Simple int `x, y, width, height` rect value object. |
 | `CardinalMovment/LinqExtensionMethods.cs` | `DistinctBy` LINQ helper (used because target framework lacks it). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`): `TelescopeController`, `TelescopeOverlay` (WPF modal), `OverlayKeyHandler` (pure vim state machine), `TextMotionNavigator` (shared pure vim motions for preview + text-input windows), `SyntaxHighlighter` (preview syntax coloring), `FzfFilter` (fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `FileFinder`, `CodeIssuesFinder` (warnings/errors/TODO), `ReferencesFinder` + `ReferenceHit` (symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable), `ProjectFiles` (shared DTE enumeration), `ResultsFormatter`, `NeoVisualLog`/`LogFileWriter` (two-file per-run logs). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`): `TelescopeController`, `TelescopeOverlay` (WPF modal), `OverlayKeyHandler` (pure vim state machine), `TextMotionNavigator` (shared pure vim motions for preview + text-input windows), `SyntaxHighlighter` (preview syntax coloring), `FzfFilter` (fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `FileFinder`, `CodeIssuesFinder` (warnings/errors/TODO), `ReferencesFinder` + `ReferenceHit` (symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable), `GrepFinder` + `GrepHit` + `IQueryFinder` (query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders), `ProjectFiles` (shared DTE enumeration), `ResultsFormatter`, `NeoVisualLog`/`LogFileWriter` (two-file per-run logs). |
 
 ## Tool-window controller pattern (newer than the window matrix)
 
@@ -191,8 +191,8 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (46) and
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (52) and
   `dotnet run --project tests/NeoVisual.Tests` (25), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/test-e2e.ps1` (27 scenarios against the experimental
+- Live E2E: `pwsh tools/test-e2e.ps1` (28 scenarios against the experimental
   instance), `-Tests <name>` to run a subset.

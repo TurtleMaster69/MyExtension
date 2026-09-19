@@ -1,88 +1,79 @@
-# Implementation Plan — Item: Telescope `references` finder (with preview line-jump + read/write access)
+# Implementation Plan — Item: Telescope `grep` finder (query-driven, with preview pane)
 
-> **Lane: feature** — new capability (a new Telescope finder) AND a new
-> `[Telescope] opened reference: ...` diagnostic line + a new default keybinding
-> (`F,R`). **M-M7 HARD TRIGGER:** this plan ADDS a `[Telescope]` diagnostic and a
-> diagnostic-observable contract → the FULL feature pipeline applies: initial-plan
-> REVIEW, e2e RED booting VS, post-GREEN spec re-review.
+> **Lane: feature** — new capability (a query-driven Telescope finder) AND a new
+> `[Telescope] grep hits=...` + `[Telescope] opened grep: ...` diagnostic + a new
+> default keybinding (`F,G` rebind). **M-M7 HARD TRIGGER:** ADDS `[Telescope]`
+> diagnostics → full feature pipeline: initial-plan REVIEW, e2e RED booting VS,
+> post-GREEN spec re-review.
 
 ---
 
-**Goal:** Add the first of the user-requested Telescope finders roadmap items — a
-**references finder** (`Space+F R`) that lists all references to the symbol at the
-caret in the active document, shows each hit's **read/write access** (from VS's
-find-references engine), previews the hit file with the caret jumped to the
-reference line, and opens the file at that line on Enter.
+**Goal:** Add the second Telescope finders roadmap item — a **grep finder**
+(`Space+F G`) that searches the solution's project files for the typed query
+(query-driven — each keystroke re-runs the search, unlike the fzf-filtered
+finders), shows each hit's file/line/text, previews the hit file with the caret
+jumped to the hit line, and opens the file at that line on Enter.
 
 ---
 
 ## Approach
 
-1. **`ReferencesFinder : IFinder`** in the `Telescope` project (mirror the
-   `CodeIssuesFinder` shape — the closest precedent):
-   - `Name => "References"`.
-   - **Data source (read/write access):** VS's Roslyn "Find All References"
-     engine — `IFindAllReferencesService` (Roslyn service in
-     `Microsoft.VisualStudio.LanguageServices.dll`, provided by VS at runtime).
-     Each reference reports `IsWrittenTo` (read vs write access) + file + line +
-     column. The **host** (`MyExtensionPackage`/`InputHandler`) resolves the
-     service — via MEF (`IComponentModel`) OR the active Roslyn workspace's
-     `Services` (the implementation-planner/build-agent confirm the exact
-     mechanism; do not over-commit the plan to one path) — and injects a
-     `Func<IReadOnlyList<ReferenceHit>>` gatherer + a
-     `Action<ReferenceHit>` opener into the finder, keeping the finder
-     **hermetic-testable** (the `CodeIssuesFinder` seam). Any new package
-     reference (e.g. `Microsoft.VisualStudio.LanguageServices`) follows the
-     existing `ExcludeAssets="runtime"` pattern (VS supplies it at load time).
-   - **`ReferenceHit` payload** (new pure class): `FilePath`, `LineNumber`
-     (1-based), `Column` (1-based), `IsWrite` (read/write), `Symbol`,
-     `LineText` (source line for display). Deterministic `Display` format,
-     e.g. `{file}:{line}:{col} (read|write) — {symbol}` (exact format chosen by
-     the builder; MUST be deterministic for the e2e assertions).
-   - `GetCandidates()`: calls the injected gatherer (UI thread —
-     `ThreadHelper.ThrowIfNotOnUIThread()`), maps hits to `FinderEntry`s
-     (payload = `ReferenceHit`), swallows exceptions like `CodeIssuesFinder`.
-     Logs a **gather summary diagnostic** (new):
-     `[Telescope] references gathered reads=\d+ writes=\d+` so the harness can
-     assert read/write coverage live (the results list itself is never
-     per-candidate-logged).
-   - `OnSelected(entry)`: opens the hit file (`dte.ItemOperations.OpenFile`),
-     jumps to the line (`TextSelection.GotoLine` — **line-level navigation only;
-     `col` is reported metadata, not a column jump**, matching
-     `CodeIssuesFinder.GotoLine`), and logs the new diagnostic
-     `[Telescope] opened reference: file=... line=... col=... access=read|write`.
-   - **Gatherer contract (host side):** capture the ACTIVE document + caret
-     symbol at gather time (Roslyn: `CurrentSolution` → active document →
-     caret position → symbol at position → `IFindAllReferencesService.FindReferences`),
-     return all reference hits (definition + references), each with read/write
-     from `ReferenceLocation.IsWrittenTo`. The host logs the candidate count.
-
-2. **Overlay preview support (new payload type):** extend
-   `TelescopeOverlay.LoadPreviewForSelection` (`TelescopeOverlay.cs` ~line 402)
-   with a `ReferenceHit` branch mirroring the `CodeIssue` branch: load the file
-   content, `_previewNavigator.MoveToLine(hit.LineNumber)`, log the existing
-   `[Telescope] preview file=...` + `[Telescope] preview caret=... line=...`
-   lines. (Minimal seam extension — the F11 IFinder-preview refactor is a
-   separate later item.)
-
-3. **Keybinding + action:** rebind `"F,R": "command:File.OpenFile"` →
-   `"F,R": "telescope-references"` in `MyExtension/default-keybindings.json`
-   (no test pins the old binding — verified); add `case "telescope-references"`
-   in `InputHandler.ResolveAction` + an `OpenTelescopeReferences()` method
-   mirroring `OpenTelescopeIssues()` (opens the `"References"` finder centered
-   over the VS main window). The host constructs the finder with the real
-   gatherer/opener and registers it (`TelescopeController.RegisterFinder`) —
-   finder construction lives with the other finders (check
-   `MyExtensionPackage`/`InputHandler` wiring).
-
-4. **Diagnostics contract (new — M-M7):**
-   - `[Telescope] open finder=References candidates=(\d+)` — existing generic
-     finder-open log (no format change; new finder name).
-   - `[Telescope] references gathered reads=\d+ writes=\d+` — **NEW** diagnostic
-     (gatherer summary; the harness's live read/write proof).
-   - `[Telescope] opened reference: file=... line=... col=... access=(read|write)`
-     — **NEW** diagnostic (the item's hard-trigger line; the regex in the harness
-     must be `access=(read|write)` — `\|` would be a literal pipe).
+1. **Query-driven finder seam (minimal, F11-adjacent):** new capability interface
+   `IQueryFinder` in `Telescope/` (`IReadOnlyList<FinderEntry> GetCandidates(string query)`)
+   alongside `IFinder`. `TelescopeOverlay.FilterAndUpdateAsync` gains a branch:
+   when the active finder is an `IQueryFinder`, re-gather candidates from
+   `GetCandidates(query)` and render them DIRECTLY — **skipping fzf** (grep
+   semantics are literal, not fuzzy). The static fzf-filter path for
+   `Files`/`Issues`/`References` is untouched.
+   **Debounce is a FIRST-CLASS task of this item (NOT pre-existing):**
+   `RefreshResults` currently runs the filter immediately per keystroke (no
+   debounce — only a CTS that cancels the *fzf await*). A query-driven gather
+   does a synchronous full-solution scan on the UI thread (DTE file
+   enumeration), so each keystroke would stall VS. The item must add a small
+   debounce gate (e.g. a ~200ms `DispatcherTimer`/delay in `RefreshResults`,
+   armed only while the active finder is an `IQueryFinder`) so the scan runs
+   after typing settles; the UI-thread cost of each settle-scan is bounded by
+   the debounce + the hit cap. The e2e harness polls log lines for up to
+   seconds, so ~200ms is safe for assertions. The Build Plan must include the
+   debounce as an explicit BP step with its own Verify-with (typed-then-settled
+   query still yields `grep hits=N`).
+2. **`GrepFinder : IFinder, IQueryFinder`** in the `Telescope` project (mirror
+   `CodeIssuesFinder`'s hermetic seams + the references-finder host-injection
+   pattern):
+   - `Name => "Grep"`.
+   - `GetCandidates(query)` (the query seam): empty query → **empty result set**
+     (deterministic initial state); otherwise scan the solution's project files
+     (`ProjectFiles.Enumerate(dte)` — the shared walker) for case-insensitive
+     substring matches, build one `FinderEntry` per hit — display
+     `{fileName}:{line}: {lineText}` (exact format chosen by the builder, must be
+     deterministic), payload = a new pure `GrepHit(filePath, lineNumber, lineText)`.
+     Cap total hits (e.g. ≤200) for responsiveness. Log a gather summary
+     `[Telescope] grep hits=N` per gather.
+   - `OnSelected(entry)`: open the hit file (`dte.ItemOperations.OpenFile`),
+     jump to the line (`TextSelection.GotoLine`), log the new diagnostic
+     `[Telescope] opened grep: file=... line=...`.
+   - Hermetic test ctor mirroring `CodeIssuesFinder` (injected
+     `Func<IReadOnlyList<string>>` file-**path** source + `Action<GrepHit>`
+     opener): the finder reads file CONTENT off disk from the injected paths
+     (the `Run_Issues_*` pattern — tests create real temp files with known
+     content and inject their paths), so the line-scan/matching/display/opener
+     logic is unit-testable without DTE.
+3. **Overlay preview support:** extend `TelescopeOverlay.LoadPreviewForSelection`
+   with a `GrepHit` branch (load file content + `_previewNavigator.MoveToLine`,
+   reusing the existing `preview file=` / `preview caret=... line=...` logs) —
+   mirroring the `CodeIssue`/`ReferenceHit` branches.
+4. **Keybinding + action:** rebind `"F,G": "command:Edit.FindinFiles"` →
+   `"F,G": "telescope-grep"` in `MyExtension/default-keybindings.json` (nothing
+   pins the old binding — verified; it is VS's own Find-in-Files, which this
+   finder replaces). Add `case "telescope-grep"` in `InputHandler.ResolveAction` +
+   `OpenTelescopeGrep()` mirroring `OpenTelescopeReferences()`; the host
+   constructs `GrepFinder` with the real DTE file source/opener and registers it
+   (`TelescopeController.RegisterFinder`).
+5. **Diagnostics contract (new — M-M7):**
+   - `[Telescope] open finder=Grep candidates=(\d+)` — existing generic
+     finder-open log (empty-query gather → candidates=0, deterministic).
+   - `[Telescope] grep hits=\d+` — **NEW** (per-query gather summary).
+   - `[Telescope] opened grep: file=... line=\d+` — **NEW** (OnSelected).
    - Preview reuses `[Telescope] preview file=...` + `[Telescope] preview caret=\d+ line=\d+`.
 
 ---
@@ -91,13 +82,14 @@ reference line, and opens the file at that line on Enter.
 
 | # | Criterion | Diagnostic asserted | Test |
 |---|-----------|--------------------|------|
-| A1 | `Space+F R` opens the References finder with ≥2 candidates for a seeded multi-reference symbol | `[Telescope] open finder=References candidates=\d+` (≥2) | e2e `telescope-references` |
-| A2 | Each candidate row shows the reference file/line and read/write access | (display format — asserted via unit test on `ReferenceHit` → `FinderEntry` mapping) | `Run_ReferencesFinder_*` (Telescope.Tests) |
-| A3 | Preview loads the hit file and jumps the caret to the reference line | `[Telescope] preview file=.*\.cs` + `[Telescope] preview caret=\d+ line=\d+` | e2e scenario |
-| A4 | Enter opens the file at the reference line and logs read/write access | `[Telescope] opened reference: file=.* line=\d+ col=\d+ access=(read\|write)` | e2e scenario |
-| A5 | Read AND write hits both appear (seeded write site) — proven LIVE via the gather summary, not the unlogged results list | `[Telescope] references gathered reads=\d+ writes=\d+` with `writes≥1` (and unit tests cover per-hit read/write classification) | e2e scenario + unit test |
-| A6 | Unit coverage of pure logic (display, payload, opener, line mapping) | n/a | `Run_ReferencesFinder_*` in Telescope.Tests |
-| A7 | Existing suites stay green (Telescope 42 + new, NeoVisual 25) | — | full-suite final gate |
+| A1 | `Space+F G` opens the Grep finder (empty query → no candidates) | `[Telescope] open finder=Grep candidates=0` | e2e `telescope-grep` |
+| A2 | Typing a distinctive seeded token returns the expected hits (query-driven, no fzf) | `[Telescope] grep hits=\d+` = the seeded hit count | e2e scenario |
+| A3 | Each hit row shows file/line/text (deterministic display) | (display asserted via unit test on the scan→entry mapping) | `Run_GrepFinder_*` (Telescope.Tests) |
+| A4 | Preview jumps to the hit line | `[Telescope] preview file=.*\.cs` + `[Telescope] preview caret=\d+ line=\d+` | e2e scenario |
+| A5 | Enter opens the file at the SPECIFIC seeded hit line | `[Telescope] opened grep: file=.* line=<the pinned 1-based hit line>` | e2e scenario |
+| A6 | Existing fzf finders (Files/Issues/References) unaffected by the query seam | existing scenarios stay green | full-suite final gate |
+| A7 | Unit coverage of scan/matching/display/opener (hermetic) | n/a | `Run_GrepFinder_*` in Telescope.Tests |
+| A8 | Existing suites stay green (Telescope 46+N, NeoVisual 25) | — | full-suite final gate |
 
 ---
 
@@ -105,77 +97,341 @@ reference line, and opens the file at that line on Enter.
 
 ### Offline unit tests (tests/Telescope.Tests, new — RED at unit level)
 
-Mirror the `CodeIssuesFinder` hermetic-seam tests. Add a `Run_ReferencesFinder_*`
-family (names at the builder's discretion) covering:
-- **Display formatting:** a `ReferenceHit(file, line, col, isWrite, symbol, text)`
-  renders `(read)` vs `(write)` deterministically; file/line/col/symbol present.
-- **Payload passthrough:** `FinderEntry.Payload` round-trips the `ReferenceHit`.
-- **Opener invocation:** `OnSelected` calls the injected opener with the correct
-  hit (file/line/col/access).
-- **Line mapping:** the hit's line number drives the preview jump (pure mapping).
-RED: the tests reference a non-existent `ReferencesFinder`/`ReferenceHit` → the
-Telescope.Tests build fails (missing symbol) — the right-reason unit RED.
+Mirror the `CodeIssuesFinder` hermetic tests. Add a `Run_GrepFinder_*` family
+(names at the builder's discretion) covering:
+- **Empty query:** `GetCandidates("")` → 0 entries (deterministic initial state).
+- **Line scanning:** temp files with known content (the `Run_Issues_*` pattern —
+  real temp files, injected paths) return exactly the lines containing the
+  (case-insensitive) token; non-matching lines excluded.
+- **Display format:** `{fileName}:{line}: {text}` deterministic; payload round-trips the `GrepHit`.
+- **Opener invocation:** `OnSelected` calls the injected opener with the right file/line.
+- **Hit cap:** a file with >cap matches is capped (≤200).
+RED: the tests reference a non-existent `GrepFinder`/`GrepHit` → Telescope.Tests
+build fails (missing symbol) — the right-reason unit RED.
 
-Also check: no existing NeoVisual keybinding test asserts `F,R` (verified none) —
-no test change needed there.
+### E2E scenario: `telescope-grep` (new, added via `Register-Scenario`)
 
-### E2E scenario: `telescope-references` (new, added via `Register-Scenario`)
-
-Seeding (harness seeding must stay uniform-EOL per the hardening item):
-- **Real compilable C#** (NOT comment stubs — Roslyn find-references needs an
-  actual symbol graph): a `Shared` class with a public field, defined in one
-  file (e.g. `Models/Shared.cs`) and **referenced from ≥2 other files**, with at
-  least **one write site** (`shared.Value = 1`) and ≥1 read site — so the
-  read/write contract (A5) is exercised deterministically.
-- **Every new seeded file MUST be added to the `$canonical` map** in
-  `Reset-ScratchSolution` + `Assert-SeedConsistent` (byte-exact, uniform CRLF —
-  or pure LF if caret positions are pinned), or the seed-consistency self-check
-  fails the run.
+Seeding: reuse the existing deterministic symbol graph from the references item
+(`Shared` in `Models/Shared.cs` + `Reader.cs` + `Writer.cs` — already in
+`$canonical`) OR add one distinctive seeded token (e.g. a `// GREPME` marker in
+≥2 known files). Exact token + expected hit count pinned by the builder — the
+token must appear in a KNOWN number of lines so `grep hits=N` is exact.
 
 Scenario flow (each step asserting on the log):
-1. Open the defining file via the overlay (`Space F T`, filter, Enter) → caret
-   lands deterministically (e.g. line 1 col 0). Esc to normal mode.
-2. Position the caret on the symbol name (deterministic motion, e.g. `0` +
-   `w`/`e` — exact steps pinned by the builder against the seeded file content).
-3. `Space+F R` → assert `[Telescope] open finder=References candidates=(\d+)`
-   with count ≥ 2.
-4. Assert the gather summary proves read+write coverage:
-   `[Telescope] references gathered reads=\d+ writes=\d+` with `writes` ≥ 1.
-5. Assert preview jumped: `[Telescope] preview file=.*\.cs` +
-   `[Telescope] preview caret=\d+ line=\d+` (line = a seeded reference line).
-6. Enter → assert `[Telescope] opened reference: file=.* line=\d+ col=\d+ access=(read|write)`.
-7. `Close-Telescope`.
+1. `Space+F G` → assert `[Telescope] open finder=Grep candidates=0` (empty query).
+2. Type the distinctive token → assert `[Telescope] grep hits=N` with the exact
+   seeded count (query-driven gather).
+3. Assert preview jumped: `[Telescope] preview file=.*\.cs` +
+   `[Telescope] preview caret=\d+ line=\d+` (line = a seeded hit line).
+4. Enter → assert `[Telescope] opened grep: file=.* line=<pinned 1-based hit line>`
+   — the line number pinned to the exact seeded hit line (like the references
+   item's `preview caret=... line=...` pins), so the "at the hit line" criterion
+   is genuinely proven end-to-end.
+5. `Close-Telescope`.
 
-Diagnostics depended on: `[Telescope] open finder=References candidates=...`,
-`[Telescope] references gathered reads=... writes=...`,
-`[Telescope] preview file=...`, `[Telescope] preview caret=... line=...`,
-`[Telescope] opened reference: ... access=(read|write)` (regex: `access=(read|write)` —
-NOT `\|`, which is a literal pipe). Scenario count 26 → 27.
+Diagnostics depended on: `[Telescope] open finder=Grep candidates=...`,
+`[Telescope] grep hits=...`, `[Telescope] preview file=...`,
+`[Telescope] preview caret=... line=...`, `[Telescope] opened grep: ...`.
+Scenario count 27 → 28.
 
 ---
 
 ## RED evidence plan (e2e-test-builder, feature lane)
 
-1. **Unit RED (no VS boot):** Telescope.Tests build fails — `ReferencesFinder` /
-   `ReferenceHit` missing (missing symbol). Right-reason unit RED for A6.
+1. **Unit RED (no VS boot):** Telescope.Tests build fails — `GrepFinder`/`GrepHit`
+   missing (missing symbol). Right-reason unit RED for A7.
 2. **E2E RED (boots VS):** with the scenario registered but NO finder/binding
-   implemented, `telescope-references` FAILS — `Space+F R` either opens the old
-   `File.OpenFile` dialog (binding not yet rebound) or produces no
-   `open finder=References` log line, and no `opened reference` line can appear.
-   The failing assertions are exactly the missing-contract assertions — the
-   right-reason RED for A1/A3/A4/A5.
+   implemented, `telescope-grep` FAILS — `Space+F G` still runs the old
+   `Edit.FindinFiles` command (Find-in-Files dialog) or nothing; no
+   `open finder=Grep`, `grep hits`, or `opened grep` lines appear. The failing
+   assertions are exactly the missing-contract assertions — right-reason RED for
+   A1/A2/A4/A5.
 3. The builder does NOT implement the finder (build-agent's job).
 
 ---
 
 ## Known-RED allowlist (for VERIFY)
 
-- **None** of the affected scenarios/tests are allowlisted — `telescope-references`
-  and the `Run_ReferencesFinder_*` tests are this item's targets and must be GREEN.
-- Loop-time VERIFY runs `telescope-references` + Telescope.Tests; the final gate
-  runs the FULL suite (now 27 scenarios) + both unit projects.
-- All existing known-RED backlog items are FIXED (previous item) — the full suite
-  has no known-RED scenarios as of this item's start.
+- **None** of the affected scenarios/tests are allowlisted — `telescope-grep` and
+  the `Run_GrepFinder_*` tests are this item's targets and must be GREEN.
+- Loop-time VERIFY runs `telescope-grep` + Telescope.Tests; the final gate runs
+  the FULL suite (now 28 scenarios) + both unit projects. One pre-existing flake
+  is on record: `neovisual-editor-insert` (retry-pass, flaky count 1/3) — the
+  verifier applies the standard retry-once policy; it must not be treated as a
+  regression.
+
+---
+
+## Build Plan
+
+> **KEY DECISIONS (do not second-guess):**
+> 1. `GrepFinder` mirrors **`CodeIssuesFinder`**, not `ReferencesFinder`: public
+>    `GrepFinder(Func<DTE> dteFactory)` ctor + `internal GrepFinder(Func<IReadOnlyList<string>>, Action<GrepHit>)`
+>    test ctor. The finder is self-contained — `GetCandidates(query)` calls
+>    `ProjectFiles.Enumerate(dte)` and reads file CONTENT internally, and
+>    `OnSelected` does its own `dte.ItemOperations.OpenFile` + `GotoLine`. The host
+>    therefore registers the SAME one-liner as FileFinder/CodeIssuesFinder
+>    (`new GrepFinder(() => UtilityMethods.GetDTE(this))`) — there is **no separate
+>    host-side opener**, despite the item-plan wording.
+> 2. The `(Func<IReadOnlyList<string>> fileSource, Action<GrepHit> opener)` ctor is
+>    the **internal test ctor** (mirrors `CodeIssuesFinder._testFileSource`/
+>    `_testOpener`); the `fileSource` yields **full file paths** and the finder reads
+>    their CONTENT off disk (the `Run_Issues_*` real-temp-file pattern).
+> 3. The debounce is a **generation counter + `Task.Delay(200)`** (`QueryDebounceMs`)
+>    in `TelescopeOverlay` — no `DispatcherTimer` to dispose; the await captures the
+>    WPF `SynchronizationContext` so the synchronous scan resumes on the UI thread.
+> 4. Diagnostic formats are byte-for-byte: `open finder=Grep candidates=0` (existing
+>    generic log), `grep hits={count}`, `opened grep: file={path} line={line}`, plus
+>    the existing `preview file=... chars=...` / `preview caret=... line=...`.
+> 5. `IQueryFinder` and `GrepFinder`/`GrepHit` are **public**; `InternalsVisibleTo` is
+>    already set for `Telescope.Tests`, so the internal test ctor is reachable.
+
+---
+
+### BP-1 — Create `GrepHit` (pure payload model)
+
+- **Files:** create `Telescope/GrepHit.cs`.
+- **Change:** `public sealed class GrepHit` (namespace `Telescope`) with a ctor
+  `GrepHit(string filePath, int lineNumber, string lineText)` and three get-only
+  properties — `string FilePath` (default `""`), `int LineNumber`, `string LineText`
+  (default `""`). This exactly matches `ReferenceHit`/`CodeIssue` conventions. No VS
+  or WPF dependencies.
+- **Verify-with:** `dotnet build` compiles (the 6 RED tests still fail on the
+  MISSING `GrepFinder`, but `GrepHit` symbol now resolves — the `CS0246:
+  'GrepHit' could not be found` errors disappear).
+- **Fails-if:** `dotnet build` still reports `CS0246: 'GrepHit' could not be found`;
+  or a compile error inside `GrepHit` (property/ctor mismatch with the tests'
+  `hit.FilePath` / `.LineNumber` / `.LineText` accesses and
+  `new GrepHit(...)` usages in the test ctor seams).
+
+### BP-2 — Create `IQueryFinder` capability interface
+
+- **Files:** create `Telescope/IQueryFinder.cs`.
+- **Change:** `public interface IQueryFinder { IReadOnlyList<FinderEntry> GetCandidates(string query); }`
+  (namespace `Telescope`). This is the query-driven seam the overlay branches on.
+- **Verify-with:** `dotnet build` compiles (no tests target this directly).
+- **Fails-if:** `dotnet build` errors on a missing `IQueryFinder` symbol when
+  `GrepFinder` (BP-3) or the overlay branch (BP-4) references it.
+
+### BP-3 — Create `GrepFinder` (`IFinder` + `IQueryFinder`)
+
+- **Files:** create `Telescope/GrepFinder.cs`.
+- **Change:** `public sealed class GrepFinder : IFinder, IQueryFinder`:
+  - `public string Name => "Grep"`.
+  - `public GrepFinder(Func<DTE> dteFactory)` — production ctor (throws on null).
+  - `internal GrepFinder(Func<IReadOnlyList<string>> fileSource, Action<GrepHit> opener)`
+    — test ctor (mirrors `CodeIssuesFinder`; stores as `_testFileSource`/`_testOpener`,
+    sets `_dteFactory = () => null!`).
+  - `public IReadOnlyList<FinderEntry> GetCandidates()` (IFinder) → `return GetCandidates(string.Empty);`.
+  - `public IReadOnlyList<FinderEntry> GetCandidates(string query)` (IQueryFinder):
+    - `string.IsNullOrEmpty(query)` → `return Array.Empty<FinderEntry>();` (NO log,
+      so the empty open emits only `open finder=Grep candidates=0`).
+    - Resolve the file list: test path → `_testFileSource()`; production → assert
+      UI thread, `ProjectFiles.Enumerate(_dteFactory())` (empty if no solution).
+    - For each path, `File.ReadAllLines` and scan each line for `line.IndexOf(query,
+      StringComparison.OrdinalIgnoreCase) >= 0`; add a `GrepHit(path, i + 1, line)`;
+      stop at **`HitCap = 200`** total hits (break loop + early-return in the scan).
+    - Log `NeoVisualLog.Log($"{DiagnosticLog.Telescope}grep hits={hits.Count}")`
+      AFTER the scan.
+    - Return `hits.Select(ToEntry).ToList()`; `ToEntry` produces
+      `$"{Path.GetFileName(hit.FilePath)}:{hit.LineNumber}: {hit.LineText}"` with
+      `new FinderEntry(display, hit)`.
+  - `public void OnSelected(FinderEntry entry)`:
+    - `entry.Payload is not GrepHit hit` → return.
+    - test path → `_testOpener(hit); return;`.
+    - production → assert UI thread; `if (!File.Exists(hit.FilePath)) return;`;
+      `_dteFactory().ItemOperations.OpenFile(hit.FilePath)`; `GotoLine(dte, hit.LineNumber)`
+      (private static, mirrors `CodeIssuesFinder.GotoLine`); log
+      `$"{DiagnosticLog.Telescope}opened grep: file={hit.FilePath} line={hit.LineNumber}"`.
+      Wrap in try/catch logging `open grep failed: ...`.
+- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- -- GrepFinder` →
+  the 6 tests pass: `Run_GrepFinder_EmptyQueryReturnsZeroCandidates`,
+  `Run_GrepFinder_LineScanMatchesCaseInsensitive`,
+  `Run_GrepFinder_DisplayIsFileNameLineText`,
+  `Run_GrepFinder_PayloadRoundTripsGrepHit`,
+  `Run_GrepFinder_OnSelectedOpensHitAtLine`, `Run_GrepFinder_HitCapBounded`.
+- **Fails-if:** any of those 6 fail — specifically: `DisplayIsFileNameLineText` fails
+  if display ≠ `"A.cs:2: NEEDLE here"` (format `{file}:{line}: {text}` broken);
+  `PayloadRoundTripsGrepHit` fails if `FilePath`/`LineNumber`/`LineText` don't
+  round-trip exactly; `HitCapBounded` fails if >200 entries (cap not enforced);
+  `LineScanMatchesCaseInsensitive` fails if `OrdinalIgnoreCase` isn't used or
+  non-matching lines leak; `EmptyQueryReturnsZeroCandidates` fails if the empty
+  query returns any entry; `OnSelectedOpensHitAtLine` fails if the opener isn't
+  invoked with the exact hit.
+
+### BP-4 — Overlay query-driven branch + debounce (skip fzf)
+
+- **Files:** modify `Telescope/TelescopeOverlay.cs`.
+- **Change:**
+  - Add field `private const int QueryDebounceMs = 200;` and `private int _queryGeneration;`.
+  - In `RefreshResults(string query)` (currently lines 332-340), after
+    `CancelFilter();` insert the branch:
+    ```csharp
+    if (_activeFinder is IQueryFinder queryFinder)
+    {
+        _ = RefreshQueryDrivenAsync(queryFinder, query);
+        return;
+    }
+    ```
+    (the existing fzf `_filterCts` + `FilterAndUpdateAsync` path stays untouched for
+    Files/Issues/References).
+  - Add method:
+    ```csharp
+    private async Task RefreshQueryDrivenAsync(IQueryFinder finder, string query)
+    {
+        int gen = ++_queryGeneration;
+        await Task.Delay(QueryDebounceMs); // resumes on the UI thread (SynchronizationContext)
+        if (gen != _queryGeneration || !IsOpen) return;
+        IReadOnlyList<FinderEntry> results;
+        try { results = finder.GetCandidates(query) ?? Array.Empty<FinderEntry>(); }
+        catch (Exception ex) { NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}query gather failed: {ex.Message}"); results = Array.Empty<FinderEntry>(); }
+        if (gen != _queryGeneration || !IsOpen) return;
+        _results = results;
+        _keyHandler.SetResults(results.Count);
+        RenderResults();
+    }
+    ```
+- **Verify-with:** e2e `telescope-grep` — after typing `GREPME`, the log shows
+  `[Telescope] grep hits=2` exactly once (the settle-scan), proving the query-driven
+  path runs (skipping fzf) AFTER the ~200ms debounce.
+- **Fails-if:** no `grep hits=2` line appears after typing (branch never fires);
+  OR `grep hits=1`/`grep hits=...` only for a partial prefix then nothing (debounce
+  fires per keystroke → generation counter broken); OR the fzf path is still hit for
+  Grep (you'd see fzf `results count` without `grep hits=`); OR the UI hangs because
+  `GetCandidates(query)` ran on a background thread (must resume on UI thread).
+
+### BP-5 — Overlay preview: `GrepHit` branch in `LoadPreviewForSelection`
+
+- **Files:** modify `Telescope/TelescopeOverlay.cs` (`LoadPreviewForSelection`,
+  currently lines 402-469).
+- **Change:** insert a `GrepHit` branch (mirroring the `CodeIssue`/`ReferenceHit`
+  branches) right after the `ReferenceHit` branch and before the `payload is string`
+  branch:
+  ```csharp
+  if (payload is GrepHit gh && System.IO.File.Exists(gh.FilePath))
+  {
+      try
+      {
+          string content = System.IO.File.ReadAllText(gh.FilePath);
+          SetPreviewContent(content);
+          if (gh.LineNumber > 0)
+          {
+              _previewNavigator.MoveToLine(gh.LineNumber);
+              ApplyPreviewCaret();
+              NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
+          }
+          NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={gh.FilePath} chars={content.Length}");
+      }
+      catch (Exception ex)
+      {
+          NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
+      }
+      return;
+  }
+  ```
+- **Verify-with:** e2e `telescope-grep` — assert
+  `[Telescope] preview file=.*GrepProbe\.cs` AND
+  `[Telescope] preview caret=\d+ line=4` (selection index 0 = the line-4 hit).
+- **Fails-if:** `preview file=...GrepProbe.cs` never appears (branch not reached,
+  or payload type mismatch); or `preview caret=... line=4` shows a different line
+  (the payload's `LineNumber` not driving `MoveToLine`).
+
+### BP-6 — `InputHandler` action case + `OpenTelescopeGrep()`
+
+- **Files:** modify `MyExtension/InputHandler.cs`.
+- **Change:**
+  - In `ResolveAction` (line ~152-183), add
+    `case "telescope-grep": return () => OpenTelescopeGrep();` alongside
+    `telescope-references`.
+  - Add (mirror `OpenTelescopeReferences`, lines 476-490):
+    ```csharp
+    private void OpenTelescopeGrep()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+            var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+            _telescope.Open("Grep", centerRect, dte.MainWindow.HWnd);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope grep: {ex.Message}");
+        }
+    }
+    ```
+- **Verify-with:** `dotnet build` compiles; e2e `telescope-grep` step 1 shows the
+  overlay opens with `[NeoVisual] leader-binding executed: F,G` followed by
+  `[Telescope] open finder=Grep candidates=0` (the `ResolveAction` case resolves to
+  a non-null action; an unknown action would log
+  `Unknown action 'telescope-grep'` and be ignored).
+- **Fails-if:** `[NeoVisual] leader-binding executed: F,G` fires but no
+  `open finder=Grep` line (the action is null/not wired); or a build error from a
+  typo in the case label.
+
+### BP-7 — Register `GrepFinder` in `MyExtensionPackage`
+
+- **Files:** modify `MyExtension/MyExtensionPackage.cs` (finder registration block,
+  lines ~70-75).
+- **Change:** add one line after the `CodeIssuesFinder` registration:
+  `_telescope.RegisterFinder(new GrepFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));`
+  (GrepFinder's own `GetCandidates(query)`/`OnSelected` drive the DTE work; no extra
+  host opener/gatherer needed).
+- **Verify-with:** `dotnet build` compiles; e2e `telescope-grep` step 1 asserts
+  `[Telescope] open finder=Grep candidates=0` (the controller finds the registered
+  `"Grep"` finder; an unregistered name logs `Unknown finder 'Grep'.`).
+- **Fails-if:** `open finder=Grep` never appears and the log shows
+  `Unknown finder 'Grep'.`; or `MyExtensionPackage` build error on the GrepFinder ctor
+  argument.
+
+### BP-8 — Rebind `F,G` in `default-keybindings.json`
+
+- **Files:** modify `MyExtension/default-keybindings.json` (line 16).
+- **Change:** change `"F,G": "command:Edit.FindinFiles"` → `"F,G": "telescope-grep"`.
+- **Verify-with:** e2e `telescope-grep` step 1 — `Space+F G` opens the Grep finder
+  (`open finder=Grep candidates=0`) and does NOT run `Edit.FindinFiles` (the Find-in-
+  Files dialog would swallow the overlay). The RED log showed
+  `leader-binding executed: F,G` still bound to Find-in-Files; after this it must
+  route to `telescope-grep`.
+- **Fails-if:** `leader-binding executed: F,G` still triggers `command:Edit.FindinFiles`
+  (no `open finder=Grep`); or the JSON is malformed (config load logs an error and
+  the binding is dropped).
+
+### BP-9 — Build + unit-test gate
+
+- **Files:** none (verify only).
+- **Change:** none.
+- **Verify-with:** `dotnet build` succeeds (whole solution); then
+  `dotnet run --project tests/Telescope.Tests -- -- GrepFinder` → 6/6 pass, and the
+  full `dotnet run --project tests/Telescope.Tests` stays green at 52 tests
+  (46 + 6) with no regression in the existing 46; `dotnet run --project tests/NeoVisual.Tests`
+  stays 25/25.
+- **Fails-if:** any GrepFinder test fails (returns non-zero exit); or an existing
+  Telescope/NeoVisual test regresses.
+
+---
+
+## Verification Trace
+
+| Failing test / scenario | Implicated steps | Expected diagnostic |
+|---|---|---|
+| `Run_GrepFinder_EmptyQueryReturnsZeroCandidates` (unit, CS0246 `GrepFinder`) | BP-1, BP-2, BP-3 | `Assert.Equal(0, finder.GetCandidates("").Count)` passes (empty query → 0 entries) |
+| `Run_GrepFinder_LineScanMatchesCaseInsensitive` (unit) | BP-1, BP-3 | 2 entries, all `Display` contain `A.cs`; `IndexOf(..., OrdinalIgnoreCase)` |
+| `Run_GrepFinder_DisplayIsFileNameLineText` (unit) | BP-1, BP-3 | `entry.Display == "A.cs:2: NEEDLE here"` (`{file}:{line}: {text}`) |
+| `Run_GrepFinder_PayloadRoundTripsGrepHit` (unit, CS1061 / CS0019 on `GrepHit?`) | BP-1, BP-3 | `payload.FilePath`/`.LineNumber`/`.LineText` round-trip + `payload != null` |
+| `Run_GrepFinder_OnSelectedOpensHitAtLine` (unit) | BP-1, BP-3 | injected opener receives the exact `GrepHit(path, 2, "// NEEDLE x")` |
+| `Run_GrepFinder_HitCapBounded` (unit) | BP-3 | `entries.Count > 0 && entries.Count <= 200` |
+| `telescope-grep` step 1 (open) | BP-2, BP-3, BP-6, BP-7, BP-8 | `[NeoVisual] leader-binding executed: F,G` → `[Telescope] open finder=Grep candidates=0` |
+| `telescope-grep` step 2 (type token) | BP-3, BP-4 | `[Telescope] grep hits=2` |
+| `telescope-grep` step 3 (preview) | BP-5 | `[Telescope] preview file=.*GrepProbe\.cs` + `[Telescope] preview caret=\d+ line=4` |
+| `telescope-grep` step 4 (open) | BP-3 | `[Telescope] opened grep: file=.*GrepProbe\.cs line=4` |
+| `telescope-grep` step 5 (close) | (existing) | `[Telescope] overlay closed` |
+
+**Known-RED allowlist (do NOT flag as regression):**
+- **None** of the grep targets are allowlisted — `telescope-grep` and the 6
+  `Run_GrepFinder_*` tests must be GREEN.
+- Pre-existing flake on record: `neovisual-editor-insert` (retry-pass, flaky count
+  1/3) — the verifier applies retry-once, not a regression classification.
 
 ---
 
@@ -184,408 +440,3 @@ NOT `\|`, which is a literal pipe). Scenario count 26 → 27.
 _To be appended by the hub on each attempt: attempt #, per-BP-step status,
 debug/verifier verdict, capped evidence, and the cost line_
 `delegations: N | VS boots: M | iterations: K`.
-
----
-
-## Build Plan
-
-> **Contract derived verbatim from the RED tests (`tests/Telescope.Tests/Program.cs`,
-> lines 668–729) and the frozen harness (`tools/test-e2e.ps1`, scenario
-> `telescope-references` + `Open-TelescopeReferences`).** The two NEW diagnostics MUST be
-> byte-for-byte as below (the harness regexes `references gathered reads=(\d+) writes=(\d+)`
-> and `opened reference: file=.*\.cs line=\d+ col=\d+ access=(read|write)` are pinned and frozen).
-
-### KEY DECISIONS (do not second-guess)
-
-1. **`ReferenceHit` + `ReferencesFinder` live in namespace `Telescope`, `public`** — the test
-   project `Telescope.Tests` has NO `using Telescope;`; it relies on C# enclosing-namespace
-   resolution, so the types must be in the `Telescope` namespace.
-2. **`ReferencesFinder` has ONE constructor** `(Func<IReadOnlyList<ReferenceHit>> gatherer,
-   Action<ReferenceHit> opener)` — the injected gatherer/opener are the finder's ONLY data
-   source and action (there is NO DTE path inside the finder, unlike `CodeIssuesFinder`, so no
-   `internal` test-only ctor is needed and the existing `internal`/`InternalsVisibleTo` split
-   is irrelevant here).
-3. **Find-references = MEF `IComponentModel` → `VisualStudioWorkspace` →
-   `SymbolFinder.FindReferencesAsync`** (see BP-9 for exact type/method names). This mirrors
-   `InputHandler.ResolveVimModeTracker`'s MEF resolution. Do not use the workspace
-   `Services.GetRequiredLanguageService<IFindAllReferencesService>` route — `SymbolFinder` is
-   the stable public API and returns the read/write (`ReferenceLocation.IsWrittenTo`) flag we
-   need directly.
-4. **The gatherer's exact caret→symbol mapping is the one BP that may need a small discovery
-   iteration** (Roslyn version + active-view caret). Every other step is deterministic; do not
-   let a Roslyn version bump ripple into the pure `Telescope` project or the diagnostics.
-5. **`opened reference` col is metadata only** — the opener jumps LINE-level
-   (`TextSelection.GotoLine(line, false)`), never column-level (matches `CodeIssuesFinder`).
-
-### ReferenceHit API (derived from the 4 RED unit tests — implement EXACTLY)
-
-Namespace `Telescope`. New file `Telescope/ReferenceHit.cs`:
-
-```csharp
-public sealed class ReferenceHit
-{
-    public ReferenceHit(string filePath, int lineNumber, int column, bool isWrite, string symbol, string lineText)
-    {
-        FilePath = filePath ?? string.Empty;
-        LineNumber = lineNumber;
-        Column = column;
-        IsWrite = isWrite;
-        Symbol = symbol ?? string.Empty;
-        LineText = lineText ?? string.Empty;
-    }
-    public string FilePath { get; }   // full path (test: @"C:\p\Reader.cs")
-    public int LineNumber { get; }    // 1-based (test asserts == 5)
-    public int Column { get; }        // 1-based (test asserts == 5 / == 16)
-    public bool IsWrite { get; }      // read=false, write=true (test asserts .IsWrite == true)
-    public string Symbol { get; }     // "Value" (test asserts Display contains it)
-    public string LineText { get; }   // source line (test passes "return Shared.Value;")
-}
-```
-
-Constructor arg ORDER is fixed by the tests: `(filePath, lineNumber, column, isWrite, symbol,
-lineText)`. All six are read-only auto-properties named exactly as above.
-
-### ReferencesFinder API (derived — implement EXACTLY)
-
-Namespace `Telescope`. New file `Telescope/ReferencesFinder.cs`:
-
-```csharp
-public sealed class ReferencesFinder : IFinder
-{
-    public string Name => "References";
-    public ReferencesFinder(Func<IReadOnlyList<ReferenceHit>> gatherer, Action<ReferenceHit> opener); // null-check both (ArgumentNullException)
-    public IReadOnlyList<FinderEntry> GetCandidates();   // ThreadHelper.ThrowIfNotOnUIThread(); calls _gatherer(), maps to FinderEntry(display, hit), logs gather summary
-    public void OnSelected(FinderEntry entry);            // ThreadHelper.ThrowIfNotOnUIThread(); casts Payload to ReferenceHit, calls _opener(hit), logs opened reference
-}
-```
-
-Display format (satisfies the tests' `.Contains("(read)")`, `"(write)"`, `"Reader.cs"`, `"Value"`):
-
-```
-$"{hit.Symbol} ({access}) {Path.GetFileName(hit.FilePath)}:{hit.LineNumber}:{hit.Column} — {hit.LineText}"
-```
-
-where `access = hit.IsWrite ? "write" : "read"`. Payload is the exact `ReferenceHit` instance
-(`new FinderEntry(display, hit)`) — the test asserts `ReferenceEquals(hit, entry.Payload)`.
-
----
-
-## Phase 1 — Pure Telescope library (unit-test GREEN, no VS boot)
-
-### BP-1 — Add `ReferenceHit` payload class
-
-- **Files:** create `Telescope/ReferenceHit.cs`.
-- **Change:** the `public sealed class ReferenceHit` in `namespace Telescope` exactly as the
-  "ReferenceHit API" block above. 6-arg ctor, 6 read-only auto-properties. No VS types, no
-  `using` beyond `System` (none needed).
-- **Verify-with:** `dotnet build` of `Telescope` + `tests/Telescope.Tests` compiles (clears
-  `CS0246: ReferenceHit`); later `Run_ReferencesFinder_*` construct it.
-- **Fails-if:** `CS0246: 'ReferenceHit' could not be found` persists after this step (the
-  tests' `new ReferenceHit(...)` still won't resolve).
-
-### BP-2 — Add `ReferencesFinder` + the two NEW diagnostics
-
-- **Files:** create `Telescope/ReferencesFinder.cs`.
-- **Change:** `public sealed class ReferencesFinder : IFinder` exactly per the
-  "ReferencesFinder API" block. `GetCandidates()`:
-  1. `ThreadHelper.ThrowIfNotOnUIThread();` (first line — parity with `CodeIssuesFinder` /
-     `FileFinder` and the `IFinder` contract. **Harmless in the unit tests**: with
-     `ThreadHelper` uninitialized outside VS its null `JoinableTaskContext` is treated as
-     on-UI-thread, so it does not throw). Then
-     `var hits = _gatherer() ?? Array.Empty<ReferenceHit>();` (wrap the call in try/catch that
-     logs failure via `System.Diagnostics.Debug.WriteLine` and yields an empty list — mirror
-     `CodeIssuesFinder`'s swallow).
-  2. `int reads = hits.Count(h => !h.IsWrite); int writes = hits.Count(h => h.IsWrite);`
-  3. `NeoVisualLog.Log($"{DiagnosticLog.Telescope}references gathered reads={reads} writes={writes}");`
-     — **EXACT string** (no leading `file=`; `reads=` + `writes=` with single spaces).
-  4. `return hits.Select(ToEntry).ToList();`
-  `OnSelected(entry)`:
-  1. `ThreadHelper.ThrowIfNotOnUIThread();` (same harmless-in-test reasoning as `GetCandidates`).
-     `if (entry.Payload is not ReferenceHit hit) return;`
-  2. try `_opener(hit);` then
-     `NeoVisualLog.Log($"{DiagnosticLog.Telescope}opened reference: file={hit.FilePath} line={hit.LineNumber} col={hit.Column} access={(hit.IsWrite ? "write" : "read")}");`
-     — **EXACT string**, `file=` (full path), `line=`, `col=`, `access=(read|write)`. catch → log `open reference failed: …`.
-  `private static FinderEntry ToEntry(ReferenceHit hit)` with the display format above.
-- **Verify-with:**
-  - `dotnet run --project tests/Telescope.Tests -- ReferencesFinder` → all 4 pass:
-    `Run_ReferencesFinder_DisplayShowsAccessMarker`, `Run_ReferencesFinder_PayloadRoundTrips`,
-    `Run_ReferencesFinder_OnSelectedOpensHitWithAccess`,
-    `Run_ReferencesFinder_LineNumberDrivesPreviewJump`.
-  - Diagnostic contract pinned by the e2e regexes (see Verification Trace row for A5/A4).
-- **Fails-if:** unit test asserts `display.Contains("(read)")` / `"(write)"` fail (wrong
-  display string); `ReferenceEquals(hit, entry.Payload)` fails (payload re-wrapped); the
-  `opened reference: … access=…` line never appears in the run log on Enter.
-
-### BP-3 — `ReferenceHit` preview branch in `LoadPreviewForSelection`
-
-- **Files:** modify `Telescope/TelescopeOverlay.cs` (`LoadPreviewForSelection`, ~line 402).
-- **Change:** add an `else if` branch immediately after the `CodeIssue` branch (before the
-  `payload is string path` branch), mirroring it byte-for-byte:
-  ```csharp
-  if (payload is ReferenceHit hit && System.IO.File.Exists(hit.FilePath))
-  {
-      try {
-          string content = System.IO.File.ReadAllText(hit.FilePath);
-          SetPreviewContent(content);
-          if (hit.LineNumber > 0) {
-              _previewNavigator.MoveToLine(hit.LineNumber);
-              ApplyPreviewCaret();
-              NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
-          }
-          NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={hit.FilePath} chars={content.Length}");
-      }
-      catch (Exception ex) { NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}"); }
-      return;
-  }
-  ```
-  Reuse the EXISTING `preview caret=… line=…` and `preview file=… chars=…` log formats
-  (do NOT change them).
-- **Verify-with:** `dotnet build`; e2e scenario Step 5 (`preview file=.*\.cs` +
-  `preview caret=\d+ line=\d+`).
-- **Fails-if:** step 5 assertion "preview load failed" or no `preview caret=` line when a
-  `ReferenceHit` is selected (the `CodeIssue` branch fired but not the new one).
-
-### BP-4 — Phase-1 gate: build + pure unit suite
-
-- **Files:** none (verify only).
-- **Change:** none.
-- **Verify-with:** `dotnet build` (solution) clean; `dotnet run --project tests/Telescope.Tests`
-  → 42 existing + 4 new all pass; `dotnet run --project tests/NeoVisual.Tests` → 25 pass.
-- **Fails-if:** any compile error or a unit-test failure not caused by BP-9's Roslyn work.
-
----
-
-## Phase 2 — Host wiring (keybinding → finder registration)
-
-### BP-5 — Rebind `F,R` → `telescope-references`
-
-- **Files:** modify `MyExtension/default-keybindings.json`.
-- **Change:** replace the line `"F,R": "command:File.OpenFile",` with `"F,R": "telescope-references",`.
-- **Verify-with:** live: `[NeoVisual] leader-binding executed: F,R` followed by
-  `[Telescope] open finder=References` (instead of the Open File dialog). No offline test pins
-  the old binding (verified).
-- **Fails-if:** the Open File dialog still opens (old binding survived) — the log still shows
-  `command:File.OpenFile` routing and no `open finder=References`.
-
-### BP-6 — `ResolveAction` case + `OpenTelescopeReferences()`
-
-- **Files:** modify `MyExtension/InputHandler.cs`.
-- **Change:**
-  1. In `ResolveAction` (switch, ~line 164) add
-     `case "telescope-references": return () => OpenTelescopeReferences();` (next to
-     `telescope-issues`).
-  2. Add `private void OpenTelescopeReferences()` mirroring `OpenTelescopeIssues()`
-     (lines 453–467): `ThreadHelper.ThrowIfNotOnUIThread();` → `var dte =
-     CardinalNavigation.UtilityMethods.GetDTE(_package);` → `var centerRect =
-     GetWindowRect(dte.MainWindow.HWnd);` → `_telescope.Open("References", centerRect,
-     dte.MainWindow.HWnd);` → catch → `Debug.WriteLine`. The `"References"` name string must
-     match `ReferencesFinder.Name`.
-- **Verify-with:** `dotnet build`; live `Space+F R` resolves to action (no "Unknown action
-  'telescope-references'" log) and opens the finder registered in BP-7.
-- **Fails-if:** `[NeoVisual] Unknown action 'telescope-references' for binding 'F,R' - ignored.`
-  logged (the `ResolveAction` case is missing → the binding is dropped).
-
-### BP-7 — Construct + register `ReferencesFinder` in the package
-
-- **Files:** modify `MyExtension/MyExtensionPackage.cs`.
-- **Change:** in `InitializeAsync` (UI-thread block ~lines 68–71), after the `CodeIssuesFinder`
-  registration add:
-  ```csharp
-  _telescope.RegisterFinder(new ReferencesFinder(
-      () => GatherReferences(),
-      hit => OpenReference(hit)));
-  ```
-  `GatherReferences()` and `OpenReference(hit)` are the private host methods implemented in
-  BP-8 / BP-9 (declare them as `private IReadOnlyList<ReferenceHit> GatherReferences()` and
-  `private void OpenReference(ReferenceHit hit)`). `using Telescope;` is already present.
-- **Verify-with:** `dotnet build`; live `open finder=References candidates=(\d+)` (finder is
-  reachable by `"References"`).
-- **Fails-if:** `[Telescope] Unknown finder 'References'.` logged (finder not registered) even
-  though `OpenTelescopeReferences` runs.
-
-### BP-8 — Host opener `OpenReference(hit)` (DTE open + line-level goto)
-
-- **Files:** modify `MyExtension/MyExtensionPackage.cs` (or a new `MyExtension/ReferencesFinderHost.cs`).
-- **Change:** `private void OpenReference(ReferenceHit hit)`:
-  ```csharp
-  ThreadHelper.ThrowIfNotOnUIThread();
-  if (!System.IO.File.Exists(hit.FilePath)) return;
-  var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-  dte.ItemOperations.OpenFile(hit.FilePath);
-  if (dte.ActiveDocument?.Selection is EnvDTE.TextSelection sel && hit.LineNumber > 0)
-      sel.GotoLine(hit.LineNumber, false);   // line-level ONLY; col is metadata
-  ```
-  No logging here — the `opened reference: …` line is emitted by `ReferencesFinder.OnSelected`
-  (BP-2), which wraps this call.
-- **Verify-with:** e2e Step 6 → `[Telescope] opened reference: file=.*\.cs line=\d+ col=\d+
-  access=(read|write)` (the `opened file`+`opened reference` lines appear; the editor opens at
-  the hit line).
-- **Fails-if:** Enter opens the file but the `opened reference` line is absent or lacks
-  `access=…` (opener wired incorrectly, or the finder's `OnSelected` logging was skipped).
-
-### BP-9 — Host gatherer `GatherReferences()` (Roslyn find-references → `ReferenceHit[]`)
-
-- **Files:** modify `MyExtension/MyExtension.csproj` (add package ref) + the gatherer method in
-  `MyExtension/MyExtensionPackage.cs` (or new `MyExtension/ReferencesFinderHost.cs`).
-- **Change (resolve mechanism — MEF, confirmed):**
-  1. **Package reference** (compile-time only, VS supplies runtime):
-     `<PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="17.14.*" ExcludeAssets="runtime" />`
-     — this transitively pulls `Microsoft.CodeAnalysis.Common/CSharp/Workspaces` (for
-     `Solution`, `Document`, `SemanticModel`, `SymbolFinder`, `ReferencedSymbol`,
-     `ReferenceLocation`) and `Microsoft.VisualStudio.LanguageServices` (for
-     `VisualStudioWorkspace`). **DISCOVERY:** if `17.14.*` doesn't restore, run
-     `dotnet add package Microsoft.VisualStudio.LanguageServices` and pick the version whose
-     Roslyn matches the installed VS 17.14 (the runtime DLL comes from the VS install, so a
-     mismatched major → `FileLoadException` in `GatherReferences` — bump to match and rebuild).
-  2. **Gatherer body** (`private IReadOnlyList<ReferenceHit> GatherReferences()`):
-     ```csharp
-     ThreadHelper.ThrowIfNotOnUIThread();
-     var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-     var active = dte?.ActiveDocument;
-     if (active == null) return Array.Empty<ReferenceHit>();
-
-     var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
-         as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
-     var workspace = componentModel?.GetService<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>();
-     if (workspace == null) return Array.Empty<ReferenceHit>();
-
-     var solution = workspace.CurrentSolution;
-     var filePath = active.FullName;
-     var docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
-     if (docId == null) return Array.Empty<ReferenceHit>();
-     var document = solution.GetDocument(docId);
-     if (document == null) return Array.Empty<ReferenceHit>();
-
-     // Caret offset: prefer the active editor text view (robust under VsVim). Fall back to
-     // DTE TextSelection line/col -> SourceText offset if the view is unavailable.
-     int caret = GetCaretOffset(dte, active, document);   // see note below; -1 => give up
-     if (caret < 0) return Array.Empty<ReferenceHit>();
-
-     var root = ThreadHelper.JoinableTaskFactory.Run(
-         () => document.GetSyntaxRootAsync(System.Threading.CancellationToken.None));
-     var semanticModel = ThreadHelper.JoinableTaskFactory.Run(
-         () => document.GetSemanticModelAsync(System.Threading.CancellationToken.None));
-     var symbol = ThreadHelper.JoinableTaskFactory.Run(() =>
-         Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindSymbolAtPositionAsync(semanticModel, caret, workspace));
-     if (symbol == null) return Array.Empty<ReferenceHit>();
-
-     var refs = ThreadHelper.JoinableTaskFactory.Run(() =>
-         Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindReferencesAsync(symbol, solution));
-
-     var hits = new List<ReferenceHit>();
-     foreach (var rs in refs)
-         foreach (var loc in rs.Locations)
-         {
-             var span = loc.Location.GetLineSpan();
-             if (!span.IsValid) continue;
-             string path = span.Path;
-             int line = span.StartLinePosition.Line + 1;       // 0-based -> 1-based
-             int col  = span.StartLinePosition.Character + 1; // 0-based -> 1-based
-             hits.Add(new ReferenceHit(path, line, col, loc.IsWrittenTo, symbol.Name, ReadLine(path, line)));
-         }
-     return hits;
-     ```
-      `ReferenceLocation.IsWrittenTo` (`loc.IsWrittenTo`) is the read/write source of truth.
-      `symbol.Name` = the `Value` name for the display. `ReadLine(path, line)` reads that source
-      line via `System.IO.File.ReadLines` (defensive try/catch → `string.Empty`). **NOTE:**
-      `SymbolFinder.FindReferencesAsync` returns a `ReferencedSymbol` whose `.Locations` hold
-      REFERENCES ONLY — the `Shared.Value` declaration/definition site is NOT present in
-      `.Locations` (find-references does not return the definition itself). The expected result
-      is therefore exactly **2 candidates**: `Reader.cs` (read, `IsWrittenTo=false`) +
-      `Writer.cs` (write, `IsWrittenTo=true`) → `reads=1 writes=1`. This satisfies the harness
-      (`candidates ≥ 2`, `reads ≥ 1`, `writes ≥ 1`) — do NOT mis-diagnose a correct 2-candidate
-      result as "missing the definition"; the definition is correctly absent.
-  3. **Caret offset note (`GetCaretOffset`):** resolve the active editor view —
-     `IVsTextManager` (`SVsTextManager`) → `GetActiveView(1, null, out IVsTextView)` →
-     `componentModel.GetService<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>()
-     .GetWpfTextView(view)` → `.Caret.Position.BufferPosition.Position` (0-based). If that chain
-     returns null, fall back to DTE `TextSelection.ActivePoint` `Line`/`DisplayColumn` (both
-     1-based) mapped to an offset via `ThreadHelper.JoinableTaskFactory.Run(() => document.GetTextAsync(…)).Lines`
-     (safe for the space-indented seed file). This is the semi-discovery sub-step.
-
-     **UI-thread discipline (CRITICAL):** NO blocking sync-waits anywhere in
-     `GatherReferences()` — never `.Result`, never `.GetAwaiter().GetResult()` (those deadlock /
-     starve the VS UI thread on Roslyn async APIs). Every async Roslyn call (`GetSyntaxRootAsync`,
-     `GetSemanticModelAsync`, `FindSymbolAtPositionAsync`, `FindReferencesAsync`, `GetTextAsync`)
-     is wrapped in `ThreadHelper.JoinableTaskFactory.Run(() => …)` as shown above.
-- **Verify-with:** e2e Steps 3–4 → `open finder=References candidates=(\d+)` count ≥ 2 and
-  `references gathered reads=(\d+) writes=(\d+)` with `writes ≥ 1`; Step 5 preview jumps to a
-  reference line.
-- **Fails-if:** `references gathered reads=0 writes=0` (no symbol resolved — caret offset wrong
-  or `FindReferencesAsync` returned nothing); `FileLoadException`/`MissingMethodException` on
-  Roslyn types (package/version mismatch — fix the reference, do NOT change the finder).
-
-### BP-10 — Full build + both unit suites + live `telescope-references`
-
-- **Files:** none (verify only).
-- **Change:** none.
-- **Verify-with:**
-  - `dotnet build` (whole solution) clean.
-  - `dotnet run --project tests/Telescope.Tests` → 46 pass (42 + 4 new).
-  - `dotnet run --project tests/NeoVisual.Tests` → 25 pass.
-  - `pwsh tools/test-e2e.ps1 -Tests telescope-references` → exit 0 (all 7 scenario asserts).
-  - Final gate: `pwsh tools/test-e2e.ps1` full suite (now 27 scenarios) clean.
-- **Fails-if:** any of the above RED. NOTE: `tools/test-e2e.ps1` is FROZEN — never edit it; any
-  mismatch is a finder/diagnostic bug, not a harness bug.
-
----
-
-## Verification Trace
-
-`$PfxTel` = `[Telescope] ` (the `DiagnosticLog.Telescope` constant). The harness uses a fixed
-per-scenario log baseline, so ordering of the summary vs `open finder` line does not matter —
-each assert scans lines appended after the baseline.
-
-| failing test / scenario | implicated BP steps | expected diagnostic (exact) |
-|---|---|---|
-| `Run_ReferencesFinder_DisplayShowsAccessMarker` (unit) | BP-1, BP-2 | n/a — asserts `Display.Contains("(read)")`, `"(write)"`, `"Reader.cs"`, `"Value"` |
-| `Run_ReferencesFinder_PayloadRoundTrips` (unit) | BP-1, BP-2 | n/a — asserts `ReferenceEquals(hit, entry.Payload)` + `FilePath/LineNumber/IsWrite` |
-| `Run_ReferencesFinder_OnSelectedOpensHitWithAccess` (unit) | BP-1, BP-2 | n/a — asserts injected opener receives hit w/ `FilePath=… LineNumber=5 Column=5 IsWrite=true` |
-| `Run_ReferencesFinder_LineNumberDrivesPreviewJump` (unit) | BP-1 | n/a — asserts `MoveToLine(3)` → `LineNumber=3`, `Caret=8` |
-| `telescope-references` — step 1 (open Shared.cs) | none — existing `telescope`/`F,T` Files finder path (already green, untouched by this item; a regression here is pre-existing) | `[Telescope] opened file: .*Shared\.cs` |
-| `telescope-references` — step 3 (finder opens ≥2) | BP-5, BP-6, BP-7, BP-9 | `[Telescope] open finder=References candidates=\d+` (count ≥2) |
-| `telescope-references` — step 4 (read+write summary) | BP-2, BP-9 | `[Telescope] references gathered reads=\d+ writes=\d+` (reads≥1, writes≥1) |
-| `telescope-references` — step 5 (preview line-jump) | BP-3, BP-9 | `[Telescope] preview file=.*\.cs` + `[Telescope] preview caret=\d+ line=\d+` |
-| `telescope-references` — step 6 (Enter opens w/ access) | BP-2, BP-8 | `[Telescope] opened reference: file=.*\.cs line=\d+ col=\d+ access=(read\|write)` |
-
-**Known-RED allowlist (carried from the item plan — VERIFY must not flag these as regressions):**
-- **None.** `telescope-references` and the four `Run_ReferencesFinder_*` tests are this item's
-  GREEN targets. All prior known-RED backlog items are FIXED as of this item's start; the final
-  gate is the full 27-scenario e2e suite + both unit suites, all green.
-
----
-
-## DEVIATIONS — adjudicated (hub, M-M3, before VERIFY)
-
-BUILD reported 3 mechanism-level adaptations. **No diagnostic / API / contract change** — the
-four frozen unit tests and all diagnostic format strings are byte-exact as planned; the
-Verification Trace is unchanged.
-
-- `DEVIATION-1 -> ACCEPT`: `Microsoft.VisualStudio.LanguageServices` package is
-  Roslyn-versioned — `17.14.*` does not exist on nuget.org; used **`4.14.0`** (Roslyn 4.14 =
-  VS 17.14). This was BP-9's explicit discovery fallback. (Reason: no contract impact.)
-- `DEVIATION-2 -> ACCEPT`: `ReferenceLocation.IsWrittenTo` is **internal** in Roslyn 4.14;
-  adapted with `IsWriteLocation(loc)` using reflection on the stable `IsWrittenTo` property name
-  (the repo's established VsVim-interop reflection pattern — no committed third-party binaries).
-  The observable `access=read|write` classification is unchanged. (Reason: contract-preserving
-  mechanism change.)
-- `DEVIATION-3 -> ACCEPT`: `ThreadHelper.ThrowIfNotOnUIThread()` throws in the offline unit-test
-  host (JoinableTaskContext never touched); guarded with `if (ThreadHelper.JoinableTaskContext != null)`
-  — implementing the plan's stated intent (null context treated as on-UI-thread; the real assert
-  runs inside VS). (Reason: test-host-only guard, no API/signature change.)
-
----
-
-## Execution Log
-
-### Attempt 1 (2026-09-19)
-
-- RED (e2e-test-builder): unit RED = 15 missing-symbol errors (`ReferenceHit`/`ReferencesFinder`);
-  e2e RED = `telescope-references` fails (F,R still bound to File.OpenFile; no
-  `open finder=References` / `references gathered` / `opened reference`). Right-reason, matches plan.
-- PLAN (implementation-planner): BP-1..BP-10 + 9-row Verification Trace. PLAN REVIEW round 1 =
-  REVISE (5 findings); round 2 = APPROVE.
-- BUILD (build-agent): all BP-1..BP-10 **done**. `dotnet build` exit 0 (87 pre-existing warnings);
-  Telescope.Tests **46/46** (42+4), NeoVisual.Tests **25/25**. 3 DEVIATIONS adjudicated ACCEPT (above).
-- VERIFY: pending.
-- Cost: `delegations: 6 | VS boots: 1 (RED) | iterations: 0 (no regression yet)`

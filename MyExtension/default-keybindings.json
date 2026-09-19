@@ -13,7 +13,7 @@
     "F,F": "command:Edit.GoToFile",
     "F,T": "telescope",
     "F,D": "telescope-issues",
-    "F,G": "command:Edit.FindinFiles",
+    "F,G": "telescope-grep",
     "F,B": "command:Window.NavigateTo",
     "F,R": "telescope-references",
     "C,W": "command:View.CommandWindow",

@@ -131,15 +131,16 @@ on the list, or `TextMotionNavigator` (vim motions) when focus is on the preview
 - Simple modifier shortcuts are distinguished by a `+` (e.g. `Ctrl+H`); leader
   sequences are matched after the leader key (e.g. `W`, `F,F`).
 - Action names resolve in `InputHandler.ResolveAction`: `navigate-left/right/up/down`,
-  `telescope`, `telescope-issues`, `telescope-references`, `toggle-solution-explorer`,
-  or `command:<VsCommandName>`.
+  `telescope`, `telescope-issues`, `telescope-references`, `telescope-grep`,
+  `toggle-solution-explorer`, or `command:<VsCommandName>`.
 - To add a *new built-in action*, add a case in `ResolveAction` and a line in
   `default-keybindings.json`.
 
 Built-in defaults (`MyExtension/default-keybindings.json`): `Ctrl+H/J/K/L` →
 navigate; `Space+B,D` close; `Space+W` save; `Space+Q` exit; `Space+E`
 toggle-solution-explorer; `Space+F,F` GoToFile; `Space+F,T` telescope;
-`Space+F,D` telescope-issues; `Space+F,R` telescope-references; `Space+C,W` Command Window;
+`Space+F,D` telescope-issues; `Space+F,R` telescope-references; `Space+F,G` telescope-grep;
+`Space+C,W` Command Window;
 plus Git/build/terminal
 `command:` bindings.
 
@@ -165,6 +166,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] preview file=...` / `[Telescope] preview tokens=...`
 - `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...`
 - `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
+- `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
 - `[Telescope] focus target=List|Preview`
 - `[Telescope] preview caret=... line=...`
 - `[Telescope] prompt-motion key=... caret=...`
@@ -176,11 +178,12 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **46 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **52 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, log writer,
   preview-pane vim motions (`TextMotionNavigator`), syntax highlighting
-  (`SyntaxHighlighter`), prompt motions, references finder (`ReferencesFinder`/`ReferenceHit`).
+  (`SyntaxHighlighter`), prompt motions, references finder
+  (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`).
 - `dotnet run --project tests/NeoVisual.Tests` — **25 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
@@ -199,14 +202,15 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 27 scenarios
+pwsh tools/test-e2e.ps1                              # all 28 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **27 scenarios** are: `telescope-open`, `telescope-search`,
+The **28 scenarios** are: `telescope-open`, `telescope-search`,
 `telescope-navigate`, `telescope-wrap`, `telescope-mode`, `telescope-open-file`,
-`telescope-issues`, `telescope-references`, `telescope-prompt-motions`, `telescope-preview-motions`,
+`telescope-issues`, `telescope-references`, `telescope-grep`,
+`telescope-prompt-motions`, `telescope-preview-motions`,
 `telescope-q-close`, `telescope-open-file-normal`, `telescope-no-selection`,
 `telescope-preview`, `neovisual-window-nav`, `neovisual-leader`,
 `neovisual-toolwindow`, `neovisual-explorer-toggle`, `neovisual-explorer-open`,
@@ -282,16 +286,19 @@ The **27 scenarios** are: `telescope-open`, `telescope-search`,
 - References finder (`Space+F R`): every reference to the symbol at the caret,
   with read/write access from Roslyn find-references; preview jumps to the
   reference line; Enter opens the file at the line.
+- Grep finder (`Space+F G`): query-driven search of the solution's project
+  files (`IQueryFinder` seam + ~200ms debounce, fzf skipped for query finders);
+  preview jumps to the hit line; Enter opens the file at the line.
 
 ### Pending (user-requested, NOT yet implemented)
 
-- **Telescope finders**: grep, fzf, implementation — each with a preview pane;
+- **Telescope finders**: fzf, implementation — each with a preview pane;
   implementation preview should jump to the line number.
 
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (46) and
+- Offline units: `dotnet run --project tests/Telescope.Tests` (52) and
   `dotnet run --project tests/NeoVisual.Tests` (25).
-- Live E2E: `pwsh tools/test-e2e.ps1` (27 scenarios); subset with `-Tests a,b,c`;
+- Live E2E: `pwsh tools/test-e2e.ps1` (28 scenarios); subset with `-Tests a,b,c`;
   list with `-List`.

@@ -729,6 +729,147 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // GrepFinder — query-driven live grep over the solution's files
+        // (hermetic seams mirroring CodeIssuesFinder: injected file-PATH source +
+        // Action<GrepHit> opener; the finder reads file CONTENT off disk from those paths)
+        // ================================================================
+
+        public static void Run_GrepFinder_EmptyQueryReturnsZeroCandidates()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string a = Path.Combine(dir, "A.cs");
+                File.WriteAllText(a, "// NEEDLE here\n");
+
+                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                Assert.Equal(0, finder.GetCandidates("").Count);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        public static void Run_GrepFinder_LineScanMatchesCaseInsensitive()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string a = Path.Combine(dir, "A.cs");
+                File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
+                string b = Path.Combine(dir, "B.cs");
+                File.WriteAllText(b, "// nothing here\n");
+
+                var finder = new GrepFinder(() => new[] { a, b }, _ => { });
+                // Case-insensitive substring: "needle" matches BOTH "NEEDLE here" (line 2) and
+                // "needle again" (line 4); the non-matching "middle" line and B.cs are excluded.
+                var entries = finder.GetCandidates("needle");
+
+                Assert.Equal(2, entries.Count);
+                Assert.True(entries.All(e => e.Display.Contains("A.cs")), "only A.cs contains matches");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        public static void Run_GrepFinder_DisplayIsFileNameLineText()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string a = Path.Combine(dir, "A.cs");
+                File.WriteAllText(a, "first\nNEEDLE here\n");
+
+                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var entry = finder.GetCandidates("NEEDLE")[0];
+                // Deterministic {fileName}:{line}: {lineText} display (1-based line, fileName only).
+                Assert.Equal("A.cs:2: NEEDLE here", entry.Display);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        public static void Run_GrepFinder_PayloadRoundTripsGrepHit()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string a = Path.Combine(dir, "A.cs");
+                File.WriteAllText(a, "x\n// NEEDLE x\n");
+
+                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var entry = finder.GetCandidates("NEEDLE")[0];
+                // The GrepHit payload must round-trip through FinderEntry.Payload so OnSelected can
+                // recover the exact file/line/text to open.
+                var payload = entry.Payload as GrepHit;
+                Assert.True(payload != null, "payload is a GrepHit");
+                Assert.Equal(a, payload!.FilePath);
+                Assert.Equal(2, payload.LineNumber);
+                Assert.Equal("// NEEDLE x", payload.LineText);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        public static void Run_GrepFinder_OnSelectedOpensHitAtLine()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string a = Path.Combine(dir, "A.cs");
+                File.WriteAllText(a, "first\n// NEEDLE x\n");
+
+                GrepHit? opened = null;
+                var finder = new GrepFinder(() => new[] { a }, hit => opened = hit);
+                var entry = finder.GetCandidates("NEEDLE")[0];
+
+                finder.OnSelected(entry);
+                Assert.True(opened != null, "opener invoked");
+                Assert.Equal(a, opened!.FilePath);
+                Assert.Equal(2, opened.LineNumber);
+                Assert.Equal("// NEEDLE x", opened.LineText);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        public static void Run_GrepFinder_HitCapBounded()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string a = Path.Combine(dir, "A.cs");
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < 500; i++) { sb.AppendLine("NEEDLE " + i); }
+                File.WriteAllText(a, sb.ToString());
+
+                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var entries = finder.GetCandidates("NEEDLE");
+                Assert.True(entries.Count > 0, "hits are still returned up to the cap");
+                Assert.True(entries.Count <= 200, $"hit cap bounds the result set (got {entries.Count})");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        // ================================================================
         // DiagnosticLog — pins the log-prefix constants the harness relies on
         // (F45: Telescope/DiagnosticLog.cs does not exist yet -> this is RED)
         // ================================================================

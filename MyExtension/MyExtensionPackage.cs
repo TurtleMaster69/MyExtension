@@ -70,6 +70,7 @@ namespace MyExtension
                 _telescope = new TelescopeController();
                 _telescope.RegisterFinder(new FileFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
                 _telescope.RegisterFinder(new CodeIssuesFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
+                _telescope.RegisterFinder(new GrepFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
                 _telescope.RegisterFinder(new ReferencesFinder(
                     () => GatherReferences(),
                     hit => OpenReference(hit)));

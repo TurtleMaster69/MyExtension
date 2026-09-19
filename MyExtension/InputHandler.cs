@@ -163,6 +163,7 @@ namespace MyExtension
                 case "telescope": return () => OpenTelescope();
                 case "telescope-issues": return () => OpenTelescopeIssues();
                 case "telescope-references": return () => OpenTelescopeReferences();
+                case "telescope-grep": return () => OpenTelescopeGrep();
                 case "toggle-solution-explorer": return () => ToggleSolutionExplorer();
                 default:
                     break;
@@ -486,6 +487,27 @@ namespace MyExtension
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope references: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Grep" finder (query-driven live grep over the
+        /// solution's files), centered over the VS main window. The <see cref="GrepFinder"/>
+        /// gathers candidates via DTE on the UI thread per typed query.
+        /// </summary>
+        private void OpenTelescopeGrep()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Grep", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope grep: {ex.Message}");
             }
         }
 

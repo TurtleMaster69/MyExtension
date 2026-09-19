@@ -51,6 +51,12 @@ namespace Telescope
         private bool _activationHandled;
         private CancellationTokenSource? _filterCts;
 
+        // Query-driven finder debounce: a settle delay before the synchronous full-solution scan
+        // runs, so typing does not stall the UI per keystroke. The generation counter invalidates
+        // stale gathers when the query keeps changing during the delay.
+        private const int QueryDebounceMs = 200;
+        private int _queryGeneration;
+
         // Line caret brush for insert mode; white block brush for normal mode (white block, black
         // text via the TextBox's native glyph render under a white fill, matching the tool windows).
         private static readonly Brush PromptLineCaretBrush = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde));
@@ -332,11 +338,36 @@ namespace Telescope
         private void RefreshResults(string query)
         {
             CancelFilter();
+            if (_activeFinder is IQueryFinder queryFinder)
+            {
+                _ = RefreshQueryDrivenAsync(queryFinder, query);
+                return;
+            }
             _filterCts = new CancellationTokenSource();
             var token = _filterCts.Token;
             var snapshot = _candidates;
 
             _ = FilterAndUpdateAsync(snapshot, query, token);
+        }
+
+        /// <summary>
+        /// Query-driven gather (grep semantics — literal substring, no fzf): debounce the scan
+        /// until typing settles, then re-gather candidates from the finder and render them
+        /// directly. The await captures the WPF SynchronizationContext, so the synchronous scan
+        /// resumes on the UI thread.
+        /// </summary>
+        private async Task RefreshQueryDrivenAsync(IQueryFinder finder, string query)
+        {
+            int gen = ++_queryGeneration;
+            await Task.Delay(QueryDebounceMs); // resumes on the UI thread (SynchronizationContext)
+            if (gen != _queryGeneration || !IsOpen) return;
+            IReadOnlyList<FinderEntry> results;
+            try { results = finder.GetCandidates(query) ?? Array.Empty<FinderEntry>(); }
+            catch (Exception ex) { NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}query gather failed: {ex.Message}"); results = Array.Empty<FinderEntry>(); }
+            if (gen != _queryGeneration || !IsOpen) return;
+            _results = results;
+            _keyHandler.SetResults(results.Count);
+            RenderResults();
         }
 
         private async Task FilterAndUpdateAsync(IReadOnlyList<FinderEntry> snapshot, string query, CancellationToken token)
@@ -442,6 +473,27 @@ namespace Telescope
                         NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
                     }
                     NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={hit.FilePath} chars={content.Length}");
+                }
+                catch (Exception ex)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
+                }
+                return;
+            }
+
+            if (payload is GrepHit gh && System.IO.File.Exists(gh.FilePath))
+            {
+                try
+                {
+                    string content = System.IO.File.ReadAllText(gh.FilePath);
+                    SetPreviewContent(content);
+                    if (gh.LineNumber > 0)
+                    {
+                        _previewNavigator.MoveToLine(gh.LineNumber);
+                        ApplyPreviewCaret();
+                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
+                    }
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={gh.FilePath} chars={content.Length}");
                 }
                 catch (Exception ex)
                 {

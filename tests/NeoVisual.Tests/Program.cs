@@ -204,13 +204,14 @@ namespace NeoVisual.Tests
         public static void Run_SolutionExplorer_ActionKeys()
         {
             var controller = new SolutionExplorerController(() => null!);
-            // o/Enter/r/m/a are the non-hjkl action keys.
+            // o/Enter/r/m/a/g are the non-hjkl action keys.
             var keys = new List<Keys>(controller.ActionKeys);
             Assert.True(keys.Contains(Keys.O), "o is an action key");
             Assert.True(keys.Contains(Keys.Enter), "Enter is an action key");
             Assert.True(keys.Contains(Keys.R), "r is an action key");
             Assert.True(keys.Contains(Keys.M), "m is an action key");
             Assert.True(keys.Contains(Keys.A), "a is an action key");
+            Assert.True(keys.Contains(Keys.G), "g is an action key");
             // All are consumed by TryMove (logged actions).
             Assert.True(controller.TryMove(Keys.O), "o opens");
             Assert.True(controller.TryMove(Keys.R), "r renames");
@@ -226,6 +227,45 @@ namespace NeoVisual.Tests
         {
             var controller = new GeneralToolWindowController(ToolWindowType.Toolbox);
             Assert.Equal(0, controller.ActionKeys.Count);
+        }
+
+        // ================================================================
+        // HierarchyResolver — select-first-source-file resolution (pure seam)
+        // ================================================================
+
+        public static void Run_HierarchyResolver_FirstSourceFile()
+        {
+            // Pure seam: resolve the first physical SOURCE file under a project's child nodes.
+            // Classification is by Kind GUID: physical file (returned) vs physical folder (recursed);
+            // any other kind (project/solution/virtual-folder/references) is skipped, not recursed.
+
+            // (1) file-vs-folder classification — a physical FILE returns its own path.
+            var fileNode = new HierarchyNode(
+                HierarchyResolver.PhysicalFileKind, "Beta.cs", @"C:\p\Beta.cs", null);
+            Assert.Equal(@"C:\p\Beta.cs",
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { fileNode }));
+
+            // (2) folder recursion — a physical FOLDER recurses to its first physical file (in order).
+            var folder = new HierarchyNode(
+                HierarchyResolver.PhysicalFolderKind, "Models", "",
+                new HierarchyNode[]
+                {
+                    new HierarchyNode(HierarchyResolver.PhysicalFileKind, "User.cs", @"C:\p\Models\User.cs", null),
+                    new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Order.cs", @"C:\p\Models\Order.cs", null),
+                });
+            Assert.Equal(@"C:\p\Models\User.cs",
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { folder }));
+
+            // (3) non-file/non-folder nodes are skipped (not recursed), first real file still found.
+            var unknown = new HierarchyNode("{00000000-0000-0000-0000-000000000000}", "Dependencies", "", null);
+            var realFile = new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Alpha.cs", @"C:\p\Alpha.cs", null);
+            Assert.Equal(@"C:\p\Alpha.cs",
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { unknown, realFile }));
+
+            // (4) empty -> null (no reachable source file).
+            Assert.True(
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { }) == null,
+                "empty nodes resolve to null");
         }
 
         // ================================================================

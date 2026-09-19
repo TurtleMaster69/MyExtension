@@ -87,8 +87,22 @@ reads at the start of every loop iteration.
 
 ## In-progress
 
-- **None.** (Most recent completions: harness seeding hardening and F45
-  log-prefix centralization — see the Done section below.)
+- **Telescope tree-select capability (greens `explorer-open-navigation`) —
+  IN FLIGHT, mid-item.** BUILD done (BP-1..4, NeoVisual 26/26, Telescope 56/56);
+  VERIFY round 1 RED (`select none` — collapsed project node's
+  `UIHierarchyItems` not enumerated until expanded); DEBUG (verify-time) **PASS**
+  — the fix in `MyExtension/ToolWindows/SolutionExplorerController.cs:154`
+  (`SelectFirstSourceFile`) sets `projectNode.UIHierarchyItems.Expanded = true`,
+  opens the first `.cs` directly via `ItemOperations.OpenFile` (so
+  `editor-view-opened` == `select file`), and runs a 1.5s re-select +
+  `View.SolutionExplorer` refocus keeper to defeat VS's SelectionPreview
+  hover-timer hijack. **4 consecutive `explorer-open-navigation` runs PASS**
+  (`select file=C:\...\Probe\Alpha.cs`); neighbors + both unit suites green.
+  **RESUME POINT: the DEBUG fix is APPLIED but UNCOMMITTED (working tree). NEXT:
+  RE-PLAN (the debug agent changed BP-3's approach beyond the trace) → VERIFY
+  (full recheck: `explorer-open-navigation` + the 7 explorer neighbors + both
+  unit suites) → GREEN (commit + doc sync + spec gate).** The 4 DEVIATIONS were
+  adjudicated ACCEPT (mechanism-only).
 
 ## F45 status (Item 1 — log-prefix centralization)
 
@@ -121,8 +135,8 @@ Top of the queue, in priority order:
 4. ~~Add the 4 new planned E2E scenarios~~ — **PARTIAL**: `telescope-open-file-searchbox`
    + `telescope-open-file-navigation` **DONE** (see Done section); the other 2
    exposed real gaps → now the next queue items:
-   - **`explorer-open-navigation`** — fix the tree-state normalization gap
-     (KNOWN-RED scenario registered).
+   - **`explorer-open-navigation`** — **IN PROGRESS** (tree-select capability
+     item; debug fix applied, awaiting RE-PLAN → VERIFY → GREEN — see In-progress).
    - **`explorer-open-searchbox`** — fix the search-box focus-exit gap
      (KNOWN-RED scenario registered).
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).

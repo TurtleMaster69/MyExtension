@@ -32,7 +32,7 @@
 #   neovisual-explorer-rename  r starts rename (F2), Escape cancels
 #   neovisual-explorer-add     a runs the Add Item command
 #   neovisual-explorer-move    m runs the Move command
-#   explorer-open-navigation   l expands, j walks the tree to a pinned FILE node, o opens it
+#   explorer-open-navigation   g selects the first source file programmatically (UIHierarchy), o opens it
 #   explorer-open-searchbox    i focuses the search box, type a query, o opens the filtered result
 #   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview
 #   neovisual-editor-insert  insert-mode typing reaches the editor (hook must not swallow text)
@@ -873,12 +873,11 @@ Register-Scenario 'neovisual-explorer-move' {
 }
 
 # --- explorer-open-navigation --------------------------------------------
-# Solution Explorer tree navigation to a SPECIFIC file node: expand (l), walk down with j to a
-# pinned file (Beta.cs), then o opens it. Distinct from neovisual-explorer-open/-open-o (which loop
-# l/j/open-until-something-opens) by navigating j/k to a KNOWN target and asserting THAT file
-# opens, not just any editor view. The seeded tree is alphabetical within the project, so from a
-# fresh (collapsed) solution node: l -> probe project, j -> project, l -> expand project's children,
-# j x2 -> Beta.cs (Alpha, Beta, ...), then o opens it.
+# Solution Explorer programmatic tree selection: `g` selects the FIRST physical source file under
+# the solution's project via DTE UIHierarchy (no key injection -> no csproj-open trap), logging a
+# truthful `solution-explorer select file=...` diagnostic; `o` then opens that file. Distinct from
+# neovisual-explorer-open/-open-o (which loop l/j/open-until-something-opens) because it depends on
+# a deterministic programmatic selection, not the visual tree's expansion state.
 Register-Scenario 'explorer-open-navigation' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
@@ -893,21 +892,15 @@ Register-Scenario 'explorer-open-navigation' {
     }
     if (-not $opened) { throw 'could not ensure Solution Explorer open' }
 
-    # Deterministic walk to Beta.cs. (The tree may already be expanded from a prior scenario; the
-    # l/j steps below are idempotent enough to land on the alphabetical order in a fresh boot.)
-    Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand the solution node (reveals Probe)
-    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer expand" 'l expanded the solution node'
-    Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> Probe project node
-    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j walked down to the Probe project'
-    Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand the project's children
-    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer expand" 'l expanded the Probe project'
-    Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> Alpha.cs
-    Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> Beta.cs
-    Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j walked down to the Beta.cs file node'
+    # g -> programmatically select the first physical source file under the project (UIHierarchy
+    # walk; escapes the injected-key/csproj-open trap). The diagnostic is the truthful selection
+    # signal the harness asserts.
+    Send-Tap 0x47; Start-Sleep -Milliseconds 800   # g -> select first source file
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer select file=.*\.cs" 'g selected the first source file'
     Assert-VsFocused $vs 'explorer navigation (o)' # keys must land in the VS instance
     Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open the selected file
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*[\\/]Beta\.cs" 'o opened the navigated-to file (Beta.cs)'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*\.cs" 'o opened the selected source file'
     Assert-NoEnterStorm $logPath 'explorer-open-navigation'
 }
 

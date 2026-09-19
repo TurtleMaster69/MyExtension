@@ -54,7 +54,7 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 26 scenarios
+pwsh tools/test-e2e.ps1                              # all 27 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios

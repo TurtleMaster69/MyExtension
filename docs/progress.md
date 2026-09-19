@@ -142,7 +142,7 @@ Top of the queue, in priority order:
   **If this regresses, look first at `GatherImplementations`' deterministic
   ordering (type-before-member) and the `opened implementation:` diagnostic** —
   the two places the e2e pins depend on. Doc sync: Telescope 52→56, scenarios
-  28→29 across spec.md / AGENTS.md / SKILL.md. Commit: `_filled at commit_`.
+  28→29 across spec.md / AGENTS.md / SKILL.md. Commit: `b38b289`.
 - **2026-09-19 — Telescope grep finder** (Lane: feature, attempt 1, GREEN):
   `GrepFinder` + `GrepHit` (Telescope, `Name="Grep"`, `Space+F G`) search the
   solution's project files for the typed query — **query-driven** via a new

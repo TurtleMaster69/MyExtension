@@ -1,6 +1,5 @@
 ---
 description: Builds the E2E scenarios and offline unit tests for a feature/bugfix per docs/implementation_plan.md, runs them, and proves they FAIL (RED) before implementation. Spawned by neovim_hub.
-model: opencode/deepseek-v4-pro
 mode: subagent
 permission:
   question: deny

@@ -1,6 +1,5 @@
 ---
 description: Read-only reviewer of the MyExtension workflow docs — reviews docs/spec.md and docs/implementation_plan.md for correctness, completeness, traceability, testability, and loggability against AGENTS.md, the vs-extension-dev skill, and the real codebase. Spawned by neovim_hub (spec gate + plan gate).
-model: opencode/deepseek-v4-pro
 mode: subagent
 permission:
   edit: deny

@@ -1,6 +1,5 @@
 ---
 description: Debug subagent — root-causes a failing dotnet build or failing offline unit test after the build-agent, applies the MINIMAL fix, and re-runs build + unit tests to prove it. May run the e2e harness scoped to reproducing a failing scenario (debugging, not the verification-agent's full recheck). Spawned by neovim_hub after BUILD (only on failure) and after VERIFY (verify-time e2e debugging, step 8a), never for planning.
-model: opencode/deepseek-v4-flash
 mode: subagent
 permission:
   question: deny

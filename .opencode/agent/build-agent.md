@@ -1,6 +1,5 @@
 ---
 description: Executes the Build Plan in docs/implementation_plan.md verbatim — implements the feature or bugfix, then runs dotnet build and the offline unit tests to prove it compiles. Spawned by neovim_hub.
-model: opencode/deepseek-v4-flash
 mode: subagent
 permission:
   question: deny

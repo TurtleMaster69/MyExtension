@@ -1,6 +1,5 @@
 ---
 description: Reads the failing (RED) e2e/unit tests for a feature and writes an extremely specific, agent-executable Build Plan into docs/implementation_plan.md — with traceable BP-n steps (Verify-with / Fails-if) and a Verification Trace table so failures can be pinpointed. Spawned by neovim_hub; also re-plans on verification feedback.
-model: opencode/deepseek-v4-pro
 mode: subagent
 permission:
   question: deny

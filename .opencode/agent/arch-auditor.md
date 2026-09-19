@@ -1,6 +1,5 @@
 ---
 description: Read-only architectural auditor. Reviews one slice of the MyExtension repo for duplication, over-complexity, performance issues, and decisions that bite later. Spawned by neovim_review_hub.
-model: opencode/deepseek-v4-flash
 mode: subagent
 permission:
   edit: deny

@@ -1,6 +1,5 @@
 ---
 description: Read-only verification agent. Reruns the affected E2E scenarios and the affected offline unit suites (full suites at the item's final gate) after a build, and returns a structured pass/fail verdict with failure classification (known-RED / flaky / regression) for the planner. Spawned by neovim_hub.
-model: opencode/deepseek-v4-pro
 mode: subagent
 permission:
   edit: deny

@@ -1,6 +1,5 @@
 ---
 description: MyExtension architecture review hub — read-only audit orchestrator for THIS VS extension (VSIX: Cardinal window nav, leader-key bindings, Telescope overlay, tool-window controllers). Spawns parallel arch-auditors to find duplication, over-complexity, performance issues, and bites-later risks, then writes docs/architecture-review.md and asks which findings to file for the build hub. Use for any architectural audit of this repo.
-model: opencode/deepseek-v4-flash
 mode: primary
 permission:
   question: allow

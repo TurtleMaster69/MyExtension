@@ -1,6 +1,5 @@
 ---
 description: MyExtension build hub — orchestrates the red/green build loop (e2e-test-builder -> implementation-planner -> build-agent -> debug-agent -> verification-agent) for THIS VS extension. Owns docs/spec.md, docs/progress.md, docs/implementation_plan.md. Use for any feature/bugfix work in this repo.
-model: opencode/deepseek-v4-flash
 mode: primary
 permission:
   question: allow

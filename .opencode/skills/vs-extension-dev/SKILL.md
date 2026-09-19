@@ -106,6 +106,16 @@ Preview.** The overlay **closes on focus loss** (`Deactivated` → `CloseOverlay
   foreground process belongs to this VS instance.
 - **The hook runs on the UI thread**, not a dedicated thread. A cheap pre-filter
   (`IsInteresting`) skips the handler for plain typing keys.
+- **Injected keys never re-trigger the controller.** A key synthesized by
+  `KeyInjection.Press` (Enter/F2/arrows) re-enters the low-level hook, and action
+  keys like Enter would re-route to the controller and loop forever (the F1
+  "Enter-storm": `solution-explorer open` firing ~30x in ~100ms). `KeyInjection.Press`
+  records the VK in the `InjectedKeyGuard` (per-VK consume-once counter), and
+  `GlobalKeyboardHook.HookCallback` passes any matching key-down through with
+  `CallNextHookEx` (no handle, no swallow) so it reaches the focused control
+  natively. Do NOT bail on `LLKHF_INJECTED` — the e2e harness injects every test
+  key via `keybd_event`, so that would break all scenarios. Both the guard's
+  writer (`Press`) and reader (`HookCallback`) run on the UI thread — no locking.
 
 ## Adding a key binding
 
@@ -181,7 +191,7 @@ of any of these only when the task needs it.
 
 See **AGENTS.md** for the full picture. Summary:
 - Offline unit tests: `dotnet run --project tests/Telescope.Tests` (42) and
-  `dotnet run --project tests/NeoVisual.Tests` (21), with substring filter +
+  `dotnet run --project tests/NeoVisual.Tests` (25), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/test-e2e.ps1` (26 scenarios against the experimental
   instance), `-Tests <name>` to run a subset.

@@ -41,6 +41,7 @@ namespace MyExtension
         /// <summary>Presses and releases the given virtual key into the focused window.</summary>
         public static void Press(int vk)
         {
+            InjectedKeyGuard.Instance.Record(vk);
             keybd_event((byte)vk, 0, 0, UIntPtr.Zero);            // key down
             keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // key up
         }

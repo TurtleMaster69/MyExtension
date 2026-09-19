@@ -270,6 +270,42 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // InjectedKeyGuard — per-VK pending counter (Enter-storm fix, F1)
+        // ================================================================
+
+        public static void Run_InjectedKeyGuard_ConsumeOnce()
+        {
+            var guard = new InjectedKeyGuard();
+            guard.Record(13);
+            Assert.True(guard.TryConsume(13), "first consume of a recorded VK succeeds");
+            Assert.False(guard.TryConsume(13), "second consume of the same VK fails (consume-once)");
+        }
+
+        public static void Run_InjectedKeyGuard_WrongVkNotConsumed()
+        {
+            var guard = new InjectedKeyGuard();
+            guard.Record(13);
+            Assert.False(guard.TryConsume(0x28), "a different VK does not consume the pending record");
+            Assert.True(guard.TryConsume(13), "the recorded VK is still pending and consumable");
+        }
+
+        public static void Run_InjectedKeyGuard_NoRecord()
+        {
+            var guard = new InjectedKeyGuard();
+            Assert.False(guard.TryConsume(13), "no pending record -> nothing to consume");
+        }
+
+        public static void Run_InjectedKeyGuard_MultipleRecords()
+        {
+            var guard = new InjectedKeyGuard();
+            guard.Record(13);
+            guard.Record(13);
+            Assert.True(guard.TryConsume(13), "first consume succeeds");
+            Assert.True(guard.TryConsume(13), "second consume succeeds (two records)");
+            Assert.False(guard.TryConsume(13), "third consume fails (per-Press counting exhausted)");
+        }
+
+        // ================================================================
         // Helpers — DistinctBy, RectCoordinate
         // ================================================================
 

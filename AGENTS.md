@@ -36,8 +36,9 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
-  helpers. `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, etc. run
-  subsets. Currently **21 tests, all passing**.
+  the injected-key re-entry guard (`InjectedKeyGuard`), helpers.
+  `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`, etc.
+  run subsets. Currently **25 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -59,9 +60,7 @@ pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (26 total; all currently passing except the 4 documented known-RED /
-backlog items in docs/progress.md — `neovisual-explorer-open`/-`open-o` Enter-storm,
-`telescope-prompt-motions` caret, `telescope-open-file-normal` key name):
+Scenarios (26 total; all currently passing):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search

@@ -101,6 +101,14 @@ namespace MyExtension
 
             if (isKeyDown)
             {
+                // Enter-storm guard (F1): if this key-down is one we just synthesized in
+                // KeyInjection.Press, pass it through untouched so it reaches the focused
+                // tree/control natively instead of re-triggering the controller action.
+                if (InjectedKeyGuard.Instance.TryConsume(vkCode))
+                {
+                    return CallNextHookEx(_hookId, nCode, wParam, lParam);
+                }
+
                 // GetAsyncKeyState reads the *physical* modifier state (as opposed to the
                 // message stream), so it's authoritative even if we later swallow a key.
                 bool ctrl = (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;

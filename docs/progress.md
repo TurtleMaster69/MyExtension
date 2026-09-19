@@ -10,18 +10,19 @@ reads at the start of every loop iteration.
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **42 passed**; `tests/NeoVisual.Tests`
-  **21 passed**.
+  **25 passed**.
 - Live E2E: `tools/test-e2e.ps1` lists **26 scenarios** (incl. `seed-reset`).
-  Latest verified subset runs (seed-reset + telescope-issues, and the F45 19-scenario
-  gate) are green; the two known-RED scenarios are `neovisual-explorer-open` /
-  `-open-o` (Enter-storm, backlog item 4 / F1) and the two known-backlog assertion
-  bugs (`telescope-prompt-motions` caret, `telescope-open-file-normal` key name —
-  backlog items 1-2 / F16). No extension-code regressions are open.
+  The full 26-scenario suite is GREEN (verified 2026-09-19 after the backlog
+  fixes item); **no known-RED scenarios remain**.
 
 ## Known bug backlog (from previous session, run 55)
 
-1. **`telescope-prompt-motions` — wrong expected caret for `e`.** The scenario
-   asserts `prompt-motion key=E caret=5` but actual is `caret=4`. EndWord math
+> **ALL FOUR ITEMS FIXED + VERIFIED GREEN on 2026-09-19** (see the Done section
+> below). Kept for historical reference.
+
+1. **`telescope-prompt-motions` — wrong expected caret for `e`.** ✅ FIXED
+   (harness assertion corrected to `key=E caret=4` + extra `w` tap). The scenario
+   asserted `prompt-motion key=E caret=5` but actual was `caret=4`. EndWord math
    was wrong: on `find my file`, EndWord from 0 stops at `i=3` (last char 'd')
    then `MoveTo(i+1)` = **4**, not 5. Correct expected sequence after the three
    `b` taps (caret → 0):
@@ -33,30 +34,31 @@ reads at the start of every loop iteration.
    - `$` → `key=D4 caret=12`
    (Earlier h=11, l=12, b=8, b=5, b=0 are correct.)
 
-2. **`telescope-open-file-normal` — wrong key name in assertion.** The scenario
-   asserts `key=Enter mode=normal handled=True`, but WPF `Key` for Enter is
-   `Key.Return`, so the actual line is `key=Return mode=normal handled=True`.
-   Change the assertion to `key=Return mode=normal handled=True`. (The file DID
-   open — only the log-name assertion is wrong.) Also check
+2. **`telescope-open-file-normal` — wrong key name in assertion.** ✅ FIXED
+   (assertion corrected to `key=Return mode=normal handled=True`). The scenario
+   asserted `key=Enter mode=normal handled=True`, but WPF `Key` for Enter is
+   `Key.Return`. (The file DID open — only the log-name assertion was wrong.)
    `telescope-open-file` (insert) does not rely on a `key=Enter` line.
 
-3. **`telescope-issues` — Error List noise breaks `results count=1`.** VS Error
+3. **`telescope-issues` — Error List noise breaks `results count=1`.** ✅ FIXED
+   (assertion relaxed to `results count=\d+ selected=0`). VS Error
    List accumulates warnings/errors during the session, so `results count` is
-   non-deterministic. The seeded TODO is still ranked first. Fix: relax the
-   fragile assertion `results count=1 selected=0` → `results count=\d+
-   selected=0`. The `preview file=...TodoProbe.cs`, `preview caret=... line=1`,
-   and `opened issue: ...TodoProbe.cs line=...` assertions already prove the
+   non-deterministic. The seeded TODO is still ranked first; the
+   `preview file=...TodoProbe.cs`, `preview caret=... line=1`,
+   and `opened issue: ...TodoProbe.cs line=...` assertions prove the
    right issue is selected/opened.
 
-4. **`neovisual-explorer-open` + `neovisual-explorer-open-o` — "Enter storm".**
-   When Enter is pressed in Solution Explorer normal mode, the injected `Return`
-   is re-captured by the global hook (Enter is an action key → `IsInteresting`
-   true), re-routed to `SolutionExplorerController.OpenSelected()`, which injects
-   another `Return` → infinite re-injection storm (`solution-explorer open` fires
-   ~30x in ~100ms). This is **pre-existing extension behavior**, not a test
-   artifact. Needs investigation: guard `KeyInjection.Press` for Return when it
-   is already the trigger, OR rework the scenarios. `neovisual-explorer-open-o`
-   also failed because focus was not reliably on the tree when `o` was pressed.
+4. **`neovisual-explorer-open` + `neovisual-explorer-open-o` — "Enter storm".** ✅ FIXED
+   (extension bug, architecture-review F1). The injected `Return`
+   was re-captured by the global hook (Enter is an action key → `IsInteresting`
+   true), re-routed to `SolutionExplorerController.OpenSelected()`, which injected
+   another `Return` → infinite re-injection storm (`solution-explorer open` fired
+   ~30x in ~100ms; observed 93/62 lines vs the new ≤10 harness fail-fast bound).
+   Fix: `InjectedKeyGuard` (per-VK consume-once counter) recorded in
+   `KeyInjection.Press`; `GlobalKeyboardHook.HookCallback` passes matching
+   key-downs through with `CallNextHookEx` (never re-handles/re-injects).
+   `neovisual-explorer-open-o`'s focus flakiness also fixed (F16:
+   `Assert-VsFocused` in the walk loop).
 
 ### New planned E2E scenarios (user-requested, NOT yet implemented)
 
@@ -93,8 +95,9 @@ Top of the queue, in priority order:
 1. ~~F45 e2e verification subset (BP-23)~~ — **DONE**: the 19-scenario gate ran
    green; the only 2 failures were known-backlog assertion bugs (`prompt-motions`
    caret, `open-file-normal` key name), not F45 regressions. F45 is complete.
-2. Fix the 4 known-bug items above (test-harness fixes + the Enter-storm
-   investigation), because they gate the existing 26-scenario suite to green.
+2. ~~Fix the 4 known-bug items (test-harness fixes + the Enter-storm
+   investigation)~~ — **DONE**: full 26-scenario suite GREEN + both unit suites
+   (25/42); see the Done section.
 3. Implement the **Telescope finders** roadmap:
    - `references` finder — with preview pane; preview jumps to line; shows
      read/write access info from VS.
@@ -105,6 +108,27 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-19 — Fix 4 known-RED backlog items / gate the 26-scenario suite green**
+  (Lane: bugfix, attempt 1, GREEN): full 26-scenario e2e suite passes, no
+  known-RED scenarios remain; NeoVisual.Tests 21→25 (4 new `Run_InjectedKeyGuard_*`),
+  Telescope.Tests 42 unchanged. Three wrong harness assertions corrected
+  (`prompt-motions` caret sequence, `open-file-normal` key=Return, `issues`
+  results-count regex); the Enter-storm re-injection loop fixed with the pure
+  `InjectedKeyGuard` (per-VK consume-once counter) wired into `KeyInjection.Press`
+  + `GlobalKeyboardHook.HookCallback` (pass-through via `CallNextHookEx`, never
+  re-handle an injected key) + a harness fail-fast (≤10 `solution-explorer open`
+  lines post-baseline) + `Assert-VsFocused` in the explorer walk loops.
+  **Change summary:** created `MyExtension/InjectedKeyGuard.cs`; edited
+  `MyExtension/KeyInjection.cs` (Record first statement of Press),
+  `MyExtension/GlobalKeyboardHook.cs` (TryConsume at top of the key-down branch),
+  `tools/test-e2e.ps1` (3 assertion fixes + `Assert-NoEnterStorm` +
+  Assert-VsFocused), `tests/NeoVisual.Tests/Program.cs` (+4 guard tests).
+  **If this regresses, look first at `GlobalKeyboardHook.HookCallback`'s guard
+  check (line ~107) and the `InjectedKeyGuard` counter semantics** — a swallowed
+  injected Return means the guard consumed a key it shouldn't; a re-storm means
+  the pass-through placement moved. No diagnostic format changed (M-M7 N/A).
+  Doc sync: NeoVisual 21→25 in spec.md / AGENTS.md / SKILL.md; AGENTS.md
+  scenario-status line now "all currently passing". Commit hash: _filled at commit_.
 - **2026-09-19 — Harness seeding hardening** (Lane: bugfix, attempt 1, GREEN):
   `tools/test-e2e.ps1` now always resets the scratch solution
   (`Reset-ScratchSolution`) with uniform line endings; the "normalize line
@@ -125,14 +149,16 @@ Full detail and the remaining report-only findings (F17-F21, F23-F35, F45) live 
 
 ### Critical
 
-1. **F1 — Enter-storm re-injection loop (supersedes known-bug #4, still unfixed).**
-   `MyExtension/ToolWindows/SolutionExplorerController.cs:98` (+ `:137`),
-   `MyExtension/InputHandler.cs:283`, `MyExtension/KeyInjection.cs:17` (stale "only
-   inject arrows" doc). Injected Return re-enters the hook and re-triggers
-   `OpenSelected()` → unbounded storm (~30x/100ms). Fix: bail on `LLKHF_INJECTED`
-   (KBDLLHOOKSTRUCT.flags at lParam+8) in `GlobalKeyboardHook.HookCallback`, or an
-   in-flight guard in `KeyInjection.Press`; then add a harness fail-fast (at most one
-   `solution-explorer open` line post-baseline).
+1. **F1 — Enter-storm re-injection loop (supersedes known-bug #4).** ✅ FIXED 2026-09-19
+   (backlog-fixes item; see Done section). `MyExtension/ToolWindows/SolutionExplorerController.cs:98`
+   (+ `:137`), `MyExtension/InputHandler.cs:283`, `MyExtension/KeyInjection.cs:17` (stale "only
+   inject arrows" doc). Injected Return re-entered the hook and re-triggered
+   `OpenSelected()` → unbounded storm (~30x/100ms). Fixed with the in-flight guard:
+   `InjectedKeyGuard` (per-VK consume-once counter, no clock) recorded in
+   `KeyInjection.Press`; `GlobalKeyboardHook.HookCallback` passes matching key-downs
+   through with `CallNextHookEx`. The `LLKHF_INJECTED` bail was rejected (the harness
+   injects every test key via `keybd_event` — it would break all 26 scenarios).
+   Harness fail-fast added (≤10 `solution-explorer open` lines post-baseline).
 
 ### Major
 
@@ -180,11 +206,11 @@ Full detail and the remaining report-only findings (F17-F21, F23-F35, F45) live 
 15. **F15 — CodeIssuesFinder per-open DTE re-enumeration + full-file scans.**
     `CodeIssuesFinder.cs:71`. Fix: cache `ProjectFiles.Enumerate` per session in
     `TelescopeController` (invalidate on solution change); lazy/async TODO scan.
-16. **F16 — Harness assertions for known-bugs 1-3 still wrong; no Enter-storm fail-fast.**
-    `tools/test-e2e.ps1:806,910,764,441`. Fix: `key=E caret=4` + extra `w` tap,
-    `key=Return mode=normal handled=True`, `results count=\d+`, at-most-one
-    `solution-explorer open` assert + `Assert-VsFocused` in the walk loop. (Overlaps
-    known-bug backlog items 1-3 — supersedes those expectations.)
+16. **F16 — Harness assertions for known-bugs 1-3 still wrong; no Enter-storm fail-fast.** ✅ FIXED 2026-09-19
+    (backlog-fixes item; see Done section). Applied: `key=E caret=4` + extra `w` tap,
+    `key=Return mode=normal handled=True`, `results count=\d+`, `Assert-NoEnterStorm`
+    (≤10 `solution-explorer open` lines post-baseline) + `Assert-VsFocused` in the
+    walk loop. (Overlaps known-bug backlog items 1-3 — supersedes those expectations.)
 
 ### Minor
 

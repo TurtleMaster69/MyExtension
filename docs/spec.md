@@ -178,11 +178,11 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`FzfFilter`), file open (`FileFinder`), results formatting, log writer,
   preview-pane vim motions (`TextMotionNavigator`), syntax highlighting
   (`SyntaxHighlighter`), prompt motions.
-- `dotnet run --project tests/NeoVisual.Tests` — **21 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **25 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
-  `SolutionExplorerController`, `TextInputToolWindowController`), `DistinctBy`,
-  `RectCoordinate`.
+  `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
+  re-entry guard (`InjectedKeyGuard`), `DistinctBy`, `RectCoordinate`.
 
 `InternalsVisibleTo` is set for these assemblies. Extract pure logic into
 dependency-free classes (the `OverlayKeyHandler` / `TextMotionNavigator` pattern) so
@@ -287,6 +287,6 @@ The **26 scenarios** are: `telescope-open`, `telescope-search`,
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (42) and
-  `dotnet run --project tests/NeoVisual.Tests` (21).
+  `dotnet run --project tests/NeoVisual.Tests` (25).
 - Live E2E: `pwsh tools/test-e2e.ps1` (26 scenarios); subset with `-Tests a,b,c`;
   list with `-List`.

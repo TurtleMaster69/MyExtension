@@ -142,7 +142,7 @@ Top of the queue, in priority order:
   **Change summary:** edited `tools/test-e2e.ps1` (+2 scenarios + header).
   **If these regress, look first at the `opened file:` diagnostic + the
   `results count=N selected=M` pins.** Scenario count 29→33 registered (31
-  passing + 2 known-RED) in spec.md / AGENTS.md / SKILL.md. Commit: `_filled at commit_`.
+  passing + 2 known-RED) in spec.md / AGENTS.md / SKILL.md. Commit: `6933afc`.
 - **2026-09-19 — Telescope implementation finder** (Lane: feature, attempt 1, GREEN):
   `ImplementationFinder` + `ImplementationHit` (Telescope, `Name="Implementation"`,
   `Space+F I`) list the **implementations/overrides of the symbol at the caret**

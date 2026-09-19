@@ -16,6 +16,7 @@
     "F,G": "telescope-grep",
     "F,B": "command:Window.NavigateTo",
     "F,R": "telescope-references",
+    "F,I": "telescope-implementation",
     "C,W": "command:View.CommandWindow",
     "C,A": "command:View.QuickActions",
     "C,R": "command:Refactor.Rename",

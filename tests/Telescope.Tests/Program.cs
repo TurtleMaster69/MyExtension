@@ -729,6 +729,69 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // ImplementationFinder — implementations/overrides of the caret symbol
+        // (hermetic seams: injected gatherer Func<IReadOnlyList<ImplementationHit>> + opener
+        // Action<ImplementationHit>, mirroring ReferencesFinder)
+        // ================================================================
+
+        public static void Run_ImplementationFinder_DisplayFormatting()
+        {
+            var hit = new ImplementationHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            var finder = new ImplementationFinder(() => new[] { hit }, _ => { });
+
+            var entries = finder.GetCandidates();
+            Assert.Equal(1, entries.Count);
+            // Deterministic display: {Kind} {SymbolName} — {file}:{line} (A2 contract).
+            Assert.Equal("Class Shape — Shape.cs:2", entries[0].Display);
+        }
+
+        public static void Run_ImplementationFinder_PayloadRoundTrips()
+        {
+            var hit = new ImplementationHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            var finder = new ImplementationFinder(() => new[] { hit }, _ => { });
+
+            var entry = finder.GetCandidates()[0];
+            // The ImplementationHit payload must round-trip through FinderEntry.Payload so
+            // OnSelected can recover the exact file/line/kind to open.
+            Assert.True(ReferenceEquals(hit, entry.Payload), "payload must be the exact ImplementationHit instance");
+            var payload = entry.Payload as ImplementationHit;
+            Assert.True(payload != null, "payload is an ImplementationHit");
+            Assert.Equal(@"C:\p\Shape.cs", payload!.FilePath);
+            Assert.Equal(2, payload.LineNumber);
+            Assert.Equal("Shape", payload.SymbolName);
+            Assert.Equal("Class", payload.Kind);
+        }
+
+        public static void Run_ImplementationFinder_OnSelectedOpensHitAtLine()
+        {
+            var hit = new ImplementationHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            ImplementationHit? opened = null;
+            var finder = new ImplementationFinder(() => new[] { hit }, h => opened = h);
+            var entry = finder.GetCandidates()[0];
+
+            finder.OnSelected(entry);
+            Assert.True(opened != null, "opener invoked");
+            Assert.Equal(@"C:\p\Shape.cs", opened!.FilePath);
+            Assert.Equal(2, opened.LineNumber);
+            Assert.Equal("Shape", opened.SymbolName);
+            Assert.Equal("Class", opened.Kind);
+        }
+
+        public static void Run_ImplementationFinder_LineNumberDrivesPreviewJump()
+        {
+            // A4 line mapping: the hit's 1-based LineNumber is what positions the preview caret.
+            // Feed a hit whose line is 3 (mid-file) into the shared navigator and prove it lands
+            // on line 3 — the pure mapping the overlay's ImplementationHit preview branch relies on.
+            string text = "one\ntwo\nthree\nfour";
+            var hit = new ImplementationHit(@"C:\p\File.cs", 3, "File", "Class");
+            var nav = new TextMotionNavigator();
+            nav.SetText(text);
+            nav.MoveToLine(hit.LineNumber);
+            Assert.Equal(3, nav.LineNumber);
+            Assert.Equal(8, nav.Caret); // start of "three"
+        }
+
+        // ================================================================
         // GrepFinder — query-driven live grep over the solution's files
         // (hermetic seams mirroring CodeIssuesFinder: injected file-PATH source +
         // Action<GrepHit> opener; the finder reads file CONTENT off disk from those paths)

@@ -481,6 +481,27 @@ namespace Telescope
                 return;
             }
 
+            if (payload is ImplementationHit init && System.IO.File.Exists(init.FilePath))
+            {
+                try
+                {
+                    string content = System.IO.File.ReadAllText(init.FilePath);
+                    SetPreviewContent(content);
+                    if (init.LineNumber > 0)
+                    {
+                        _previewNavigator.MoveToLine(init.LineNumber);
+                        ApplyPreviewCaret();
+                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
+                    }
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={init.FilePath} chars={content.Length}");
+                }
+                catch (Exception ex)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
+                }
+                return;
+            }
+
             if (payload is GrepHit gh && System.IO.File.Exists(gh.FilePath))
             {
                 try

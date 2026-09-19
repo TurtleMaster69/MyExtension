@@ -163,6 +163,7 @@ namespace MyExtension
                 case "telescope": return () => OpenTelescope();
                 case "telescope-issues": return () => OpenTelescopeIssues();
                 case "telescope-references": return () => OpenTelescopeReferences();
+                case "telescope-implementation": return () => OpenTelescopeImplementation();
                 case "telescope-grep": return () => OpenTelescopeGrep();
                 case "toggle-solution-explorer": return () => ToggleSolutionExplorer();
                 default:
@@ -487,6 +488,28 @@ namespace MyExtension
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope references: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Implementation" finder (implementations/overrides
+        /// of the symbol at the caret), centered over the VS main window. The
+        /// <see cref="ImplementationFinder"/> gathers candidates via the host's Roslyn call on the
+        /// UI thread.
+        /// </summary>
+        private void OpenTelescopeImplementation()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Implementation", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope implementation: {ex.Message}");
             }
         }
 

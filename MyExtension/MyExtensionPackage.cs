@@ -74,6 +74,9 @@ namespace MyExtension
                 _telescope.RegisterFinder(new ReferencesFinder(
                     () => GatherReferences(),
                     hit => OpenReference(hit)));
+                _telescope.RegisterFinder(new ImplementationFinder(
+                    () => GatherImplementations(),
+                    hit => OpenImplementation(hit)));
 
                 // Build WindowManager (current-window tracking + tool-window controller dispatch)
                 // before the hook so InputHandler can consume its cached state from the start.
@@ -455,6 +458,27 @@ namespace MyExtension
         }
 
         /// <summary>
+        /// Opens an implementation hit's file in the editor and jumps the caret to the hit's
+        /// 1-based declaring line (line-level ONLY — no column metadata is carried on
+        /// <see cref="ImplementationHit"/>). The finder's <c>OnSelected</c> wraps this call and
+        /// emits the <c>opened implementation</c> diagnostic.
+        /// </summary>
+        private void OpenImplementation(ImplementationHit hit)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!System.IO.File.Exists(hit.FilePath))
+            {
+                return;
+            }
+            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
+            dte.ItemOperations.OpenFile(hit.FilePath);
+            if (dte.ActiveDocument?.Selection is EnvDTE.TextSelection sel && hit.LineNumber > 0)
+            {
+                sel.GotoLine(hit.LineNumber, false);
+            }
+        }
+
+        /// <summary>
         /// Gathers the read/write references to the symbol at the caret in the active document via
         /// Roslyn find-references (workspace = MEF <c>VisualStudioWorkspace</c>, symbol resolution
         /// via <c>SymbolFinder</c>). Runs on the UI thread; every Roslyn async call is wrapped in
@@ -531,6 +555,123 @@ namespace MyExtension
                 }
             }
             return hits;
+        }
+
+        /// <summary>
+        /// Gathers the <b>implementations/overrides</b> of the symbol at the caret in the active
+        /// document via Roslyn find-implementations (workspace = MEF <c>VisualStudioWorkspace</c>,
+        /// symbol resolution via <c>SymbolFinder</c>). Each implementation symbol is mapped to ONE
+        /// hit at its FIRST in-source declaring position (type-decl line for a type, override-decl
+        /// line for a member); symbols with no in-source location (metadata types from referenced
+        /// assemblies) are skipped. Runs on the UI thread; every Roslyn async call is wrapped in
+        /// <c>ThreadHelper.JoinableTaskFactory.Run</c> — never a blocking sync-wait, which would
+        /// deadlock the VS UI thread. Returns an empty list on any non-fatal failure.
+        /// </summary>
+        private IReadOnlyList<ImplementationHit> GatherImplementations()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
+            var active = dte?.ActiveDocument;
+            if (active == null)
+            {
+                return Array.Empty<ImplementationHit>();
+            }
+
+            var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+            var workspace = componentModel?.GetService<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>();
+            if (workspace == null)
+            {
+                return Array.Empty<ImplementationHit>();
+            }
+
+            var solution = workspace.CurrentSolution;
+            var filePath = active.FullName;
+            var docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
+            if (docId == null)
+            {
+                return Array.Empty<ImplementationHit>();
+            }
+            var document = solution.GetDocument(docId);
+            if (document == null)
+            {
+                return Array.Empty<ImplementationHit>();
+            }
+
+            int caret = GetCaretOffset(dte, active, document);
+            if (caret < 0)
+            {
+                return Array.Empty<ImplementationHit>();
+            }
+
+            var root = ThreadHelper.JoinableTaskFactory.Run(
+                () => document.GetSyntaxRootAsync(System.Threading.CancellationToken.None));
+            var semanticModel = ThreadHelper.JoinableTaskFactory.Run(
+                () => document.GetSemanticModelAsync(System.Threading.CancellationToken.None));
+            var symbol = ThreadHelper.JoinableTaskFactory.Run(() =>
+                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindSymbolAtPositionAsync(semanticModel, caret, workspace));
+            if (symbol == null)
+            {
+                return Array.Empty<ImplementationHit>();
+            }
+
+            var impls = ThreadHelper.JoinableTaskFactory.Run(() =>
+                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindImplementationsAsync(symbol, solution));
+
+            var hits = new List<ImplementationHit>();
+            foreach (var impl in impls)
+            {
+                // Map the implementation SYMBOL (not a reference location) to its declaring source
+                // position: take the FIRST declaring syntax reference (partial types may have
+                // several), falling back to the first in-source location. Skip any symbol with no
+                // in-source location (metadata types from referenced assemblies).
+                string? path = null;
+                int line = 0;
+
+                var src = impl.DeclaringSyntaxReferences.FirstOrDefault();
+                if (src != null)
+                {
+                    var span = src.SyntaxTree.GetLineSpan(src.Span);
+                    if (!string.IsNullOrEmpty(span.Path))
+                    {
+                        path = span.Path;
+                        line = span.StartLinePosition.Line + 1; // 0-based -> 1-based
+                    }
+                }
+
+                if (path == null)
+                {
+                    var loc = impl.Locations.FirstOrDefault(l => l.IsInSource);
+                    if (loc != null)
+                    {
+                        var span = loc.GetLineSpan();
+                        if (!string.IsNullOrEmpty(span.Path))
+                        {
+                            path = span.Path;
+                            line = span.StartLinePosition.Line + 1; // 0-based -> 1-based
+                        }
+                    }
+                }
+
+                if (path == null)
+                {
+                    continue;
+                }
+
+                string kind = impl is Microsoft.CodeAnalysis.INamedTypeSymbol nts
+                    ? nts.TypeKind.ToString()
+                    : impl.Kind.ToString();
+                hits.Add(new ImplementationHit(path, line, impl.Name, kind));
+            }
+
+            // Deterministic ordering: the seeded Shape type (declaring line 2) and its member
+            // Shape.Draw (declaring line 4) live in the SAME file, so OrderBy(FilePath) ties and
+            // ThenBy(LineNumber) is the discriminator — the type-level implementation always sorts
+            // before any member implementation, independent of Roslyn's enumeration order.
+            return hits
+                .OrderBy(h => h.FilePath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(h => h.LineNumber)
+                .ToList();
         }
 
         /// <summary>

@@ -72,6 +72,8 @@ $externalAllowlist = @(
     'CardinalMovment',
     # VS editor SDK / WPF event / external package types
     'AdornmentLayerDefinition', 'KeyDown', 'MessagePack',
+    # Roslyn symbols referenced from host gatherers
+    'ISymbol', 'SymbolFinder', 'FindImplementationsAsync', 'DeclaringSyntaxReferences', 'Location',
     # Key names used in binding notation
     'Space', 'Return', 'Escape', 'Enter', 'Ctrl', 'Shift', 'Alt', 'Tab',
     'PageUp', 'PageDown', 'Home', 'End'
@@ -95,7 +97,8 @@ $bareNameAllowlist = @(
     'Service.cs', 'User.cs', 'Order.cs', 'AuthService.cs',
     'Probe.cs', 'TelescopeTest.sln',
     'Shared.cs', 'Reader.cs', 'Writer.cs',   # references-finder seed files (Models/Shared.cs + readers/writers)
-    'GrepProbe.cs'                            # grep-finder seed file (Probe/GrepProbe.cs, GREPME marker)
+    'GrepProbe.cs',                         # grep-finder seed file (Probe/GrepProbe.cs, GREPME marker)
+    'IShape.cs', 'Shape.cs'                 # implementation-finder seed files (Models/IShape.cs + Shape.cs)
 )
 
 # Proposed-future symbols / files named in the backlog's fix suggestions — they

@@ -13,6 +13,7 @@
 #   telescope-open-file   Enter on a match opens the file in the editor
 #   telescope-issues      Space F D: warnings/errors/TODO finder filters, previews, opens at line
 #   telescope-references  Space F R: lists read/write references to the caret symbol, previews+opens at line
+#   telescope-implementation  Space F I: lists implementations of the caret symbol, previews+opens at the decl line
 #   telescope-grep      Space F G: grep finder searches files for the query, previews + opens at the hit line
 #   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 #   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
@@ -287,6 +288,29 @@ function Open-TelescopeGrep([object]$vs, [string]$logPath) {
     throw 'Telescope grep finder did not open'
 }
 
+function Open-TelescopeImplementation([object]$vs, [string]$logPath) {
+    # Space F I opens the implementation finder (lists implementations/overrides of the caret
+    # symbol). Same focus discipline as Open-Telescope: hammer Escape first (get VsVim out of
+    # insert), then wait for the overlay to own focus. NOTE: F,I has NO binding yet — during the
+    # RED run this leader sequence does nothing and the helper's wait times out, which the
+    # scenario surfaces as its first failing assertion (the right-reason RED).
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Bring-ToForeground $vs.MainWindowHandle
+        foreach ($i in 1..3) { Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 }
+        Start-Sleep -Milliseconds 300
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
+        Send-Tap 0x46;             Start-Sleep -Milliseconds 150  # F
+        Send-Tap 0x49;                                             # I
+        if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Implementation" 15000) -and
+            (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
+            Assert-OverlayFocused $vs
+            return
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    throw 'Telescope implementation finder did not open'
+}
+
 function Close-Telescope([object]$vs, [string]$logPath) {
     # The overlay is a modal dialog that ALREADY owns keyboard focus — do NOT call
     # Bring-ToForeground here (it would SetForegroundWindow the VS main window and steal the
@@ -392,6 +416,14 @@ function Assert-SeedConsistent([string]$scratchDir) {
         # lines of GrepProbe.cs (line 4 and line 6), so `grep hits=2` is exact and the first hit
         # (line 4) pins the preview + opened-line assertions. Uniform CRLF.
         'GrepProbe.cs'          = "// GrepProbe.cs`r`nclass GrepProbe`r`n{`r`n    // GREPME first hit line 4`r`n    int alpha = 1;`r`n    // GREPME second hit line 6`r`n    string beta = `"gamma`";`r`n}`r`n"
+        # Real compilable interface->implementation graph for the implementation finder
+        # (telescope-implementation): `interface IShape` declared in Models/IShape.cs (the interface
+        # name `IShape` sits on line 1 starting at col 10 — a deterministic w-motion target), and
+        # `class Shape : IShape` in Shape.cs implements it — its declaring line (line 2) is the
+        # PINNED 1-based implementation line asserted by A5. New type names (IShape/Shape) do NOT
+        # collide with the references-finder seed (Shared/Reader/Writer). Uniform CRLF.
+        'Models/IShape.cs'      = "interface IShape`r`n{`r`n    void Draw();`r`n}`r`n"
+        'Shape.cs'              = "// Shape.cs implementer`r`nclass Shape : IShape`r`n{`r`n    public void Draw() { }`r`n}`r`n"
     }
 
     # Gather every seeded source file (all *.cs plus *.sln/*.csproj) under the scratch dir.
@@ -488,6 +520,14 @@ function Reset-ScratchSolution([string]$scratchDir) {
     # seed-consistency self-check fails the run.
     [System.IO.File]::WriteAllText((Join-Path $probeDir 'GrepProbe.cs'),
         "// GrepProbe.cs`r`nclass GrepProbe`r`n{`r`n    // GREPME first hit line 4`r`n    int alpha = 1;`r`n    // GREPME second hit line 6`r`n    string beta = `"gamma`";`r`n}`r`n")
+
+    # Real compilable interface->implementation graph for the implementation finder
+    # (telescope-implementation): `interface IShape` (Models/IShape.cs) implemented by
+    # `class Shape : IShape` (Shape.cs). MUST match the $canonical map byte-for-byte (uniform CRLF).
+    [System.IO.File]::WriteAllText((Join-Path $probeDir 'Models/IShape.cs'),
+        "interface IShape`r`n{`r`n    void Draw();`r`n}`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $probeDir 'Shape.cs'),
+        "// Shape.cs implementer`r`nclass Shape : IShape`r`n{`r`n    public void Draw() { }`r`n}`r`n")
 
     # Solution + project entry (ALWAYS, not gated on Test-Path).
     dotnet new sln -n TelescopeTest -o $scratchDir --format sln 2>&1 | Out-Null
@@ -1108,6 +1148,62 @@ Register-Scenario 'telescope-references' {
     Assert-NewLogLine $logPath "$($script:PfxTel)opened reference: file=.*\.cs line=\d+ col=\d+ access=(read|write)" 'Enter opened the reference with access kind'
 
     # Step 7: close.
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-implementation ----------------------------------------------
+# The implementation finder (Space F I) lists the implementations/overrides of the symbol under
+# the caret. The scratch solution seeds a NEW interface `IShape` (Models/IShape.cs) implemented by
+# `class Shape : IShape` (Shape.cs) — new type names that do NOT collide with the references-finder
+# seed (Shared). The scenario opens the interface file, positions the caret on `IShape`, opens the
+# implementation finder, and asserts the candidates count, the gather summary, the preview
+# line-jump to the pinned implementation line, and that Enter opens that line.
+Register-Scenario 'telescope-implementation' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+
+    # Step 1: open the interface file (Models/IShape.cs) via the overlay.
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'IShape'
+    Assert-NewLogLine $logPath "promptChanged query='IShape'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single IShape.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*IShape\.cs" 'preview shows the IShape.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*IShape\.cs" 'Enter opened Models/IShape.cs'
+    Close-Telescope $vs $logPath
+
+    # Step 2: position the caret on the `IShape` interface name with deterministic VsVim
+    # normal-mode motions. IShape.cs is:
+    #   1: interface IShape   <- IShape starts at col 10 (after the 9-char 'interface' + 1 space)
+    #   2: {
+    #   3:     void Draw();
+    #   4: }
+    # After opening, the caret is line 1 col 0; w walks to the start of the IShape token (col 10).
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'implementation caret positioning'
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200   # w -> IShape
+
+    # Step 3: Space+F I -> implementation finder, >=1 candidate (the Shape implementation).
+    Open-TelescopeImplementation $vs $logPath
+    Assert-OverlayFocused $vs
+    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Implementation candidates=(\d+)" 'implementation finder listed candidates'
+    $cand = 0
+    $lines = Get-Content $logPath
+    foreach ($ln in $lines) { if ($ln -match 'open finder=Implementation candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    if ($cand -lt 1) { throw "expected >=1 implementation candidate, found $cand" }
+    Assert-NewLogLine $logPath "$($script:PfxTel)implementations gathered count=(\d+)" 'implementations gather summary logged'
+
+    # Step 4: preview loads the implementation file and jumps the caret to the pinned declaring
+    # line (`class Shape : IShape` on line 2 of Shape.cs).
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Shape\.cs" 'preview loaded the implementation file'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=2" 'preview caret jumped to the implementation line'
+
+    # Step 5: Enter opens the file at the SPECIFIC pinned implementation line (line 2).
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened implementation: file=.*Shape\.cs line=2" 'Enter opened the implementation at line 2'
+
+    # Step 6: close.
     Close-Telescope $vs $logPath
 }
 

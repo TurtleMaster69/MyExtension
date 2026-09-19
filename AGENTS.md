@@ -32,7 +32,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   pure state machine), file search (`FzfFilter`), file open (`FileFinder`
   hermetic seam), results formatting, log writer, and the preview-pane vim
   motions (`TextMotionNavigator`). `-- KeyHandler`, `-- Preview`, `-- FileFinder`,
-  `-- Fzf` run subsets. Currently **52 tests, all passing**.
+  `-- Fzf` run subsets. Currently **56 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -54,13 +54,13 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 28 scenarios
+pwsh tools/test-e2e.ps1                              # all 29 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (28 total; all currently passing):
+Scenarios (29 total; all currently passing):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search
@@ -70,6 +70,7 @@ Scenarios (28 total; all currently passing):
 - `telescope-issues` — Space F D: warnings/errors/TODO finder filters, previews, opens at line
 - `telescope-references` — Space F R: references to the symbol at the caret (read/write access), previews, opens at line
 - `telescope-grep` — Space F G: query-driven search of the solution's files (grep hits per typed query), previews, opens at line
+- `telescope-implementation` — Space F I: implementations/overrides of the symbol at the caret, previews, opens at line
 - `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 - `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
 - `telescope-q-close` — q closes the overlay in normal mode
@@ -133,6 +134,8 @@ Key facts that make this reliable:
   (references finder — read/write access from Roslyn FindReferences),
   `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
   (grep finder — query-driven, per-query gather summary),
+  `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
+  (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
   `[Telescope] focus target=List|Preview`, `[Telescope] preview caret=... line=...`,
   `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions).
 
@@ -203,10 +206,22 @@ Done and tested (live + unit):
   200 hits; the preview jumps to the hit line; Enter opens the file at the line.
   Diagnostics: `grep hits=...` (per-query summary) and
   `opened grep: file=... line=...`. — `telescope-grep` live test passes.
+- Implementation finder: `ImplementationFinder` (Telescope, `Name="Implementation"`,
+  `Space+F I`) lists the implementations/overrides of the symbol at the caret,
+  gathered from Roslyn `SymbolFinder.FindImplementationsAsync` (MEF-resolved
+  `VisualStudioWorkspace`; the caret symbol resolved via the active editor view).
+  Each hit maps the implementation symbol's first in-source declaring location
+  (metadata symbols skipped); results are ordered deterministically
+  `OrderBy(FilePath).ThenBy(LineNumber)` so a type implementation sorts before
+  its member implementations; the preview jumps to the implementation line;
+  Enter opens the file at the line. Diagnostics:
+  `implementations gathered count=...` (gather summary) and
+  `opened implementation: file=... line=...`. All Roslyn async calls run inside
+  `ThreadHelper.JoinableTaskFactory.Run`. — `telescope-implementation` live test passes.
 
 Pending (user-requested, NOT yet implemented):
-- **Telescope finders**: fzf, implementation — each with a preview pane;
-  implementation preview should jump to the line number.
+- **Telescope finder**: fzf — with preview pane. (Scope deferred by user
+  2026-09-19; the overlay already uses fzf internally as its filter engine.)
 
 ## Hard requirements that are easy to violate
 

@@ -9,13 +9,12 @@ reads at the start of every loop iteration.
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **52 passed**; `tests/NeoVisual.Tests`
+- Offline units: `tests/Telescope.Tests` **56 passed**; `tests/NeoVisual.Tests`
   **25 passed**.
-- Live E2E: `tools/test-e2e.ps1` lists **28 scenarios** (incl. `seed-reset`).
-  The full 28-scenario suite is GREEN (verified 2026-09-19 after the grep-finder
-  item; one pre-existing flake `neovisual-editor-insert` passes on retry, count
-  2/3 — below the M-M2 3-flaky regression threshold); **no known-RED scenarios
-  remain**.
+- Live E2E: `tools/test-e2e.ps1` lists **29 scenarios** (incl. `seed-reset`).
+  The full 29-scenario suite is GREEN (verified 2026-09-19 after the
+  implementation-finder item; one pre-existing flake `neovisual-editor-insert`
+  passes on retry); **no known-RED scenarios remain**.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -105,12 +104,45 @@ Top of the queue, in priority order:
      read/write access, preview line-jump).
    - ~~`grep` finder~~ — **DONE** (see Done section; `Space+F G`, query-driven
      with a debounce, preview line-jump).
-   - `fzf` finder — with preview pane.
-   - `implementation` finder — with preview pane; preview jumps to line.
+   - ~~`implementation` finder~~ — **DONE** (see Done section; `Space+F I`,
+     Roslyn `FindImplementationsAsync`, preview line-jump).
+   - `fzf` finder — with preview pane. **DEFERRED** (user clarified 2026-09-19:
+     build implementation first; fzf-finder scope TBD by the user).
 4. Add the 4 new planned E2E scenarios (above) and their offline unit tests.
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-19 — Telescope implementation finder** (Lane: feature, attempt 1, GREEN):
+  `ImplementationFinder` + `ImplementationHit` (Telescope, `Name="Implementation"`,
+  `Space+F I`) list the **implementations/overrides of the symbol at the caret**
+  (interfaces → implementing types/members, virtual/abstract → overrides,
+  classes → derived) via Roslyn `SymbolFinder.FindImplementationsAsync`
+  (MEF `VisualStudioWorkspace`, symbol-at-caret resolution mirroring the
+  references gatherer). The gatherer maps each returned `ISymbol`'s FIRST
+  in-source declaring location (skipping metadata symbols — NOT the references
+  `foreach rs.Locations` verbatim) and **orders hits deterministically**
+  `OrderBy(FilePath, OrdinalIgnoreCase).ThenBy(LineNumber)` so the type
+  implementation (Shape.cs line 2) sorts before its member implementations
+  (Shape.Draw line 4) — pinning the e2e's `line=2` assertions. Preview jumps to
+  the implementation line; Enter opens at the line. New diagnostics:
+  `implementations gathered count=N` and `opened implementation: file=... line=...`.
+  New e2e scenario `telescope-implementation` (29th) passes the pinned chain
+  `candidates=1 → count=1 → preview line=2 → opened line=2`; full suite GREEN
+  (one pre-existing flake `neovisual-editor-insert`, retry-pass); units
+  Telescope 56/56, NeoVisual 25/25; references + grep finders non-regressed.
+  **Change summary:** created `Telescope/ImplementationHit.cs` +
+  `Telescope/ImplementationFinder.cs`; edited `Telescope/TelescopeOverlay.cs`
+  (ImplementationHit preview branch), `MyExtension/MyExtensionPackage.cs`
+  (`GatherImplementations`/`OpenImplementation`/registration),
+  `MyExtension/InputHandler.cs` (ResolveAction case + `OpenTelescopeImplementation()`),
+  `MyExtension/default-keybindings.json` (`F,I` → `telescope-implementation`),
+  `tools/test-e2e.ps1` (scenario + `Models/IShape.cs`/`Shape.cs` seeds in
+  `$canonical`), `tests/Telescope.Tests/Program.cs` (+4 `Run_ImplementationFinder_*`).
+  No DEVIATIONS.
+  **If this regresses, look first at `GatherImplementations`' deterministic
+  ordering (type-before-member) and the `opened implementation:` diagnostic** —
+  the two places the e2e pins depend on. Doc sync: Telescope 52→56, scenarios
+  28→29 across spec.md / AGENTS.md / SKILL.md. Commit: `_filled at commit_`.
 - **2026-09-19 — Telescope grep finder** (Lane: feature, attempt 1, GREEN):
   `GrepFinder` + `GrepHit` (Telescope, `Name="Grep"`, `Space+F G`) search the
   solution's project files for the typed query — **query-driven** via a new

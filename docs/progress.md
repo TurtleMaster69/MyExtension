@@ -250,7 +250,7 @@ Top of the queue, in priority order:
   file=` path means the direct-open/keeper path broke.
   Doc sync: scenarios 31→32 passing / 2→1 known-RED, NeoVisual 25→26 across
   spec.md / AGENTS.md / SKILL.md; SPEC REVIEW gate APPROVED.
-  Commit: `<pending>`
+  Commit: `4f36fde`
 - **2026-09-19 — 2 planned E2E coverage scenarios** (Lane: trivial, GREEN —
   partial item): added `telescope-open-file-searchbox` (insert-mode query →
   wait for settle → Enter opens the filtered single match, `Program.cs`) and

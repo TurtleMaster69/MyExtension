@@ -98,13 +98,13 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 34 scenarios
+pwsh tools/test-e2e.ps1                              # all 35 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (34 total; no known-RED remaining — `explorer-open-searchbox` was GREened
+Scenarios (35 total; no known-RED remaining — `explorer-open-searchbox` was GREened
 2026-09-27; a few scenarios are flaky on retry, and `telescope-implementation` has a
 tracked intermittent Enter-delivery issue):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -136,7 +136,8 @@ tracked intermittent Enter-delivery issue):
 - `neovisual-explorer-collapse` — h collapses the fold
 - `neovisual-explorer-rename` — r starts rename (F2), Escape cancels
 - `neovisual-explorer-add` — a runs the Add Item command
-- `neovisual-explorer-move` — m runs the Move command
+- `neovisual-explorer-move` — m runs the Move command (tree focused)
+- `neovisual-explorer-move-editor-focus` — with the stale-frame fault injected, an editor-focused m must NOT fire a tree action (FocusGuard leak guard)
 - `neovisual-editor-insert` — insert-mode typing reaches the editor (hook must not swallow text)
 - `neovisual-textinput-motions` — Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret in normal mode
 - `seed-reset` — seeding always resets the scratch solution (a stale edit is removed) and every seeded file has uniform EOL (no "normalize line endings?" focus-steal)
@@ -316,6 +317,17 @@ Pending (user-requested, NOT yet implemented):
   `IReadOnlySet<T>`): `InputHandler` routes hjkl + `controller.ActionKeys` to `TryMove`, and the
   hook's `IsInteresting` pre-filter returns true for any key while a tool window with action keys
   is in normal mode (`InputHandler.HasToolWindowActionKeys`).
+- **Tool-window action keys never leak into a focused editor (the `FocusGuard`).** `IsToolWindow`
+  comes from VS's `SEID_WindowFrame` selection event and goes STALE when the user moves to an editor,
+  so routing/addressing it raw made `o`/`r`/`m`/`a` fire tree actions (and consume the key) while
+  the editor held focus. `VimModeTracker.IsEditorFocused` (event-driven `Got/LostAggregateFocus`)
+  is fed into the pure `MyExtension/ToolWindows/FocusGuard.cs`
+  (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`) via `InputHandler`. The boolean
+  passed is `EditorFocusedVeto` = `IsEditorFocused && CurrentController?.IsInputMode != true &&
+  !GeneralToolWindowController.IsTextInputType(Type)` — a genuine text-input tool window (Command
+  Window) or an input-mode controller OWNS the keyboard and is never vetoed (the raw flag is stale
+  for those surfaces). `WindowManager` also has a test-only `stale-toolwindow` sentinel so the
+  fault can be injected deterministically in e2e.
 - Handled keys are *blocked* from VS by returning `(IntPtr)1` from the hook callback.
 - VsVim 2022 mode-awareness: `VimModeTracker` (a shared MEF part) tracks the focused
   editor's mode **event-driven** — no per-keystroke polling. It is an

@@ -32,6 +32,7 @@
 #   neovisual-explorer-rename  r starts rename (F2), Escape cancels
 #   neovisual-explorer-add     a runs the Add Item command
 #   neovisual-explorer-move    m runs the Move command
+#   neovisual-explorer-move-editor-focus  editor focused + stale frame: m must NOT fire a tree action
 #   explorer-open-navigation   g selects the first source file programmatically (UIHierarchy), o opens it
 #   explorer-open-searchbox    i focuses the search box, type a query, o opens the filtered result
 #   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview
@@ -232,6 +233,40 @@ function Assert-OverlayFocused([object]$vs) {
     Assert-VsFocused $vs 'Telescope overlay should own focus'
 }
 
+function Get-ActiveDocumentPath([int]$devenvPid) {
+    # Harness-only query through the existing DTE helper (tools/dte-command.ps1): returns the FULL
+    # PATH of the active document, or '' when none. VIEW-INDEPENDENT — VS reuses an already-open tab
+    # without creating a text view, so this (not `editor-view-opened`) is the right oracle for
+    # "the editor now shows the selected file". No product diagnostic is added or changed.
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { return '' }
+    try {
+        $out = & $dteCmd -DevenvPid $devenvPid -Command 'GetActiveDocument' 2>$null
+        if ($out) { return ([string]($out | Select-Object -Last 1)).Trim() }
+    } catch { }
+    return ''
+}
+
+function Focus-SolutionExplorer([int]$devenvPid) {
+    # A successful `o`/Enter moves keyboard focus to the opened document, so a walk loop cannot keep
+    # navigating the tree. Re-focus the Solution Explorer tree with the native command the controller
+    # itself uses (`View.SolutionExplorer`) so the next l/j reaches the tree. Harness-only.
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { return }
+    try { & $dteCmd -DevenvPid $devenvPid -Command 'View.SolutionExplorer' 2>$null | Out-Null } catch { }
+}
+
+function Wait-ActiveDocumentMatch([int]$devenvPid, [string]$pattern, [int]$maxMs = 3000) {
+    # POSITIVE bounded wait: returns the active-document path once it matches $pattern, else ''.
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
+        $now = Get-ActiveDocumentPath $devenvPid
+        if ($now -and ($now -match $pattern)) { return $now }
+        Start-Sleep -Milliseconds 300
+    }
+    return ''
+}
+
 function Open-Telescope([object]$vs, [string]$logPath) {
     # After a previous overlay close, focus returns to the editor, which VsVim may leave in
     # INSERT mode — where Space types a literal space instead of starting a leader sequence.
@@ -370,6 +405,25 @@ function Wait-NewLogLine([string]$logPath, [string]$pattern, [int]$maxMs = 20000
             }
         }
         Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+
+function Wait-NewLogLineAfter([string]$logPath, [int]$fromIndex, [string]$pattern, [int]$maxMs = 3000) {
+    # POSITIVE bounded wait over lines appended AFTER a caller-supplied absolute line index (a
+    # snapshot taken immediately BEFORE the key under test). Unlike Wait-NewLogLine it excludes
+    # earlier lines, so it can attribute a new diagnostic (e.g. an editor-focus vim-mode=/editor-view
+    # line) to the key just pressed. Positive wait, NOT an absence assertion.
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
+        if (Test-Path $logPath) {
+            $lines = Get-Content $logPath
+            if ($lines.Count -gt $fromIndex) {
+                $tail = $lines[$fromIndex..($lines.Count - 1)] -join "`n"
+                if ($tail -match $pattern) { return $true }
+            }
+        }
+        Start-Sleep -Milliseconds 200
     }
     return $false
 }
@@ -847,17 +901,30 @@ Register-Scenario 'neovisual-explorer-open' {
     }
     if (-not $opened) { throw 'could not ensure Solution Explorer open' }
 
-    # Walk the tree: expand (l), step down (j), and try Enter; repeat until a code editor view
-    # opens. The tree is solution -> project -> files, so several expand+down steps are needed.
+    # Walk the tree: expand (l), step down (j), and try Enter; repeat until Enter opens something.
+    # The tree is solution -> project -> files, so several expand+down steps are needed. The success
+    # signal is Enter routed (`solution-explorer open`) AND the editor gaining focus right after the
+    # key (a NEW `vim-mode=`/`editor-view-opened` line) — NOT the old new-text-view-only
+    # `editor-view-opened` gate, which false-failed when VS REUSED an already-open tab. A tree action
+    # never focuses the editor, so a genuinely FAILED Enter (no open) still fails.
     $openedView = $false
     for ($step = 0; $step -lt 8 -and -not $openedView; $step++) {
+        # A previous Enter may have moved focus to the opened document; re-focus the tree so l/j
+        # reach it (same pattern as neovascular-explorer-open-o).
+        Focus-SolutionExplorer $vs.Id
+        Start-Sleep -Milliseconds 250
         Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand current fold
         Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> move into the next node
         Assert-VsFocused $vs 'explorer open (Enter)'   # F16: keys must land in the VS instance
-        Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
-        if (Wait-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened" 4000) { $openedView = $true }
+        $preKey = if (Test-Path $logPath) { (Get-Content $logPath).Count } else { 0 }
+        Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 400
+        # Success = Enter routed (`solution-explorer open`) AND the editor gained focus right after
+        # the key (a NEW `vim-mode=`/`editor-view-opened` line after the snapshot). See open-o for
+        # the rationale (view-independent; detects reuse of an already-open tab).
+        if ((Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)solution-explorer open" 1500) -and
+            (Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)(vim-mode=|editor-view-opened)" 3000)) { $openedView = $true }
     }
-    if (-not $openedView) { throw 'could not open a file from Solution Explorer (no editor view created)' }
+    if (-not $openedView) { throw 'could not open a file from Solution Explorer (Enter was not routed, or the editor never took focus)' }
     Assert-NoEnterStorm $logPath 'neovisual-explorer-open'
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'Enter fired solution-explorer open'
 }
@@ -942,16 +1009,31 @@ Register-Scenario 'neovisual-explorer-open-o' {
     }
     if (-not $opened) { throw 'could not ensure Solution Explorer open' }
 
-    # Walk the tree exactly like neovisual-explorer-open but open with o instead of Enter.
+    # Walk the tree exactly like neovascular-explorer-open but open with o instead of Enter. The
+    # success signal is `o` routed (`solution-explorer open`) AND the editor gaining focus right after
+    # the key (a NEW `vim-mode=`/`editor-view-opened` line) — NOT the old new-text-view-only
+    # `editor-view-opened` gate, which false-failed deterministically once the walk reached an
+    # already-open item (VS reused the tab). A tree action (move/expand) never focuses the editor, so
+    # a genuinely FAILED `o` (no open at all) still fails.
     $openedView = $false
     for ($step = 0; $step -lt 8 -and -not $openedView; $step++) {
+        # A previous `o` may have moved focus to the opened document; re-focus the tree so l/j reach it.
+        Focus-SolutionExplorer $vs.Id
+        Start-Sleep -Milliseconds 250
         Send-Tap 0x4C; Start-Sleep -Milliseconds 250   # l -> expand current fold
         Send-Tap 0x4A; Start-Sleep -Milliseconds 250   # j -> move into the next node
         Assert-VsFocused $vs 'explorer open (o)'       # F16: keys must land in the VS instance
-        Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open
-        if (Wait-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened" 4000) { $openedView = $true }
+        $preKey = if (Test-Path $logPath) { (Get-Content $logPath).Count } else { 0 }
+        Send-Tap 0x4F; Start-Sleep -Milliseconds 400   # o -> open
+        # Success = o routed (existing `solution-explorer open` diagnostic) AND the editor GAINED
+        # FOCUS right after the key (a NEW `vim-mode=`/`editor-view-opened` line after the snapshot).
+        # The focus line is view-independent — it also fires when VS REUSES an already-open tab,
+        # which is what the old editor-view-opened-only gate false-failed on — and a tree action
+        # never focuses the editor. A genuinely FAILED o (not routed / never opens anything) fails.
+        if ((Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)solution-explorer open" 1500) -and
+            (Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)(vim-mode=|editor-view-opened)" 3000)) { $openedView = $true }
     }
-    if (-not $openedView) { throw 'could not open a file from Solution Explorer with o (no editor view created)' }
+    if (-not $openedView) { throw 'could not open a file from Solution Explorer with o (o was not routed, or the editor never took focus)' }
     Assert-NoEnterStorm $logPath 'neovisual-explorer-open-o'
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
 }
@@ -976,6 +1058,66 @@ Register-Scenario 'neovisual-explorer-move' {
     # The Move dialog opened; Escape dismisses it.
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+}
+
+# --- neovisual-explorer-move-editor-focus --------------------------------
+# Negative half of the regression pair: with an EDITOR focused and the stale-frame fault injected
+# (a 'stale-toolwindow' sentinel makes WindowManager report the SE frame as current), m must fall
+# through to VS — it must NOT fire a solution-explorer action. Deterministic: the fault is a file
+# presence toggle, and the post-baseline absence scan is bounded by the Space+W leader line, which
+# is written only after m was handled on the same UI thread.
+Register-Scenario 'neovisual-explorer-move-editor-focus' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+
+    # 1. Open Gamma.cs through the Telescope overlay so the editor holds keyboard focus. Use Gamma.cs
+    #    (NOT Program.cs, NOT Beta.cs): Program.cs is the startup file and is left open by earlier
+    #    scenarios; Beta.cs is reserved for the later neovascular-editor-insert scenario, which needs
+    #    it to open a FRESH view (opening it here would reuse the tab and break that assertion).
+    #    Gamma.cs is opened by no other scenario. Focus is proven by querying the ACTIVE DOCUMENT via
+    #    DTE (view-independent) instead of asserting a new text view — VS reuses an already-open tab
+    #    without raising `editor-view-opened`.
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Gamma'
+    Assert-NewLogLine $logPath "promptChanged query='Gamma'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter settled to the single Gamma.cs match'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Gamma\.cs" 'preview shows the Gamma.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Gamma\.cs" 'Enter opened Gamma.cs'
+    $activeDoc = Wait-ActiveDocumentMatch $vs.Id 'Gamma\.cs$' 3000
+    if (-not $activeDoc) { throw 'editor did not show Gamma.cs after opening it (active document never matched Gamma.cs)' }
+    Close-Telescope $vs $logPath
+
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'editor-focused m'
+
+    # 2. Inject the stale-frame fault for the duration of the key sequence only.
+    $sentinel = Join-Path (Split-Path $logPath) 'stale-toolwindow'
+    New-Item -ItemType File -Force -Path $sentinel | Out-Null
+    try {
+        # 3. m must fall through to the editor (no tree action). Escape dismisses any dialog on the
+        #    old path; then Space+W must still reach the editor and fire the leader binding — the
+        #    positive bound proving focus stayed in the editor.
+        Send-Tap 0x4D                                            # m
+        Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 # dismiss any old-path dialog
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150  # leader
+        Send-Tap 0x57; Start-Sleep -Milliseconds 500             # W -> File.SaveSelectedItems
+        Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: W" 'editor kept focus; m was not a tree action'
+    } finally {
+        Remove-Item -Force -LiteralPath $sentinel -ErrorAction SilentlyContinue
+    }
+
+    # 4. Deterministic absence scan of the fixed post-baseline window for a tree move action. The
+    #    bound line is already on disk and MoveSelected logs synchronously before any later key, so
+    #    a move line from m would already be present — its absence is a fact, not a race.
+    if (-not (Test-Path $logPath)) { throw 'log missing for editor-focus absence scan' }
+    $lines = Get-Content $logPath
+    for ($i = $script:LogBaseline; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "$($script:PfxNeo)solution-explorer move") {
+            throw "editor-focused m leaked a tree action: $($lines[$i])"
+        }
+    }
 }
 
 # --- explorer-open-navigation --------------------------------------------

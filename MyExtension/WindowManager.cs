@@ -16,8 +16,30 @@ public sealed class WindowManager : IDisposable
     private readonly GeneralToolWindowController _defaultController = new(ToolWindowType.Unknown);
 
     public IVsWindowFrame? CurrentWindow { get; private set; }
-    public bool IsToolWindow { get; private set; }
-    public ToolWindowType Type { get; private set; }
+
+    // The frame-derived tool-window state, set only in OnWindowFocusChanged. Exposed through the
+    // sentinel-aware public members below so the test-only stale-focus fault can be injected.
+    private bool _isToolWindow;
+    private ToolWindowType _type;
+
+    // Test-only fault injection: when the harness creates a 'stale-toolwindow' sentinel file under
+    // NEOVISUAL_LOG_DIR, report the Solution Explorer frame as current even when it is not — the
+    // stale-frame + editor-focused state the leak was observed in. Absent in normal user runs
+    // (the env var is unset -> null path -> no file stat).
+    private static readonly string? TestStaleSentinelPath = BuildTestSentinelPath();
+
+    private static string? BuildTestSentinelPath()
+    {
+        string? dir = Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR");
+        return string.IsNullOrEmpty(dir) ? null : System.IO.Path.Combine(dir, "stale-toolwindow");
+    }
+
+    private static bool IsTestStaleInjected() =>
+        TestStaleSentinelPath != null && System.IO.File.Exists(TestStaleSentinelPath);
+
+    public bool IsToolWindow => _isToolWindow || IsTestStaleInjected();
+
+    public ToolWindowType Type => IsTestStaleInjected() ? ToolWindowType.SolutionExplorer : _type;
 
     /// <summary>
     /// The controller driving the currently focused tool window, or null when focus is not in a
@@ -93,24 +115,24 @@ public sealed class WindowManager : IDisposable
         CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
         if ((__WindowFrameTypeFlags)(int)value == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
         {
-            IsToolWindow = true;
+            _isToolWindow = true;
             CurrentWindow.GetGuidProperty(
                     (int)__VSFPROPID.VSFPROPID_GuidPersistenceSlot,
                     out Guid guid);
             if (guid != null)
             {
-                Type = ToolWindowTypeResolver.FromGuid(guid);
+                _type = ToolWindowTypeResolver.FromGuid(guid);
             }
             else
             {
-                Type = ToolWindowType.Unknown;
+                _type = ToolWindowType.Unknown;
             }
 
         }
         else
         {
-            IsToolWindow = false;
-            Type = ToolWindowType.Unknown;
+            _isToolWindow = false;
+            _type = ToolWindowType.Unknown;
         }
     }
     public void Dispose()

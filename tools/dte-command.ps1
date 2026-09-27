@@ -72,6 +72,18 @@ public static class DteCmd
 $dte = [DteCmd]::GetForProcess($DevenvPid)
 if (-not $dte) { throw "Could not connect DTE to devenv PID $DevenvPid." }
 
+# 'GetActiveDocument' is a HARNESS-ONLY QUERY (it executes no VS command): it prints the FULL PATH
+# of the currently active document, or an empty line when none is active. The Solution Explorer
+# `o`/Enter open scenarios use it to prove the selected item opened even when VS REUSES an
+# already-open tab — that path raises no `editor-view-opened` diagnostic (which only fires for a
+# newly created text view). No product code or diagnostic is touched.
+if ($Command -eq 'GetActiveDocument') {
+    $doc = $null
+    try { $doc = $dte.ActiveDocument } catch { $doc = $null }
+    if ($doc) { Write-Output $doc.FullName } else { Write-Output '' }
+    exit 0
+}
+
 # 'Solution.Open' opens a solution file directly via dte.Solution.Open — no file-picker dialog
 # (ExecuteCommand('File.OpenProject', path) opens the dialog instead). Use this for opening the
 # scratch .sln in the Experimental Instance.

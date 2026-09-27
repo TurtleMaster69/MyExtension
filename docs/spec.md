@@ -207,12 +207,12 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 34 scenarios
+pwsh tools/test-e2e.ps1                              # all 35 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **34 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
+The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
@@ -223,7 +223,7 @@ The **34 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 `neovisual-leader`, `neovisual-toolwindow`, `neovisual-explorer-toggle`,
 `neovisual-explorer-open`, `neovisual-explorer-open-o`,
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
-`neovisual-explorer-add`, `neovisual-explorer-move`,
+`neovisual-explorer-add`, `neovisual-explorer-move`, `neovisual-explorer-move-editor-focus`,
 `neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
 `seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox`.
 
@@ -300,6 +300,11 @@ The **34 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
   syntax highlighting (`SyntaxHighlighter`).
 - Telescope prompt vim motions + white block caret in normal mode.
 - Editor insert-mode swallowing regression guard (`neovisual-editor-insert`).
+- Tool-window action-key leak guard (`FocusGuard`): `o`/`r`/`m`/`a`/hjkl are routed to a
+  tool-window controller only when that surface actually owns focus — `VimModeTracker.IsEditorFocused`
+  (event-driven) vetoes the routing/`ExitToolWindowInputMode`/`IsTyping` paths via a pure
+  `FocusGuard`, except for genuine text-input tool windows or input-mode controllers
+  (`neovisual-explorer-move-editor-focus`, deterministic stale-frame sentinel).
 - Vim text motions in text-input tool windows (`TextInputToolWindowController`)
   + block caret in normal mode, line caret in insert.
 - Solution Explorer search box: `i` (normal mode) focuses the search box; WPF
@@ -327,5 +332,5 @@ The **34 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (56) and
   `dotnet run --project tests/NeoVisual.Tests` (31).
-- Live E2E: `pwsh tools/test-e2e.ps1` (34 scenarios; no known-RED; a few flake on retry);
+- Live E2E: `pwsh tools/test-e2e.ps1` (35 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

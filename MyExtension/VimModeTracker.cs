@@ -98,6 +98,15 @@ namespace MyExtension
         // events mutate it on the UI thread.
         private volatile bool _cachedTyping;
 
+        // The code view that currently holds aggregate focus, if any. Mutated on the UI thread
+        // only (focus events); used to make the editor-focus flag robust to out-of-order focus
+        // transitions (a lost-focus event from a non-focused view must not clear it).
+        private ITextView? _focusedView;
+
+        // True while a code editor text view holds keyboard focus. Volatile because the keyboard
+        // path reads it from the hook thread while focus events mutate it on the UI thread.
+        private volatile bool _editorFocused;
+
         public VimModeTracker()
         {
             _bufferClosedDelegate = OnBufferClosed;
@@ -105,6 +114,13 @@ namespace MyExtension
 
         /// <summary>True when the focused editor buffer is in Insert/Replace (typing) mode.</summary>
         public bool IsInTypingMode => _cachedTyping;
+
+        /// <summary>
+        /// True while a code editor text view holds keyboard focus. Sourced event-driven from each
+        /// view's <c>GotAggregateFocus</c>/<c>LostAggregateFocus</c>, so it cannot go stale like a
+        /// cached window-frame selection.
+        /// </summary>
+        public bool IsEditorFocused => _editorFocused;
 
         /// <summary>
         /// Called by the editor for every new code text view (UI thread). We attach focus and
@@ -144,6 +160,9 @@ namespace MyExtension
             // yet it returns null and we simply report not-typing until the next focus change.
             if (sender is ITextView view)
             {
+                _focusedView = view;
+                _editorFocused = true;
+
                 object? buffer = GetBufferForView(view);
                 if (buffer != null)
                 {
@@ -160,7 +179,13 @@ namespace MyExtension
         {
             // Focus left a code editor (e.g. to a tool window): the leader key is safe, so the
             // user is not "typing" in an editor. The tool-window input-mode path is handled
-            // separately by InputHandler.
+            // separately by InputHandler. Only clear the editor-focus flag when the view losing
+            // focus is the one we believe is focused (an out-of-order event must not clear it).
+            if (sender is ITextView view && ReferenceEquals(_focusedView, view))
+            {
+                _editorFocused = false;
+            }
+
             _cachedTyping = false;
         }
 
@@ -170,6 +195,12 @@ namespace MyExtension
             // event (handled in OnBufferClosed) detaches the SwitchedMode subscription.
             if (sender is ITextView view)
             {
+                if (ReferenceEquals(_focusedView, view))
+                {
+                    _focusedView = null;
+                    _editorFocused = false;
+                }
+
                 view.GotAggregateFocus -= OnViewGotFocus;
                 view.LostAggregateFocus -= OnViewLostFocus;
                 view.Closed -= OnViewClosed;

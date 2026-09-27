@@ -395,6 +395,84 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // FocusGuard — tool-window routing decision (pure seam)
+        // ================================================================
+
+        public static void Run_FocusGuard_EditorFocusedBlocksRouting()
+        {
+            // The leak: with stale tool-window state but an editor focused, routing must be off.
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true),
+                "editor-focused tool window must not route keys");
+            Assert.False(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true),
+                "editor-focused action keys must not be interesting");
+        }
+
+        public static void Run_FocusGuard_TreeFocusedAllowsRouting()
+        {
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false),
+                "tree-focused tool window routes keys");
+            Assert.True(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: false),
+                "tree-focused action keys are interesting");
+        }
+
+        public static void Run_FocusGuard_InputModeBlocksActionKeys()
+        {
+            Assert.False(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: true, isInputMode: true, actionKeyCount: 5, editorFocused: false),
+                "input-mode tool window has no action-key pre-filter");
+        }
+
+        public static void Run_FocusGuard_ZeroActionKeysBlocks()
+        {
+            Assert.False(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 0, editorFocused: false),
+                "zero action keys is never interesting");
+        }
+
+        public static void Run_FocusGuard_NonToolWindowBlocks()
+        {
+            Assert.False(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: false, isInputMode: false, actionKeyCount: 5, editorFocused: false),
+                "non-tool-window has no action-key pre-filter");
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false),
+                "non-tool-window routes nothing");
+        }
+
+        public static void Run_FocusGuard_IsTypingTruthTable()
+        {
+            // Editor insert/replace -> typing (leader key must type a space).
+            Assert.True(
+                FocusGuard.IsTyping(isToolWindow: false, isInputMode: false, editorFocused: true, editorInTypingMode: true),
+                "editor insert/replace is typing");
+            // Editor normal -> not typing.
+            Assert.False(
+                FocusGuard.IsTyping(isToolWindow: false, isInputMode: false, editorFocused: true, editorInTypingMode: false),
+                "editor normal is not typing");
+        }
+
+        public static void Run_FocusGuard_IsTypingToolWindowInput()
+        {
+            // Tool window in input mode -> typing regardless of editor state.
+            Assert.True(
+                FocusGuard.IsTyping(isToolWindow: true, isInputMode: true, editorFocused: false, editorInTypingMode: false),
+                "tool-window input mode is typing");
+            // Tool window in normal mode, editor not focused -> not typing.
+            Assert.False(
+                FocusGuard.IsTyping(isToolWindow: true, isInputMode: false, editorFocused: false, editorInTypingMode: false),
+                "tool-window normal mode is not typing");
+        }
+
+        // ================================================================
         // Helpers — DistinctBy, RectCoordinate
         // ================================================================
 

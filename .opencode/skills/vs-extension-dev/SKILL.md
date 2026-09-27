@@ -209,7 +209,7 @@ See **AGENTS.md** for the full picture. Summary:
 - Offline unit tests: `dotnet run --project tests/Telescope.Tests` (56) and
   `dotnet run --project tests/NeoVisual.Tests` (31), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/test-e2e.ps1` (34 scenarios against the experimental
+- Live E2E: `pwsh tools/test-e2e.ps1` (35 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

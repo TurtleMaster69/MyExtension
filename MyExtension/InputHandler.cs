@@ -56,10 +56,33 @@ namespace MyExtension
         /// Solution Explorer's o/r/m/a). Used by the hook's cheap pre-filter so those keys reach
         /// <see cref="HandleKey"/> instead of being skipped as plain typing keys.
         /// </summary>
-        public bool HasToolWindowActionKeys =>
-            _windowManager.IsToolWindow &&
-            _windowManager.CurrentController is { IsInputMode: false } c &&
-            c.ActionKeys.Count > 0;
+        public bool HasToolWindowActionKeys
+        {
+            get
+            {
+                var c = _windowManager.CurrentController;
+                return FocusGuard.HasToolWindowActionKeys(
+                    _windowManager.IsToolWindow,
+                    c?.IsInputMode == true,
+                    c?.ActionKeys.Count ?? 0,
+                    EditorFocusedVeto);
+            }
+        }
+
+        /// <summary>
+        /// Whether the event-driven editor-focus flag should veto tool-window routing. The flag is
+        /// reliable for document editors but NOT for shell-routed text-input tool windows (Command
+        /// Window, Find, ...): their focus transitions never reach <see cref="VimModeTracker"/> (its
+        /// <c>IWpfTextViewCreationListener</c> is not created for them), so the flag can remain stuck
+        /// <c>true</c> while such a window owns the keyboard. A tool window that is a text-input
+        /// surface, or whose controller is in input mode, therefore genuinely owns its surface and is
+        /// trusted regardless of the flag. Navigation tool windows (Solution Explorer) still honor
+        /// it, which is what stops their action keys leaking into a focused editor.
+        /// </summary>
+        private bool EditorFocusedVeto =>
+            _vsVim.IsEditorFocused
+            && _windowManager.CurrentController?.IsInputMode != true
+            && !GeneralToolWindowController.IsTextInputType(_windowManager.Type);
 
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
@@ -246,8 +269,11 @@ namespace MyExtension
                 return _popupNav.TryNavigate(down: key == Keys.N);
             }
 
-            // Tool window: route through its controller's normal/input mode.
-            if (_windowManager.IsToolWindow)
+            // Tool window: route through its controller's normal/input mode — but only while the
+            // tool window actually holds keyboard focus. VS's frame-selection state can lag behind
+            // real WPF focus, so when an editor is focused the key must fall through to VS instead
+            // of being consumed by the (stale) tool-window controller.
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller != null)
@@ -360,7 +386,11 @@ namespace MyExtension
         /// </summary>
         private bool ExitToolWindowInputMode()
         {
-            if (_windowManager.IsToolWindow)
+            // A focused tool-window controller in input mode owns Escape: exit it. This must NOT be
+            // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
+            // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
+            // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)
@@ -380,11 +410,11 @@ namespace MyExtension
         /// </summary>
         private bool IsTyping()
         {
-            if (_windowManager.IsToolWindow)
-            {
-                return _windowManager.CurrentController?.IsInputMode == true;
-            }
-            return _vsVim.IsInTypingMode;
+            return FocusGuard.IsTyping(
+                _windowManager.IsToolWindow,
+                _windowManager.CurrentController?.IsInputMode == true,
+                EditorFocusedVeto,
+                _vsVim.IsInTypingMode);
         }
 
         /// <summary>Builds the canonical shortcut string, e.g. Ctrl+H, Shift+F4, Alt+X.</summary>

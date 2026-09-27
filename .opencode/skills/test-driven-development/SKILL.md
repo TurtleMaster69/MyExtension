@@ -6,7 +6,7 @@ compatibility: opencode
 ---
 # Test-driven development
 
-Red-green-refactor, aligned to this repo's `e2e-test-builder → implementation-planner → build-agent → verification-agent` loop.
+Red-green-refactor, aligned to this repo's loop: `e2e-test-builder` (RED) → `docs-reviewer` initial-plan gate → `implementation-planner` (Build Plan) → `docs-reviewer` build-plan gate → `build-agent` → `debug-agent` (on failure) → `verification-agent` (then verify-time `debug-agent` → re-plan on RED).
 
 ## When to use
 - Implementing any new built-in action / controller / finder.

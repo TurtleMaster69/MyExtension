@@ -227,6 +227,10 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W17: fix the pipeline strings** (Lane: trivial config edit). Added
+  `debug-agent` + both `docs-reviewer` plan gates to `sprint-plan-gate/SKILL.md` step 4,
+  `test-driven-development/SKILL.md`, and `command/hub.md`'s description. **Restart
+  required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W16: review hub only appends to progress.md** (Lane: trivial config edit).
   `neovim_review_hub.md` Hard constraints + Step 4 now state it is APPEND-ONLY and does not
   own `docs/progress.md`; `neovim_hub.md` states the same ownership boundary. **Restart
@@ -889,8 +893,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     ✅ **FIXED 2026-09-27** — `neovim_hub.md` now states the review hub does not own
     `docs/progress.md` (it appends filed findings only, on user approval); the review
     hub's Hard constraints + Step 4 now state append-only, never rewrite.
-17. **W17** — `sprint-plan-gate/SKILL.md:19`, `test-driven-development/SKILL.md:9`,
-    `command/hub.md:2` pipeline strings omit `debug-agent` and the plan gates.
+17. **W17** — pipeline-string drift.
+    ✅ **FIXED 2026-09-27** — `sprint-plan-gate/SKILL.md` step 4, `test-driven-development/SKILL.md`
+    line 9, and `command/hub.md`'s description now include `debug-agent` and the two
+    `docs-reviewer` plan gates.
 18. **W18** — off-by-one "Load all three/both" (`e2e-test-builder.md:21` lists 4;
     `implementation-planner.md:22` lists 3); six Trailmark boilerplate copies lack the
     `uv tool install trailmark` fallback.

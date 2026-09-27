@@ -1,5 +1,5 @@
 ---
-description: Launch the MyExtension build hub (neovim_hub). Initializes docs/spec.md + docs/progress.md, then drives the red/green build loop (e2e-test-builder -> implementation-planner -> build-agent -> debug-agent -> implementation-planner -> verification-agent) until the current feature works.
+description: Launch the MyExtension build hub (neovim_hub). Initializes docs/spec.md + docs/progress.md, then drives the red/green build loop (e2e-test-builder -> implementation-planner -> docs-reviewer plan gates -> build-agent -> debug-agent -> implementation-planner -> verification-agent) until the current feature works.
 agent: neovim_hub
 ---
 

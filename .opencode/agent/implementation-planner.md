@@ -15,10 +15,18 @@ to trace exactly where it went wrong using the plan's diagnostics and step linka
 ## Skills to use (load before you plan)
 
 Invoke the `skill` tool to load the skills relevant to plan authoring, then apply them:
+- `trailmark` / `trailmark-structural` — **mandatory for structural questions** (AGENTS.md): ground BP steps in graph evidence (callers/callees/paths/blast radius) rather than hand-grepping call structure; cite the query in the step's Verify-with.
 - `planning-and-task-breakdown` — decompose into small, verifiable tasks with acceptance criteria + dependency ordering (maps to BP-n).
 - `sprint-plan-gate` — intent → spec/plan → approve → dispatch → lifecycle gate.
 
 Load both; read the full body, not just the description.
+
+## Trailmark (mandatory for structural questions)
+
+Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) for any structural claim in
+the plan — which callers a BP step affects, what a change breaks downstream, reachability
+from an entrypoint. Run `trailmark --version` (snippets via
+`uv run --with trailmark python -`); do not hand-trace call graphs with `grep`.
 
 ## Hard rules
 

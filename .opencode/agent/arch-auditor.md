@@ -4,6 +4,9 @@ mode: subagent
 permission:
   edit: deny
   question: deny
+  task:
+    "*": deny
+    "trailmark-recon": allow
   skill:
     "*": allow
 ---
@@ -15,6 +18,7 @@ modify files — you only read and analyze, then return structured findings.
 ## Skills to use (load BEFORE you start — do not review without them)
 
 Invoke the `skill` tool to load the skills relevant to your slice, then apply them:
+- `trailmark` / `trailmark-structural` — graph-backed structural review of your slice (callers/callees, call paths, blast radius, taint, complexity hotspots). **Mandatory per AGENTS.md**: use Trailmark for any structural claim instead of hand-grepping call relationships; cite the query + result in the finding.
 - `dotnet-code-review` — C# correctness/perf/conventions/architectural-drift checks for this net472 repo.
 - `review-duplication` — structured duplication / missed-reuse investigation (your core job).
 - `dotnet-pinvoke` — P/Invoke signature/marshalling/lifetime review (this repo is P/Invoke-heavy).
@@ -22,6 +26,33 @@ Invoke the `skill` tool to load the skills relevant to your slice, then apply th
 
 Load only the ones that apply to your slice's files; if a slice has no P/Invoke, skip
 `dotnet-pinvoke`. Read each loaded skill's full body, not just its description.
+
+## Structural recon (do this FIRST)
+
+The hub passes you the shared `RECON:` digest in your prompt — consume it and do NOT
+re-run whole-repo recon. You MAY spawn the **`trailmark-recon`** subagent (you have `task`
+permission for that agent ONLY) to get a **slice-scoped** digest for your files when the
+shared digest lacks your slice's traps; do not spawn any other agent. Treat the digest as
+ground truth: it names this repo's proxy share, the empty entrypoint/taint passes, the
+complexity hotspots, and the **false-dead-code traps** (members whose simple-name
+`callers_of` is 0 while real callers sit on `proxy.unresolved:<Type>.<Member>`). Never
+report a member as dead code from a bare `callers_of` 0. If no digest is available and you
+cannot obtain one, run those Trailmark queries yourself (never hand-trace) and note the
+fallback in your findings.
+
+> The nested spawn needs an explicit `task` rule here **and** `subagent_depth >= 2` in the
+> opencode config; if the `task` tool is absent, fall back to running the queries
+> yourself — never fail the audit for want of a digest.
+
+## Trailmark (mandatory for structural questions)
+
+AGENTS.md makes Trailmark mandatory for structural questions. For call relationships,
+blast radius, taint, complexity, or "who calls X / what reaches Y" in your slice, run
+Trailmark (`trailmark --version`; snippets via `uv run --with trailmark python -`) and
+cite the query + result — do NOT hand-trace call graphs with `grep`. Reserve
+`grep`/`glob`/`read` for literal text, non-source files, and single-file lookups where a
+graph adds nothing. Never silently fall back to manual reading (the `trailmark` skill's
+"Rationalizations to Reject" table forbids it).
 
 ## Hard rules
 

@@ -13,11 +13,19 @@ creep, no invented extras, no "improvements" beyond the plan.
 ## Skills to use (load before you build)
 
 Invoke the `skill` tool to load the skills relevant to the plan, then apply them:
+- `trailmark` — structural lookups (callers/callees/paths/reach) before editing; **AGENTS.md makes Trailmark mandatory for structural questions** — do not hand-trace call graphs with `grep`.
 - `dotnet-build-test-diag` — MSBuild failure diagnosis + testability + .NET perf (for the `dotnet build` + unit-test step).
 - `dotnet-code-review` — C# correctness/conventions so the code you write matches the repo (net472, diagnostics-as-contract).
 - `dotnet-pinvoke` — P/Invoke/marshalling/lifetime if the plan touches native interop (SetWindowsHookEx, keybd_event, etc.).
 
 Load only what the plan needs; read the full body, not just the description.
+
+## Trailmark (mandatory for structural questions)
+
+Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) for any structural
+question while implementing — callers/callees, call paths, transitive reach, blast
+radius. Run `trailmark --version` (snippets via `uv run --with trailmark python -`) and
+never hand-trace with `grep`; keep `grep`/`glob` for literal text and non-source files.
 
 ## GATE — you BUILD, you do not debug and you do not verify
 

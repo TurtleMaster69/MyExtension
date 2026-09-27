@@ -226,6 +226,13 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W2: commit the orchestration layer** (Lane: trivial config edit). The
+  vendored Trailmark skill dirs, `.opencode/agent/code-slice-worker.md`,
+  `.opencode/agent/trailmark-recon.md`, and the agent/skill/command/docs edits
+  (A1–A9 integration) are now tracked, so a `git clone`/`git clean` cannot erase the
+  workflow the review hub depends on (M-N3 regression). A8 updated to include
+  `trailmark-recon.md`. No source under `MyExtension/`, `Telescope/`, `tests/` touched.
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W1: `bugfix-no-seam` sub-lane** (Lane: trivial config edit). Added a
   `bugfix (no-seam)` sub-lane to `.opencode/agent/neovim_hub.md` (mirroring the
   harness-only lane) and threaded it into LOOP step 3: when a diagnostic-neutral bug has
@@ -625,8 +632,9 @@ Findings + disposition (A-ids are local to this review; fixes to `.opencode/agen
 7. **A7 (nit) — review hub loaded `trailmark-finding-triage` (a security-triage skill)
    for architecture audits.** ✅ FIXED — dropped from `neovim_review_hub.md`.
 8. **A8 (minor) — the new trailmark skills + `code-slice-worker.md` are untracked
-   (`??`).** A clone/`git clean` would lose them (cf. M-N3). ⏳ OPEN — commit the
-   orchestration layer.
+   (`??`).** ✅ FIXED 2026-09-27 (W2) — committed the orchestration layer, including the
+   vendored Trailmark skill dirs, `code-slice-worker.md`, and `trailmark-recon.md`
+   (the prior list omitted the recon agent). A clone/`git clean` no longer loses them.
 9. **A9 (major) — the trailmark integration broke the blocking doc-ref lint.** The
    committed HEAD had zero Trailmark references; the uncommitted integration added
    `.opencode/skills/trailmark*/` (a glob in backticks the linter treats as a literal
@@ -722,11 +730,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
    `neovim_hub.md` (mirroring the harness-only lane) + threaded into LOOP step 3; RED
    is the named pre-existing known-RED scenario re-confirmed with ONE VS boot before
    BUILD. See the `## Done` entry.
-2. **W2 — the orchestration layer is untracked and can be destroyed.** A8
-   (`docs/progress.md:618`) still OPEN and its list omits `trailmark-recon.md`; `git
-   status` shows the Trailmark skills, `slicing-code-context/`, `code-slice-worker.md`
-   and `trailmark-recon.md` all `??`. A `git clone`/`git clean` erases the integration the
-   review hub depends on (M-N3 regression). Fix: commit the orchestration layer; update A8.
+2. **W2 — the orchestration layer is untracked and can be destroyed.** ✅ **FIXED
+   2026-09-27** — committed the orchestration layer (Trailmark skills, `code-slice-worker.md`,
+   `trailmark-recon.md`, agent/skill/command/docs) and updated A8 to include
+   `trailmark-recon.md`. See the `## Done` entry.
 
 ### Major
 

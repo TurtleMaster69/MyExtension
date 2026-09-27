@@ -15,6 +15,18 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
+## Trailmark (structural queries)
+
+Structural questions — "who calls X", "what reaches Y", "what breaks if I change Z",
+call paths, blast radius, complexity hotspots — MUST be answered with Trailmark, not
+`grep`/manual reading. `AGENTS.md` holds the mandatory pre-flight and the
+**repo-specific traps** (verified 2026-09-27): parse with `language="c_sharp"`;
+cross-class calls resolve to `proxy.unresolved:<Type>.<Member>` nodes, so a bare
+`callers_of` can return 0 for a heavily-called member (never report "dead code" from
+it); and this VSIX has **no detected entrypoints**, so taint / privilege-boundary /
+attack-surface / `trailmark-review-gate` carry no signal — use callers/callees,
+`paths_between`, `reachable_from`, hotspots, and blast radius instead.
+
 ## Architecture
 
 The extension is a single `AsyncPackage` (`MyExtensionPackage`) that installs a

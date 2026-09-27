@@ -1,4 +1,258 @@
-# MyExtension — Architecture Review
+# MyExtension — Workflow Review (`neovim_hub` + subagents)
+
+- **Date:** 2026-09-27
+- **Scope:** the agent workflow itself — `.opencode/agent/*.md`, `.opencode/command/*.md`,
+  the workflow skills under `.opencode/skills/` (sprint-plan-gate, verify-tests-fail-without-fix,
+  audit-verification-gates, TDD, systematic-debugging, code-testing-agent), and the docs the
+  loop coordinates through (`docs/progress.md`, `docs/implementation_plan.md`, `docs/spec.md`,
+  `AGENTS.md`).
+- **Method:** read every agent + skill + workflow doc; `git status`/`git log`; three parallel
+  read-only deep-dives (loop control flow, subagent-contract drift, record hygiene),
+  reconciled and spot-verified against the source files. A prior meta-review
+  (M-M1…M-N6, A1…A10, recorded in `docs/progress.md`) already fixed most orchestration items;
+  this report is **net-new** findings plus items the prior record marks DONE/OPEN that no
+  longer reflect the repo. No source/test/tool file was modified.
+
+## Summary
+
+**21 findings: 2 critical, 11 major, 7 minor, 1 nit.** The loop is well-specified and
+unusually disciplined (structured verdicts, capped evidence, bounds on flakiness, an
+orchestrator-overhead budget), but it has two failure classes. First, the `bugfix` lane has
+**no legal evidence path** for a diagnostic-neutral bug with no hermetic unit seam — the item
+currently in flight (`docs/implementation_plan.md`, `explorer-open-searchbox`) is exactly that
+case, so BUILD can be reached with no fail-first RED. Second, the workflow's guidance is
+**duplicated across 7+ agent files and has drifted**: several agents are told to load
+Trailmark skills (`finding-triage`, `review-gate`) and passes (taint, entrypoints) that
+`AGENTS.md` says carry no signal on this VSIX, and `verification-agent.md` contradicts
+itself. The durable record (`docs/progress.md`) also now contradicts the repo in several
+places (a DONE model-pinning item whose pins were removed; internal scenario/severity/count
+drift), which is dangerous because the hub treats it as the single source of truth.
+
+## Findings table
+
+| id | sev | file:line | problem |
+|----|-----|-----------|---------|
+| W1 | critical | `neovim_hub.md:98-99,139-149`; docs/implementation_plan.md lines 120-146 | `bugfix` lane mandates unit-only RED, but a diagnostic-neutral bug with no unit seam has **no valid RED path** — the in-flight item is this case |
+| W2 | critical | `git status`; `docs/progress.md:618` | Trailmark integration skills + `trailmark-recon.md` are untracked (A8 open; its list is incomplete) — `git clean`/clone destroys the workflow |
+| W3 | major | `verification-agent.md:17,35-38`; `debug-agent.md:17,29`; `docs-reviewer.md:19`; `e2e-test-builder.md:16,26`; `implementation-planner.md:28`; `prompt-rule.md:21` | Agents prescribe Trailmark skills/passes (`finding-triage`, `review-gate`, taint, entrypoints) that `AGENTS.md` says carry **no signal**; `verification-agent` contradicts itself |
+| W4 | major | `neovim_hub.md:86-87,137-138,159-160` | The three review gates have **three different** post-REVISE policies; two have no defined exit after "max 3 rounds" |
+| W5 | major | `neovim_hub.md:159` vs `:291,:367` | "Iteration" is defined as regressions-only everywhere except 4a, which counts plan-review rounds |
+| W6 | major | `neovim_hub.md:200-228`; `verification-agent.md:48-55,88-97` | Flaky-budget (M-M2) is **inert**: the cumulative per-scenario flaky count is never passed to the verifier, so the 3rd-strike reclassification can never fire |
+| W7 | major | `docs/progress.md:524`; commit `4a2ec0b` | M-M4 recorded DONE ("model pinned on all 9") but every pin was removed; the "cheaper model" rationale for nested recon is void |
+| W8 | major | docs/progress.md lines 132-144 vs `neovim_hub.md:91,333,347` | The user feature-triage gate (LazyVim research + ask-user before implementing) is not a hub LOOP step; step 1 can run a queued feature without it |
+| W9 | major | `neovim_hub.md:139-141,161-162,168-171,200-211` | Handoffs omit inputs the subagents' own files require (`unit project(s)`, `final-gate` flag, known-RED allowlist on re-plan) |
+| W10 | major | `neovim_hub.md:173-189,238-243`; `debug-agent.md:68-80`; `verification-agent.md:85-87,101-113` | Deviation adjudication (6b) is unreachable on the verify-time path; debug/verify have no DEVIATION field yet are told to report one |
+| W11 | major | `verification-agent.md:71-77` vs docs/progress.md lines 82-86 | Final gate mandates **concurrent** unit suites, but the recorded harness note says concurrency hits a shared-`obj/` CS2012 lock and "prefer sequential/staggered" |
+| W12 | major | `docs/architecture-review.md:9,15,30,143`; `docs/progress.md:17,71,392,506` | Records contradict reality: the code report re-asserts fixed F1/F16/F45 as open; progress.md self-contradicts on `explorer-open-navigation`, severity totals, F45 counts, meta-review status |
+| W13 | major | commits `a48d597`,`4f36fde`,`1910711`,`114460b` | GREEN commit is non-atomic: source landed in a "WIP … awaiting VERIFY + GREEN" commit, hash was `<pending>`, a false `check-doc-refs PASS` needed a repair commit |
+| W14 | minor | `code-slice-worker.md:2`; `docs/progress.md:611` | `code-slice-worker` + `slicing-code-context` remain orphaned (A5 open) |
+| W15 | minor | `e2e-test-builder.md:40`; `implementation-planner.md:40` vs `neovim_hub.md:141,152` | Handoff mismatch: builders/planners expect the hub to pass conventions; the hub says it deliberately does not |
+| W16 | minor | `neovim_hub.md:15` vs `neovim_review_hub.md:57` | Both hubs declare write access to `docs/progress.md`; the build hub declares sole ownership |
+| W17 | minor | `sprint-plan-gate/SKILL.md:19`; `test-driven-development/SKILL.md:9`; `command/hub.md:2` | Loop pipeline descriptions omit `debug-agent` and the two plan gates — divergent frozen copies |
+| W18 | minor | `e2e-test-builder.md:21`; `implementation-planner.md:22`; 6× agent Trailmark sections | "Load all three/both" while listing 4/3 skills; duplicated Trailmark boilerplate drifted (install fallback missing in 6 copies) |
+| W19 | minor | `docs-reviewer.md:81`; `neovim_hub.md:124` | Known-RED allowlist example cites `neovisual-explorer-open`, which is now green (the real known-RED is `explorer-open-searchbox`) |
+| W20 | nit | `code-testing-agent/SKILL.md:19`; `docs/progress.md:96,111` | Stale unit counts (41/21) in the skill; stale 42/21 in the COMPLETE section |
+| W21 | minor | `tools/check-doc-refs.ps1` (lines 44-52) | `docs/architecture-review.md` is excluded from the doc-ref lint's doc set, so its stale backticked refs (and the F1/F16/F45 drift) are unguarded — the mechanism behind W12 |
+
+## Detailed findings
+
+### W1 (critical) — the `bugfix` lane cannot produce a RED for the in-flight item
+
+- **Where:** `neovim_hub.md:98-99` (bugfix lane: "RED at the unit level only — no e2e RED, no
+  VS boot"), `:112-119` (M-M7 forces the feature lane only on a diagnostic change),
+  `:139-149` (step 3 requires RIGHT-REASON RED before PLAN);
+  docs/implementation_plan.md lines 120-146 (the live item, `Lane: bugfix`).
+- **What:** The plan states "This bugfix has **no unit-test surface** (WPF keyboard focus +
+  DTE window activation) … The builder does **NOT** boot VS for RED" and relies on the
+  scenario being red *from prior runs*. `e2e-test-builder` is therefore handed a lane in which
+  it cannot produce any RED at all, and the hub's own RED gate is bypassed.
+- **Why it bites:** Any diagnostic-neutral bug without a hermetic seam (this focus/DTE bug and
+  most future focus/WPF bugs) reaches BUILD with zero fail-first evidence; the
+  `verify-tests-fail-without-fix` discipline is silently skipped and a stale "prior runs" claim
+  is trusted.
+- **Fix:** Add a `bugfix-no-seam` sub-lane (mirroring the harness-only lane at `:102-106`) that
+  authorizes the pre-existing known-RED scenario as the RED and re-confirms it with one VS boot
+  **before** BUILD, not only at VERIFY.
+
+### W2 (critical) — the workflow is untracked and can be destroyed
+
+- **Where:** `git status` (`??` for `.opencode/skills/trailmark*/`, `slicing-code-context/`,
+  `audit-augmentation/`, `graph-evolution/`, `.opencode/agent/code-slice-worker.md`,
+  `.opencode/agent/trailmark-recon.md`); docs/progress.md lines 618-620.
+- **What:** A8 is still OPEN and its list already omits `trailmark-recon.md`.
+- **Why it bites:** A `git clone` / `git clean -fd` erases the entire Trailmark integration and
+  the recon agent the review hub's Step 1a and the auditors depend on — the same M-N3
+  regression the repo already paid for once.
+- **Fix:** Commit the orchestration layer; update A8 to include `trailmark-recon.md`.
+
+### W3 (major) — prescribed Trailmark skills that `AGENTS.md` says are vacuous (and a self-contradiction)
+
+- **Where:** `AGENTS.md:27-29,54-57` (no entrypoints → taint / privilege-boundary /
+  attack-surface / finding-triage / review-gate carry no signal); `debug-agent.md:17` (loads
+  `trailmark-finding-triage` + "taint evidence"), `:29` ("reachability from an entrypoint");
+  `docs-reviewer.md:19` (`trailmark-review-gate` mandatory); `verification-agent.md:17` loads
+  `trailmark-review-gate`/`graph-evolution` then `:35-38` says the same gate "produce[s] no
+  signal — do not run them" (**self-contradiction**); `e2e-test-builder.md:16,26` and
+  `implementation-planner.md:28` ground work in entrypoint reach; `prompt-rule.md:21` (the
+  authoritative shared rule) lists "taint, privilege boundaries" as required uses.
+- **Why it bites:** A gatekeeper or debugger either wastes budget on no-signal passes or — worse
+  — reads an empty `trailmark diff`/taint result as "nothing changed", producing **false
+  assurance**. The A7 cleanup was applied to the review hub only; the same drift survives in
+  five other agents.
+- **Fix:** Single-source the per-repo Trailmark guidance (one referenced file), drop every
+  no-signal skill from the agent "Skills" lists, and fix the `verification-agent` self-contradiction.
+
+### W4 (major) — three review gates, three post-REVISE policies
+
+- **Where:** spec `neovim_hub.md:86-87,327-328` ("re-review **until APPROVE**"); initial-plan 2a
+  `:137-138` ("fix the plan yourself (max 3 rounds), **then proceed**" but the same paragraph
+  says "Do not start writing tests until … **APPROVED**"); build-plan 4a `:159-160` ("Proceed to
+  BUILD only when **APPROVED**" — no exit if it never approves).
+- **Why it bites:** After 3 REVISE rounds 2a simultaneously permits and forbids continuing
+  (definitional livelock); the spec/build-plan gates have no escalation when APPROVE is never
+  reached.
+- **Fix:** One policy: who fixes, the round cap, and an explicit `question`-tool escalation on
+  exhaustion.
+
+### W5 (major) — the 5-iteration cap is counted two ways
+
+- **Where:** `neovim_hub.md:159` ("re-review (counts toward the 5-iteration cap)") vs
+  `:291,:367` ("real regressions only — flaky/known-RED failures do not count").
+- **Why it bites:** A plan-review REVISE (zero regressions) can silently consume a regression
+  budget, forcing premature escalation, or the hub cannot tell whether it is at 3 or 4.
+- **Fix:** Define "iteration" once and state whether doc-review rounds are excluded.
+
+### W6 (major) — the flaky-budget is unenforceable
+
+- **Where:** `neovim_hub.md:224-228` (M-M2) tells the hub to track `<scenario>: flaky x<N>` and
+  reclassify the 3rd flake a REGRESSION; `verification-agent.md:88-97` tells the **fresh** agent
+  to report the flaky count and do the 3rd-strike reclassification — but its input list
+  (`:48-55`) and hub step 8 (`:200-211`) never pass the **cumulative** count.
+- **Why it bites:** The agent always sees count=1 and can never trigger the 3rd-strike rule,
+  leaving exactly the gameable cap M-M2 was added to close.
+- **Fix:** Pass the Execution-Log flaky counts into step 8 and let the **hub** do the 3rd-strike
+  upgrade.
+
+### W7 (major) — the "single source of truth" has a false entry
+
+- **Where:** `docs/progress.md:524` (M-M4 ✅ DONE with an explicit model-per-agent list); commit
+  `4a2ec0b` "Remove model pins from all agents (inherit session default model)"; `rg "model:"`
+  over `.opencode/agent` returns 0.
+- **Why it bites:** The declared source of truth contradicts the repo, and the task-permission
+  review's "cheaper model" justification for nested recon (`:673,683`) is void — the spawn now
+  adds an LLM turn with no model saving.
+- **Fix:** Mark M-M4 REVERTED/SUPERSEDED citing `4a2ec0b`, record why, and narrow the
+  nested-spawn criterion to context-isolation only.
+
+### W8 (major) — the user feature-approval gate is not enforced by the hub
+
+- **Where:** docs/progress.md lines 132-144 (user instruction: research LazyVim and ASK the user via
+  `question` before implementing any feature) vs `neovim_hub.md:91` (step 1: "Pick the next
+  pending item … and run"), `:333` (asks the user only when the queue is empty), `:347` (limits
+  prompting to "escalation and queue-empty cases").
+- **Why it bites:** Queue items 6-9 (`progress.md:161-225`) can be implemented without the
+  mandated user build-vs-extend-vs-skip decision.
+- **Fix:** Encode the gate as an explicit LOOP step and add it to the allowed-prompt list.
+
+### W9 (major) — handoffs omit inputs the subagents require
+
+- **Where:** `neovim_hub.md:139-141` (step 3), `:161-162` (step 5), `:168-171` (step 6),
+  `:200-211` (step 8) vs `build-agent.md:72-75`, `implementation-planner.md:46-48`,
+  `debug-agent.md:60-62`, `verification-agent.md:69-78`.
+- **Why it bites:** Build/debug/verify must guess which unit project to run (risking a mid-loop
+  full run, contradicting `:305-307`), and a re-planned item can lose its known-RED allowlist and
+  misfile allowlisted failures as regressions.
+- **Fix:** Pass the affected project name(s) + final-gate boolean + allowlist on every relevant
+  handoff.
+
+### W10 (major) — deviation adjudication cannot fire on the verify-time path
+
+- **Where:** `neovim_hub.md:173-189` (6b sits only between build-time DEBUG and RE-PLAN) vs
+  `:238-243` (8a→8b has no 6b); `debug-agent.md:68-80` (no `DEVIATIONS` field);
+  `verification-agent.md:85-87` (can flag a DEVIATION on a pass) but `:101-113` has no DEVIATION
+  slot.
+- **Why it bites:** A verify-time fix that renames a symbol or changes a diagnostic reaches
+  RE-PLAN (and can become GREEN) unadjudicated, violating "RE-PLAN is never entered with an
+  unadjudicated DEVIATION pending".
+- **Fix:** Add a 6b-equivalent before 8b and a `DEVIATIONS:` field to both return formats.
+
+### W11 (major) — concurrent final-gate unit suites conflict with the recorded lock issue
+
+- **Where:** `verification-agent.md:71-77` (mandates CONCURRENT final-gate unit suites) vs
+  docs/progress.md lines 82-86 (concurrent launch hits a shared-`obj/` CS2012 lock; "prefer
+  sequential or staggered").
+- **Why it bites:** The single most expensive gate can intermittently fail on a non-failure,
+  burning verify budget on the item's final step.
+- **Fix:** Stagger (start one, then the other) rather than simultaneous.
+
+### W12 (major) — the durable records contradict current reality
+
+- **Where:** `docs/architecture-review.md:9,15,30,143` (code report still presents F1/F16/F45 as
+  open, "3 live E2E scenarios red", "4 of 25 scenarios known-red"); `docs/progress.md:71` vs
+  `:17,:124` (`explorer-open-navigation` KNOWN-RED/queued vs GREEN DONE); `:392` ("1 critical,
+  15 major, 11 minor (of 46 total)" — sums to 27); `:506,:534` ("8 minor pending") vs `:580`
+  ("COMPLETE"); `:96,:111` (stale 42/21 in the COMPLETE F45 section).
+- **Why it bites:** The hub reads `progress.md` before ordering work and the review report is
+  cited by the build queue — a false "still open"/"still red" record misdirects the next item.
+- **Fix:** Reconcile the records; annotate fixed ids in the review report on each run.
+
+### W13 (major) — the GREEN commit is non-atomic and the GREEN claim was false
+
+- **Where:** `a48d597` ("WIP … mid-item, awaiting VERIFY + GREEN"), `4f36fde` (Done entry read
+  `Commit: <pending>`), `1910711` (hash repair), `114460b` (doc-ref repair).
+- **Why it bites:** The traceability guarantee ("if it breaks later, the summary says where to
+  look") is attached to a WIP commit and needed three follow-ups to become self-consistent.
+- **Fix:** The GREEN commit must be the single source commit, carry its own hash, and be preceded
+  by `check-doc-refs`.
+
+### W14–W20 (minor/nit)
+
+- **W14** `code-slice-worker` + `slicing-code-context` orphaned (A5 open) — wire (with `task` +
+  `subagent_depth ≥ 2`) or delete.
+- **W15** `e2e-test-builder.md:40` / `implementation-planner.md:40` expect the hub to pass
+  conventions, but `neovim_hub.md:141,152` says it deliberately does not.
+- **W16** Both hubs claim `docs/progress.md` write access; state that the review hub only appends
+  filed items.
+- **W17** `sprint-plan-gate`/`test-driven-development`/`command/hub.md` pipeline strings omit
+  `debug-agent` and the plan gates.
+- **W18** Off-by-one "Load all three/both" (`e2e-test-builder.md:21` lists 4;
+  `implementation-planner.md:22` lists 3); duplicated Trailmark boilerplate lacks the
+  `uv tool install trailmark` fallback in 6 agents.
+- **W19** Allowlist example cites `neovisual-explorer-open` (now green) in `docs-reviewer.md:81`
+  and `neovim_hub.md:124`.
+- **W20** `code-testing-agent/SKILL.md:19` says 41/21 vs the actual 56/26; `progress.md:96,111`
+  stale 42/21.
+- **W21** (found while fixing this refresh) `tools/check-doc-refs.ps1` (lines 44-52) scopes the lint to
+  AGENTS.md, the vs-extension-dev SKILL, `docs/spec.md`, `docs/progress.md`, and the agent files —
+  **`docs/architecture-review.md` is not in the set**, so the "single live report" can drift
+  (W12) without the mechanical gate noticing. Not filed into `progress.md` (outside the approved
+  W1–W20 selection) — file on request.
+- **Nits:** `neovim_hub` loads `dispatching-parallel-agents` though the build loop is strictly
+  serial; the Trailmark-review section of `progress.md` is uncommitted working-tree diff.
+
+## Recommendations (ordered by effort/impact)
+
+1. **Close W1 first** — add a `bugfix-no-seam` lane so the current item (and future focus/WPF
+   bugs) has a legal evidence path. Small doc edit; unblocks the in-flight item.
+2. **Fix W3 wholesale** — single-source the per-repo Trailmark guidance, delete no-signal skills
+   from all agent lists, remove the `verification-agent` self-contradiction.
+3. **Reconcile the records (W2, W7, W12, W13, W20)** — commit the untracked integration/recon
+   agent, correct M-M4 and the progress/review contradictions, adopt an atomic GREEN commit.
+4. **Patch the delegation contract (W6, W9, W10)** — pass unit-project/final-gate/allowlist/
+   flaky-count in the hub handoffs and add the missing DEVIATION fields + 6b-before-8b.
+5. **Unify the gates and the cap (W4, W5)** — one post-REVISE/escalation policy and one
+   definition of "iteration".
+6. **Encode the feature-triage gate (W8)** and resolve the minor drift set (W14–W19).
+
+## Filed into progress.md
+
+**Filed on 2026-09-27** (user approval via the `question` tool, selection "All findings
+(W1–W20)"): all 20 findings appended to `docs/progress.md` under a new
+"Workflow review backlog" section for `neovim_hub` to pick up one item at a time.
+
+---
+
+# MyExtension — Architecture Review (code, 2026-09-19)
 
 - **Date:** 2026-09-19
 - **Scope:** full repo — `MyExtension/` (core + `CardinalMovment/` + `ToolWindows/`), `Telescope/`, `tests/`, `tools/`, cross-cutting.

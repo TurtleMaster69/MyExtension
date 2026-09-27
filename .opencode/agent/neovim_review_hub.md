@@ -18,11 +18,29 @@ actionable report.
 ## Skills to use (load before you audit)
 
 Invoke the `skill` tool to load the skills relevant to the audit, then apply them:
+- `trailmark` / `trailmark-structural` — graph-backed structural analysis for every audit slice; callers/callees, call paths, blast radius, complexity hotspots. Mandatory per AGENTS.md — audits must be graph-backed where Trailmark can answer, not hand-grep. **This repo's graph traps are in AGENTS.md ("Repo-specific traps"): parse with `language="c_sharp"`; cross-class calls land on `proxy` nodes so a bare `callers_of` can return 0 for a heavily-called member; there are no detected entrypoints, so taint / privilege-boundary / attack-surface / finding-triage carry no signal — do not load them.** (Do NOT load `trailmark-finding-triage` for architecture audits.)
 - `dispatching-parallel-agents` — fan out the parallel `arch-auditor` slices and reconcile.
 - `perf-investigation` — measurement-first; never report a perf risk without a named bottleneck.
 - `review-duplication` — the cross-slice duplication check (between slices, whole-repo).
 
 Load them when starting an audit; read the full body.
+
+## Trailmark (mandatory for structural questions)
+
+This repo vendors Trailmark (`.opencode/skills/trailmark`) and AGENTS.md makes it
+mandatory for structural questions. Every audit that touches call relationships,
+blast radius, taint, or complexity MUST be graph-backed: boot it (`trailmark --version`,
+install `uv tool install trailmark` if missing; snippets via
+`uv run --with trailmark python -`) and instruct each `arch-auditor` slice to use
+Trailmark queries instead of hand-grepping call relationships. A finding about call
+structure without a Trailmark query behind it is not acceptable evidence.
+
+Run **`trailmark-recon`** once per audit (Step 1a) to produce the shared `RECON:` digest
+and pass it to every arch-auditor — they consume it instead of each re-running recon.
+Per AGENTS.md's Repo-specific traps: parse with `language="c_sharp"`, cross-class calls
+land on `proxy` nodes (a bare `callers_of` 0 is not proof of no callers), and this VSIX
+has **no entrypoints**, so taint / privilege-boundary / attack-surface / finding-triage
+carry no signal here.
 
 ## Prompt rule (MANDATORY)
 
@@ -74,27 +92,51 @@ intended architecture — judge the code against it) and
 in-flight work as a bug). Check `docs/architecture-review.md` if it exists (you're
 refreshing it). Missing `docs/` files are fine — read what exists.
 
-### Step 1 — Spawn parallel auditors
-Use the `task` tool to launch **`arch-auditor` subagents in parallel**, one per slice.
-Give each auditor: (a) its slice path list, (b) the full seed checklist below,
-(c) the relevant conventions (net472, UI-thread, VsVim interop, diagnostics contract),
-and (d) the expected return format. Launch all slices in a single batched message.
+### Step 1 — Recon, then spawn parallel auditors
 
-Slices:
-- **A** `MyExtension/` core: `GlobalKeyboardHook.cs`, `InputHandler.cs`, `KeybindingConfig.cs`,
-  `VimModeTracker.cs`, `PopupNavigation.cs`, `WindowManager.cs`, `BlockCaretAdornment.cs`,
-  `KeyInjection.cs`, `MyExtensionPackage.cs`, `TelescopeCommand.cs`, `ToolWindowTypeResolver.cs`
+**1a — Structural recon (ONCE).** Before spawning the auditors, dispatch the
+**`trailmark-recon`** subagent one time (whole-repo, no slice focus) and capture its
+`RECON:` digest. This is the shared structural ground truth (proxy share, empty
+entrypoint/taint passes, complexity hotspots, high-blast-radius count), so the five
+auditors do not each rediscover it. Do NOT have every auditor re-run recon.
+
+**1b — Spawn the auditors.** Use the `task` tool to launch **`arch-auditor` subagents in
+parallel**, one per slice. Give each auditor: (a) its slice path list, (b) the full seed
+checklist below, (c) the relevant conventions (net472, UI-thread, VsVim interop,
+diagnostics contract), (d) the expected return format, and (e) the `trailmark-recon`
+digest from 1a verbatim, so it consumes that instead of re-running whole-repo recon.
+
+Each arch-auditor MAY spawn `trailmark-recon` itself for a **slice-scoped** digest — it
+has a `task` rule for that agent ONLY. That nested spawn requires TWO things at startup:
+(a) the explicit `task` rule in `arch-auditor.md`, and (b) `subagent_depth >= 2` in the
+opencode config (the depth guard counts the caller's ancestors and fails at
+`h >= subagent_depth`; with the default `1`, child sessions get no `task` tool and the
+spawn degrades silently). If the `task` tool is absent, the auditor runs the recon queries
+itself — never fail the audit for want of a digest. Launch all slices in a single batched
+message.
+
+Slices (regenerate these file lists by enumerating each directory at dispatch time — do
+NOT trust a hand-maintained list; the last hand list had drifted and missed 12 files,
+including all three new finders and the `IFinder`/`IQueryFinder` seams):
+- **A** `MyExtension/` core: `GlobalKeyboardHook.cs`, `InputHandler.cs`, `InjectedKeyGuard.cs`,
+  `KeybindingConfig.cs`, `VimModeTracker.cs`, `PopupNavigation.cs`, `WindowManager.cs`,
+  `BlockCaretAdornment.cs`, `KeyInjection.cs`, `MyExtensionPackage.cs`, `TelescopeCommand.cs`,
+  `ToolWindowTypeResolver.cs`
 - **B** `CardinalMovment/`: `WindowMatrix.cs`, `WindowControlAdapter.cs`, `IVsFrameView.cs`,
   `IVsUIWindowFrameExtractor.cs`, `UtilityMethods.cs`, `CardinalNavigationConstants.cs`,
   `RectCoordinate.cs`, `LinqExtensionMethods.cs`
 - **C** `MyExtension/ToolWindows/`: `IToolWindowController.cs`, `GeneralToolWindowController.cs`,
-  `TextInputToolWindowController.cs`, `SolutionExplorerController.cs`, `TextMotionHelper.cs`
-- **D** `Telescope/`: `TelescopeController.cs`, `TelescopeOverlay.cs`, `OverlayKeyHandler.cs`,
-  `TextMotionNavigator.cs`, `SyntaxHighlighter.cs`, `ResultsFormatter.cs`, `FzfFilter.cs`,
-  `FileFinder.cs`, `CodeIssuesFinder.cs`, `CodeIssue.cs`, `ProjectFiles.cs`,
-  `NeoVisualLog.cs`, `LogFileWriter.cs`, `NeoVisualTraceListener.cs`
+  `TextInputToolWindowController.cs`, `SolutionExplorerController.cs`, `HierarchyResolver.cs`,
+  `TextMotionHelper.cs`
+- **D** `Telescope/` (enumerate the whole folder): `TelescopeController.cs`, `TelescopeOverlay.cs`,
+  `TelescopeFinder.cs`, `IQueryFinder.cs`, `OverlayKeyHandler.cs`, `TextMotionNavigator.cs`,
+  `SyntaxHighlighter.cs`, `ResultsFormatter.cs`, `FzfFilter.cs`, `FileFinder.cs`,
+  `CodeIssuesFinder.cs`, `CodeIssue.cs`, `GrepFinder.cs`, `GrepHit.cs`, `ReferencesFinder.cs`,
+  `ReferenceHit.cs`, `ImplementationFinder.cs`, `ImplementationHit.cs`, `ProjectFiles.cs`,
+  `DiagnosticLog.cs`, `NeoVisualLog.cs`, `LogFileWriter.cs`, `NeoVisualTraceListener.cs`
 - **E** `tests/` + `tools/`: `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs`,
-  `tools/test-e2e.ps1`, `tools/iterate-telescope.ps1`, `tools/dte-command.ps1`
+  `tools/test-e2e.ps1`, `tools/iterate-telescope.ps1`, `tools/dte-command.ps1`,
+  `tools/check-doc-refs.ps1`
 - **F** Cross-cutting (YOUR job, not an auditor): duplication BETWEEN slices, whole-repo
   perf hazards, net472/BCL consistency, namespace/folder hygiene, log-format drift across
   the two projects, hook-path cost.

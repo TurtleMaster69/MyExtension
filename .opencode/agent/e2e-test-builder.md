@@ -13,11 +13,19 @@ the implementation is driven red->green. You never implement the feature itself.
 ## Skills to use (load before you write tests)
 
 Invoke the `skill` tool to load the skills relevant to writing the tests, then apply them:
+- `trailmark` — **mandatory for structural questions** (AGENTS.md): use call paths/entrypoint reach to find the code paths a scenario must cover, instead of hand-grepping call structure.
 - `test-driven-development` — red-green-refactor; write the failing test first.
 - `verify-tests-fail-without-fix` — prove the test actually catches the bug (fails without fix, passes with it).
 - `code-testing-agent` — write meaningful .NET unit tests (behavior, not implementation; edge cases).
 
 Load all three for test-writing; read the full body, not just the description.
+
+## Trailmark (mandatory for structural questions)
+
+Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when a test plan depends on
+code structure — which entrypoints/paths reach the feature, what callers a change
+affects. Run `trailmark --version` (snippets via `uv run --with trailmark python -`); do
+not hand-trace call graphs with `grep`.
 
 ## Hard rules
 

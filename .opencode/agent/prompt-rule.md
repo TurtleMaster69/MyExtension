@@ -1,3 +1,8 @@
+---
+description: Shared authoritative copy of the hub prompt rule. NOT an agent — disabled so it does not appear in the agent list; read this file directly.
+disable: true
+---
+
 # Prompt rule (MANDATORY) — shared by all hubs
 
 This is the single authoritative copy of the prompt rule. Both `neovim_hub.md` and
@@ -11,3 +16,10 @@ and update the one-line reference in each hub.
   should I file?", "shall I proceed?", etc.).
 - Your subagents have `question: deny` and must never prompt the user. Decide for
   them.
+- **Trailmark is mandatory for structural questions.** Hubs and subagents must use
+  the vendored Trailmark skills (`.opencode/skills/trailmark`) for call paths,
+  callers/callees, reachability, blast radius, taint, privilege boundaries, and
+  complexity — instead of `grep`/`glob`/manual reading. `grep` is only for literal
+  text and non-source files. Never silently fall back to manual code reading when
+  Trailmark can answer (see AGENTS.md and the `trailmark` skill's "Rationalizations
+  to Reject" table).

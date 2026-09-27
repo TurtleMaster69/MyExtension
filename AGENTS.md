@@ -13,6 +13,50 @@ via `MyExtension.slnx`.
 More detailed architecture lives in `.opencode/skills/vs-extension-dev/SKILL.md`;
 read it before making changes. This file only covers what's easy to get wrong.
 
+## Trailmark is mandatory for structural code questions
+
+This repo vendors the [Trail of Bits Trailmark](https://github.com/trailofbits/trailmark)
+plugin (skills `trailmark`, `trailmark-structural`, `trailmark-summary`,
+`trailmark-finding-triage`, `trailmark-review-gate`, `graph-evolution`, etc. — see
+`.opencode/skills/trailmark`). Trailmark parses C# (net472) code into a queryable
+graph of functions/calls. **Every agent, hub, and subagent MUST use Trailmark instead
+of `grep`/`glob`/manual reading for anything it can answer better.**
+
+- **Required** (do NOT hand-trace with grep): call paths (`paths_between`),
+  callers/callees (`callers_of`/`callees_of`), transitive reach
+  (`ancestors_of`/`reachable_from`), entrypoint reachability
+  (`entrypoint_paths_to`), blast radius, taint propagation, privilege boundaries,
+  complexity hotspots, subgraph/edge queries, structural diffs, attack surface,
+  "who calls X" / "what does Y reach" / "what breaks if I change Z".
+- **`grep`/`glob`/`Read` are only for what Trailmark cannot do**: literal text and
+  strings; non-source files (JSON, Markdown, `.csproj`, docs, scripts); a single known
+  file/line lookup where a graph adds nothing.
+- **Pre-flight**: `trailmark --version` (or `uv run trailmark --version`). If missing,
+  install with `uv tool install trailmark` — **never silently fall back to manual
+  code reading** (the `trailmark` skill's "Rationalizations to Reject" table forbids it).
+- **Python snippets** run via `uv run --with trailmark python -` (a `uv tool` env is
+  not importable). Always run `engine.preanalysis()` before consuming blast-radius /
+  taint / privilege-boundary / subgraph data.
+- **Version gate**: this repo's CLI is 0.5.0. Gate v0.4+/v0.5+ APIs by reported
+  version (note: v0.5 adds no new QueryEngine methods, so `hasattr()` cannot detect
+  it). Read the full `trailmark` SKILL.md body before relying on a version-gated call.
+- **Repo-specific traps (verified 2026-09-27 — do not report these as findings):**
+  1. **Always parse with `language="c_sharp"`.** The CLI defaults `--language`
+     to `python`, so a bare `trailmark analyze`/`trailmark diff` silently returns an
+     empty graph/diff on this repo.
+  2. **Cross-class calls become `proxy` nodes.** 485 of 1083 nodes are
+     `proxy.unresolved:<Type>.<Member>`; callers attach to the proxy, not the real
+     method. `callers_of("KeyInjection.Press")` returns **0** even though 6 in-repo
+     callers exist. A `0`-caller result on a public/static member is **SUSPECT** —
+     query the `proxy.unresolved:<Type>.<Member>` id, or cross-check `callees_of`
+     from the caller side. **Never report "dead code / no callers" from a bare
+     `callers_of` 0.**
+  3. **No detected entrypoints.** This is a VSIX, so `entrypoints`,
+     `entrypoint_paths_to`, `tainted`, `privilege_boundary`, and `attack_surface` are
+     all empty. Do NOT load `trailmark-finding-triage` / `trailmark-review-gate` /
+     `graph-evolution` expecting signal here. Use `callers_of`/`callees_of`,
+     `paths_between`, `reachable_from`, `complexity_hotspots`, and blast radius.
+
 ## Build & run
 
 - `dotnet build` (or build in VS). This is a VSIX — a plain `dotnet run` does not work.

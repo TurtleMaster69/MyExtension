@@ -14,12 +14,20 @@ reported. You are NOT the build agent and NOT the verification agent.
 ## Skills to use (load BEFORE you start)
 
 Invoke the `skill` tool to load the skills relevant to the failure, then apply them:
+- `trailmark` / `trailmark-finding-triage` — **mandatory for structural isolation** (AGENTS.md): use call paths/reach (`paths_between`, `ancestors_of`, `callers_of`) and taint evidence to isolate WHICH layer/flow is implicated instead of hand-grepping call relationships.
 - `systematic-debugging` — reproduce → isolate → root-cause → fix → regression (always).
 - `debugging-and-error-recovery` — isolate WHICH layer failed (overlay/hook/controller/VsVim mode/harness) + WHERE and WHAT caused it (use for e2e failures).
 - `dotnet-build-test-diag` — build/test failure diagnosis.
 - `dotnet-pinvoke` — native-boundary bugs (AccessViolation / marshalling) if the failure is P/Invoke-related.
 
 Load the ones that fit the failure type; read the full body, not just the description.
+
+## Trailmark (mandatory for structural questions)
+
+Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when the failure hinges on
+call structure — which callers reach the broken path, what a change breaks downstream,
+reachability from an entrypoint. Run `trailmark --version` (snippets via
+`uv run --with trailmark python -`); do not hand-trace call graphs with `grep`.
 
 ## Hard rules
 

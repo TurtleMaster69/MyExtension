@@ -226,6 +226,10 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W11: stagger the final-gate unit run** (Lane: trivial config edit).
+  `verification-agent.md` step 4 now runs the two unit projects staggered/sequentially
+  (never simultaneous) per the recorded shared-`obj/` CS2012 lock note; treats a CS2012 as
+  a lock flake. **Restart required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W10: deviation adjudication on the verify path + DEVIATION return fields**
   (Lane: trivial config edit). `neovim_hub.md` gained a verify-time ADJUDICATE DEVIATIONS
   step (new 8b, before the re-plan which is now 8c); `debug-agent.md` returns a
@@ -824,9 +828,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     added a verify-time ADJUDICATE DEVIATIONS step (8b) before the verify-time re-plan
     (8c), and added a `DEVIATIONS FROM PLAN:` field to `debug-agent.md`'s return format and
     a `DEVIATIONS:` slot to `verification-agent.md`'s return format.
-11. **W11 — concurrent final-gate unit suites.** `verification-agent.md:71-77` mandates
-    concurrency; docs/progress.md lines 82-86 records a shared-`obj/` CS2012 lock and says prefer
-    sequential/staggered. Fix: stagger the two projects.
+11. **W11 — concurrent final-gate unit suites.** ✅ **FIXED 2026-09-27** —
+    `verification-agent.md` step 4 now runs the two unit projects staggered/sequentially
+    (never simultaneous), per the recorded shared-`obj/` CS2012 lock note; a CS2012 is
+    treated as a lock flake (re-run once).
 12. **W12 — records contradict reality.** The code report (`docs/architecture-review.md` original
     section) re-asserts fixed F1/F16/F45; `docs/progress.md:71` vs `:17,:124`
     (`explorer-open-navigation`), `:392` (severity sums to 27, "of 46"), `:506,:534` vs `:580`

@@ -70,14 +70,15 @@ authoritative input list.) Do:
    — there is ONE VS instance.
 4. Run the offline unit suite(s) the hub specifies: the affected project(s) during
    the loop; both projects only when the hub says it is the item's final gate.
-   **M-M6 concurrency:** when BOTH projects are requested (the item's final gate),
-   run them CONCURRENTLY — the two `dotnet run` projects (`tests/Telescope.Tests`,
-   `tests/NeoVisual.Tests`) are independent (different assemblies, no shared
-   mutable state) and share no VS instance. Start both and wait for both (e.g.
-   `Start-Job` / two background processes), then collect each verdict. Do NOT run
-   them one-after-the-other; the final gate is the single most expensive step and
-   sequential adds ~1-2 min. When only ONE project is affected (loop-time), run it
-   directly — there is no benefit to parallelizing a single process.
+   **Unit-run policy (W11 — STAGGERED, never simultaneous):** the two `dotnet run`
+   projects both compile the shared `Telescope.csproj` into the same `obj/` path, so a
+   truly concurrent launch can hit a build-output lock (CS2012; Defender occasionally
+   locks `Telescope.dll`) — recorded in `docs/progress.md`. When BOTH projects are
+   requested (the item's final gate), run them **staggered / sequentially**: finish the
+   first (or start the second only after the first stops compiling), then run the
+   second; collect each verdict. A CS2012 on either is a lock flake, not a test
+   failure — re-run once before reporting. When only ONE project is affected
+   (loop-time), just run it.
 5. If anything fails, dig into the log files under `log/` and extract the exact
    failing assertion and the relevant log line(s). Identify the most likely root
    cause from the code (read the relevant source read-only) — but do not fix it.

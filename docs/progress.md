@@ -283,7 +283,7 @@ Top of the queue, in priority order:
   `ReturnFocusToTree`'s bounded-Escape loop + `FirstPathMatching`, then
   `SelectFirstSourceFile`'s direct `editor-view-opened` emission (the D1 fix).**
   Doc sync: spec.md seed-leak section, AGENTS.md/SKILL.md counts (Telescope 56,
-  NeoVisual 31). Commit: (recorded below)
+  NeoVisual 31). Commit: `7390e9d`
   - **D1 (ACCEPT):** `g` emits the existing `editor-view-opened file=` literal directly
     (activating an already-open view raises no `TextViewCreated` — the plan's premise was
     false); this fixed the full-suite `explorer-open-navigation` fail-twice.

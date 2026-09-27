@@ -227,10 +227,46 @@ function Assert-VsFocused([object]$vs, [string]$what) {
     }
 }
 
+function Get-ForegroundTitle([object]$vs) {
+    # Return the foreground window's TITLE text (or '' when there is no foreground window). The
+    # overlay sets Title = "Telescope" (still its window text even with WindowStyle.None), so this
+    # distinguishes the overlay HWND from the VS main window HWND (same process id).
+    $h = [Win32.Fg]::GetForegroundWindow()
+    if ($h -eq [IntPtr]::Zero) { return '' }
+    $sb = New-Object System.Text.StringBuilder 256
+    [Win32.Fg]::GetWindowText($h, $sb, $sb.Capacity) | Out-Null
+    return $sb.ToString()
+}
+
+function Wait-OverlayForeground([object]$vs, [int]$maxMs = 5000) {
+    # POSITIVE bounded wait for a MATERIALISED state: the OS foreground window must be the overlay
+    # itself — same PID as the experimental VS instance AND window text "Telescope". A PID-only
+    # check also passes for the VS main window (same process), the exact defect that let injected
+    # Enter race OS activation. Waits for the observable foreground-title change, never an absence
+    # timer and never a fixed sleep. Returns $true once the state holds, $false on timeout.
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
+        $h = [Win32.Fg]::GetForegroundWindow()
+        if ($h -ne [IntPtr]::Zero) {
+            $pid2 = 0
+            [Win32.Fg]::GetWindowThreadProcessId($h, [ref]$pid2) | Out-Null
+            if ([int]$pid2 -eq $vs.Id -and (Get-ForegroundTitle $vs) -eq 'Telescope') { return $true }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    return $false
+}
+
 function Assert-OverlayFocused([object]$vs) {
-    # The overlay is modal and owns focus while open; verify we are not about to type into the
-    # editor underneath. A foreground window that is NOT our VS instance means the overlay closed.
+    # The overlay is modal and owns focus while open, BUT it shares the VS process id, so a
+    # PID-only check passes for the VS MAIN window too (the exact defect that let injected Enter
+    # race OS activation). Require the foreground HWND to be the ACTUAL overlay: same PID AND
+    # window text "Telescope". This is a materialised-state gate (no timer), not an absence check.
     Assert-VsFocused $vs 'Telescope overlay should own focus'
+    if (-not (Wait-OverlayForeground $vs 5000)) {
+        $title = Get-ForegroundTitle $vs
+        throw "foreground window is not the Telescope overlay after 5000 ms (foreground title: '$title', expected 'Telescope')"
+    }
 }
 
 function Get-ActiveDocumentPath([int]$devenvPid) {
@@ -284,8 +320,10 @@ function Open-Telescope([object]$vs, [string]$logPath) {
         # overlay, not in the editor underneath.
         if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Files" 15000) -and
             (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
-            Assert-OverlayFocused $vs
-            return
+            if (Wait-OverlayForeground $vs 5000) {
+                Assert-OverlayFocused $vs
+                return
+            }
         }
         Start-Sleep -Milliseconds 1000
     }
@@ -304,8 +342,10 @@ function Open-TelescopeIssues([object]$vs, [string]$logPath) {
         Send-Tap 0x44;                                             # D
         if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Issues" 15000) -and
             (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
-            Assert-OverlayFocused $vs
-            return
+            if (Wait-OverlayForeground $vs 5000) {
+                Assert-OverlayFocused $vs
+                return
+            }
         }
         Start-Sleep -Milliseconds 1000
     }
@@ -325,8 +365,10 @@ function Open-TelescopeReferences([object]$vs, [string]$logPath) {
         Send-Tap 0x52;                                             # R
         if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=References" 15000) -and
             (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
-            Assert-OverlayFocused $vs
-            return
+            if (Wait-OverlayForeground $vs 5000) {
+                Assert-OverlayFocused $vs
+                return
+            }
         }
         Start-Sleep -Milliseconds 1000
     }
@@ -347,8 +389,10 @@ function Open-TelescopeGrep([object]$vs, [string]$logPath) {
         Send-Tap 0x47;                                             # G
         if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Grep" 15000) -and
             (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
-            Assert-OverlayFocused $vs
-            return
+            if (Wait-OverlayForeground $vs 5000) {
+                Assert-OverlayFocused $vs
+                return
+            }
         }
         Start-Sleep -Milliseconds 1000
     }
@@ -370,8 +414,10 @@ function Open-TelescopeImplementation([object]$vs, [string]$logPath) {
         Send-Tap 0x49;                                             # I
         if ((Wait-NewLogLine $logPath "$($script:PfxTel)open finder=Implementation" 15000) -and
             (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 5000)) {
-            Assert-OverlayFocused $vs
-            return
+            if (Wait-OverlayForeground $vs 5000) {
+                Assert-OverlayFocused $vs
+                return
+            }
         }
         Start-Sleep -Milliseconds 1000
     }
@@ -1535,7 +1581,11 @@ Register-Scenario 'telescope-implementation' {
     Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Shape\.cs" 'preview loaded the implementation file'
     Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=2" 'preview caret jumped to the implementation line'
 
-    # Step 5: Enter opens the file at the SPECIFIC pinned implementation line (line 2).
+    # Step 5: Enter opens the file at the SPECIFIC pinned implementation line (line 2). This is
+    # the only finder that injects Enter with no intervening typing, so gate it explicitly on the
+    # overlay being the REAL OS foreground window (PID + window text "Telescope") — not just the
+    # VS PID, which also matches the main window and let Enter race OS activation.
+    Assert-OverlayFocused $vs
     Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
     Assert-NewLogLine $logPath "$($script:PfxTel)opened implementation: file=.*Shape\.cs line=2" 'Enter opened the implementation at line 2'
 
@@ -1860,7 +1910,7 @@ public static class KbInject
     }
 }
 '@ -Language CSharp
-Add-Type -Namespace Win32 -Name Fg -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);'
+Add-Type -Namespace Win32 -Name Fg -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);'
 Add-Type -Namespace Win32 -Name Kbd -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'
 
 # ---------------------------------------------------------------------------

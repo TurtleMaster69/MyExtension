@@ -1,77 +1,91 @@
-# Implementation Plan — Item: Stop the Solution Explorer action keys leaking into the editor
+# Implementation Plan — Item: `telescope-implementation` intermittent injected-Enter loss
 
-> **Lane: bugfix (no-seam).** A registered live scenario
-> (`neovisual-explorer-move`) passes, but the **user observed a real leak**: with the
-> Solution Explorer **not** focused, pressing `m` (`o`/`r`/`a` likewise) is consumed by
-> `SolutionExplorerController` and typed into the focused **editor** — in VsVim normal
-> mode that re-enters the editor's own `m` motion/operator chain, producing a typed
-> storm (observed `ljoljoljoljoljo` written into a seeded file; log evidence
-> `log/79-neovisual-exp.log` 15:30:29.338 `[Hook] key=M` → `solution-explorer move`).
+> **Lane: bugfix.** Existing behaviour is intermittently broken (a registered live
+> scenario fails 2/2 in some runs, passes in others). The fix changes **NO**
+> `[Telescope]`/`[NeoVisual]` diagnostic line and **NO** diagnostic-format contract
+> (M-M7 NOT triggered) — it is verified through the EXISTING contract
+> (`implementations gathered count=N` → `open finder=Implementation candidates=N` →
+> `opened implementation: file=… line=…`).
 >
-> The defect is a **focus misclassification** (VS window-frame state vs real WPF
-> keyboard focus). The live focus *events* have no hermetic unit surface, but the fix
-> extracts a pure `FocusGuard` decision helper that DOES. Per the `bugfix (no-seam)`
-> sub-lane, RED is satisfied by re-confirming the named pre-existing RED/gap with **ONE
-> VS boot BEFORE BUILD** plus the stated partial no-unit-test reason. **M-M7 HARD TRIGGER:
-> NOT triggered** — no `[Telescope]`/`[NeoVisual]` log line or format change is added.
+> Lighter lane: skip the initial-plan REVIEW (2a); RED has no NEW unit surface (see
+> RED evidence); VERIFY runs the affected e2e scenario(s) + the affected unit project.
 
 ---
 
-**Goal:** `SolutionExplorerController` (and the `InputHandler` routing that reaches it)
-must **only** consume/handle Solution Explorer action keys (`o`, `Enter`, `r`, `m`, `a`,
-`g`, hjkl arrow moves, and the search-box `i`/text motions) when the Solution Explorer
-already holds focus. When an editor (or any other surface) holds keyboard focus, those
-keys must **fall through to VS** and reach that surface — never be swallowed, never
-injected into the tree.
+**Goal:** `telescope-implementation` must pass **deterministically**, not ~50% of the
+time. The gather + preview are correct every run; the failure is that the injected
+**Enter never reaches the overlay** (`[Telescope] opened implementation:` never fires,
+and usually no `[Telescope] key=Return mode=insert handled=True` appears at all).
 
 ---
 
-## Root cause (verify live before BUILD)
+## Root cause (CONFIRMED by the DEBUG step — layer: **HARNESS**, not a product bug)
 
-`InputHandler.HandleKey` routes tool-window keys whenever
-`_windowManager.IsToolWindow` is true (`InputHandler.cs:250`), and
-`HasToolWindowActionKeys` (`:59`) keeps `m`/`o`/`r`/`a` "interesting" for the hook
-pre-filter (`GlobalKeyboardHook.cs:169`). `IsToolWindow` is derived from VS's
-**window-frame selection** event (`WindowManager.OnWindowFocusChanged`, `:88-115`),
-which is **not** the same as WPF keyboard focus: after a document is activated the
-frame state can still report the Solution Explorer tool window (or lag), so
-`controller.TryMove(Keys.M)` runs `MoveSelected()` and `KeyInjection.Press` fires the
-VS Move command / the key is consumed — while the editor owns the keyboard.
+The overlay's `[Telescope] Focus prompt => True, mode=insert` line is logged from WPF
+`Activated` / `ContentRendered` (WPF **logical** focus — `TelescopeOverlay.cs:210-221` →
+`FocusPrompt()`), but at that instant the overlay's **HWND is not yet the OS foreground
+window**. `Assert-OverlayFocused` (`tools/test-e2e.ps1:230-234`) only checks that the
+foreground window belongs to the VS **process id** — it cannot tell the overlay HWND
+from the VS main-window HWND (same PID) — so it passes, and the harness injects
+`VK_RETURN` before OS activation completes. The key is consumed by the VS main window
+and never reaches the overlay's `PreviewKeyDown`.
 
-Symptom: with an editor focused, `m`/`o`/`r`/`a` do **not** reach the editor; instead a
-tree action fires (and in the storm case the key text lands in the document).
+**Proof** (temporary probe, since reverted): immediately before the Step-5 Enter the
+foreground HWND title was the VS main window (`TelescopeTest - IShape.cs - …
+Experimental Instance`); ~800 ms AFTER the Enter it became `Telescope` (the overlay).
+So Enter was delivered to the wrong window.
+
+**Why `telescope-implementation` specifically:** it is the only finder that injects
+Enter with **no intervening typing/wait** after the overlay opens. Other finders type a
+query first (~360 ms of `Send-Text`), which masks the activation race.
+
+Implicated sites (harness side):
+- `tools/test-e2e.ps1:230-234` — `Assert-OverlayFocused` is PID-only (the defect).
+- `tools/test-e2e.ps1:358-379` (`Open-TelescopeImplementation`) and the sibling
+  `Open-Telescope*` helpers — they `return` right after the two `Wait-NewLogLine`s and a
+  PID-only `Assert-OverlayFocused`, so the caller's Enter races OS activation.
+- `tools/test-e2e.ps1:1533-1540` — the scenario's Step-5 Enter.
+
+Product-side (unchanged, context only): `Telescope/TelescopeOverlay.cs:210-221`
+(`Activated`/`ContentRendered` → `FocusPrompt`; focus log `:562`, key log `:931-934`)
+and `MyExtension/GlobalKeyboardHook.cs:215-222` (`IsVisualStudioFocused` is also
+PID-only — the hook correctly acts on any window of *this* VS process; the overlay's own
+`PreviewKeyDown` consumes the key once the overlay is foreground). Trailmark
+(`callers_of`) confirms `FocusPrompt` is invoked from the WPF `Activated`/`ContentRendered`
+handlers in the `TelescopeOverlay` ctor and from `ApplyAction`, and that
+`IsVisualStudioFocused` is called only by `HookCallback` — no product change is warranted.
+
+**Plan corrections folded in (found by the debug-agent):**
+1. `[Hook] key=Return …` **cannot exist** — `Keys.Return` is not in
+   `GlobalKeyboardHook.IsInteresting` (`:174-189`). The real existing pass line is
+   `[Telescope] key=Return mode=insert handled=True` (`TelescopeOverlay.cs:931-934`).
+   A2 uses that line.
+2. The earlier approach text ("reuse the existing `Assert-OverlayFocused` semantics")
+   overestimated that helper — it only checks the PID. The fix must **strengthen** it
+   (or add a real overlay-window check).
 
 ## Approach
 
-Gate every Solution Explorer action on **real keyboard focus**, sourced from state the
-extension already tracks **event-driven** (so it cannot go stale like the cached
-frame-selection flag):
+**Chosen (minimal, harness-only): make the overlay-focus gate assert the ACTUAL overlay
+window, and gate the Enter on that *materialised* state.**
 
-1. **Editor-focus truth (`VimModeTracker.IsEditorFocused`).** `VimModeTracker` already
-   subscribes to every code view's `GotAggregateFocus`/`LostAggregateFocus` (the same
-   events that gate the typing/leader logic). Cache that as a volatile
-   `IsEditorFocused` flag: if an editor text view currently holds keyboard focus, no
-   tool window does — so `m`/`o`/`r`/`a`/hjkl must fall through, never route to the SE
-   controller. This is why the guard cannot go stale: focus events arrive on the UI
-   thread whenever focus moves, with no polling and no dependence on the frame-selection
-   cache.
-2. **Pure decision helper (`FocusGuard`).** Extract the routing truth table into a
-   dependency-free class (`OverlayKeyHandler`/`HierarchyResolver` pattern) so it is
-   unit-testable: `HasToolWindowActionKeys`, `ShouldRouteToolWindowKey`, `IsTyping`.
-3. **Gate the routes in `InputHandler`:** the `HasToolWindowActionKeys` pre-filter
-   (consumed by `GlobalKeyboardHook.IsInteresting`), the tool-window routing branch, the
-   Escape/exit-input path, and `IsTyping()` all consult `FocusGuard`. When an editor is
-   focused, `m` is not even "interesting", nothing reaches `controller.TryMove`, and the
-   key falls through to VS — it cannot inject the Move command and cannot focus the SE
-   search box.
-4. **Deterministic fault-injection seam (`WindowManager`).** A test-only sentinel file
-   (under `NEOVISUAL_LOG_DIR`, absent in normal runs) makes `WindowManager` report the
-   SE frame as current even when it is not — the exact stale state the user hit — so the
-   e2e regression pair can reproduce the leak on demand without timing.
+`Assert-OverlayFocused` / the `Open-Telescope*` helpers must wait (positive, bounded —
+the same pattern as the existing `Wait-NewLogLine`) until the foreground HWND is the
+overlay: same process id **AND** foreground window text `Telescope` (the overlay's
+`Title = "Telescope"`, `TelescopeOverlay.cs:83` — set even with `WindowStyle.None`).
+Only then may a helper `return` / the scenario inject Enter. This is a wait for an
+observable **state change** (foreground title), never an absence timer and never a bare
+`Start-Sleep`.
 
-**Diagnostics:** the change must NOT add/change a `[NeoVisual]`/`[Telescope]` log line
-(M-M7). Existing `solution-explorer open/rename/move/add/select/…` lines stay as they
-are; they just stop firing when an editor is focused.
+**Rejected (second choice): product-side `SetForegroundWindow` in `TelescopeOverlay`.**
+It changes product behaviour, would need its own deterministic assertion, and does not
+establish the harness gate that proves the state; the harness path is sufficient and
+leaves the product untouched (M-M7 not triggered).
+
+**Diagnostics:** UNCHANGED — no new/changed `[Telescope]`/`[NeoVisual]` literal. The fix
+is entirely in `tools/test-e2e.ps1` and is verified through the EXISTING contract
+(`implementations gathered count=N` → `open finder=Implementation candidates=N` →
+`[Telescope] key=Return mode=insert handled=True` → `opened implementation: file=…`).
 
 ---
 
@@ -79,335 +93,185 @@ are; they just stop firing when an editor is focused.
 
 | # | Criterion | Diagnostic asserted | Test |
 |---|-----------|--------------------|------|
-| A1 | With an **editor** focused (+ stale frame state injected), `m` (and `o`/`r`/`a`) do **not** fire any `solution-explorer` action and do **not** inject a tree command | ABSENCE of `[NeoVisual] solution-explorer move/open/rename/add` in the post-baseline window bounded by `[NeoVisual] leader-binding executed: W` | e2e `neovisual-explorer-move-editor-focus` (see tests) |
-| A2 | The fall-through key does not get swallowed / does not steal focus | ABSENCE of `[NeoVisual] solution-explorer move` post-baseline **plus** presence of `leader-binding executed: W` (proves focus stayed in the editor and the next chord reached it) | e2e `neovisual-explorer-move-editor-focus` |
-| A3 | With the **tree** focused, `m`/`o`/`r`/`a` still work | existing `solution-explorer move/open/rename/add` lines unchanged | `neovisual-explorer-move`/`-open`/`-rename`/`-add`/`-open-o` |
-| A4 | Search-box `i`→type→Esc→`o` still works (the just-GREENed item is not regressed) | `search-focus`→`toolwindow-exit-input`→`solution-explorer open`→`editor-view-opened …GrepProbe.cs` | `explorer-open-searchbox` |
-| A5 | `g` selection still works | `solution-explorer select file=…` + `editor-view-opened file=…` | `explorer-open-navigation` |
-| A6 | Both unit suites stay green | — | NeoVisual 38, Telescope 56 |
-| A7 | NO diagnostic added/changed (lane stays bugfix) | diff shows no new `[NeoVisual]`/`[Telescope]` literal | code review at VERIFY |
+| A1 | `telescope-implementation` passes **deterministically across ≥3 sequential runs** (not one) | `opened implementation: file=.*Shape\.cs line=2` | e2e `telescope-implementation` ×3 |
+| A2 | The Enter is actually delivered (not flaky) | `[Telescope] key=Return mode=insert handled=True` (`TelescopeOverlay.cs:934`; the old `[Hook] key=Return` can never exist — Return is not in `IsInteresting`) | e2e `telescope-implementation` |
+| A3 | No neighbour regresses (other finders' Enter) | existing `opened file:`/`opened issue:`/`opened reference:`/`opened grep:` lines | affected VERIFY set |
+| A4 | Both unit suites stay green | — | NeoVisual 38, Telescope 56 |
+| A5 | NO diagnostic added/changed | diff shows no new `[Telescope]`/`[NeoVisual]` literal; only `tools/test-e2e.ps1` touched | code review at VERIFY |
+| A6 | The gate is a materialised-state wait, not a timer | foreground HWND is the overlay (PID + window text `Telescope`) before Enter | code review + log-absent `[Telescope] key=Return` immediately after Enter |
 
 ---
 
 ## Tests
 
-### E2E (deterministic regression pair — no timeouts)
+### E2E (the regression scenario — existing)
+- **`telescope-implementation`** — already registered; its assertions ARE the contract.
+  The defect is intermittent, so GREEN proof must be **≥3 sequential runs** of
+  `pwsh tools/test-e2e.ps1 -Tests telescope-implementation`, not one. (The debug-agent
+  reproduced 3/3 before the fix.)
+- **Regression neighbours (A3):** `telescope-open-file`, `telescope-issues`,
+  `telescope-references`, `telescope-grep`, `telescope-open-file-searchbox`, and every
+  other `Open-Telescope*` consumer — all now go through the strengthened gate.
 
-- **Positive half (unchanged):** `neovisual-explorer-move` — with the tree focused, `m`
-  still fires `[NeoVisual] solution-explorer move`.
-- **Negative half (NEW):** `neovisual-explorer-move-editor-focus` — self-contained:
-  1. open `Program.cs` through the Telescope overlay (gated positive lines) so the editor
-     holds focus, `Assert-VsFocused`;
-  2. inject the stale-frame fault via the `stale-toolwindow` sentinel file (created in the
-     scenario, removed in `finally`);
-  3. send `m`; bound the window with the `Space+W` → `leader-binding executed: W` line
-     (written only after `m` was handled, same UI thread);
-  4. **absence scan** of the fixed post-baseline window for `solution-explorer move` —
-     deterministic (the bound line is already on disk; `MoveSelected` logs synchronously),
-     not a `-TimeoutMs` wait and not a retry loop.
-- **Regression neighbours (A3/A4/A5):** `neovisual-explorer-open`,
-  `neovisual-explorer-open-o`, `neovisual-explorer-rename`, `neovisual-explorer-add`,
-  `explorer-open-navigation`, `explorer-open-searchbox`, `neovisual-toolwindow`,
-  `neovisual-editor-insert`, **`neovisual-textinput-motions`** (the text-input
-  tool-window motions — the surface the `editorFocused` precedence could break; see BP-2).
+### Offline unit tests
+None expected (harness focus/injection is live-only). If a genuine pure seam emerges, add
+it to `tests/Telescope.Tests`. The gate change is PowerShell-only; the acceptance oracle
+is the existing live contract, not a new unit test.
 
-### Offline unit tests (the `FocusGuard` seam)
-
-`FocusGuard` is a pure, dependency-free decision helper, so it gets focused tests in
-`tests/NeoVisual.Tests/Program.cs` (`Run_FocusGuard_*`, mirroring the
-`OverlayKeyHandler`/`HierarchyResolver` pattern): editor-focused blocks action keys and
-routing; tree-focused allows them; input-mode/zero-action-keys/non-tool-window block;
-and the full `IsTyping` truth table. The live WPF/VS focus *events* themselves have no
-hermetic surface — those are covered by the e2e pair above.
+### Harness self-check (no VS)
+`Assert-OverlayFocused` / `Wait-OverlayForeground` are pure Win32 probes. A no-VS check
+is the ≥3-run loop; a targeted probe helper (`Get-ForegroundTitle`) is validated in-line
+by the debug probe evidence (foreground title flips to `Telescope`).
 
 ---
 
-## RED evidence plan (`bugfix (no-seam)`)
-
-1. Builder boots VS **ONCE before BUILD** and runs the new
-   `pwsh tools/test-e2e.ps1 -Tests neovisual-explorer-move-editor-focus` (and, if useful,
-   `neovisual-explorer-open-o`) against the pre-fix build to capture the leak: with an
-   **editor** focused and the stale-frame fault injected, `m` logs
-   `[NeoVisual] solution-explorer move` instead of falling through — the presence of that
-   line (or the missing `leader-binding executed: W` bound) is the RED. Re-confirm it is
-   the focus misclassification, not a harness/seed problem.
-2. State the partial no-unit reason: the live focus *events* have no hermetic surface; the
-   extracted pure `FocusGuard` decision helper DOES get unit tests (BP-5).
-3. Prove unit-level RED for `FocusGuard` only if the helper's behaviour is the thing that
-   changed (it is new — the truth-table tests fail to compile/run before BP-2 exists).
+## RED evidence plan
+1. Builder boots VS and runs `pwsh tools/test-e2e.ps1 -Tests telescope-implementation`
+   **repeatedly** (≥3 runs) until the intermittent failure reproduces (it failed 2/2 in
+   prior full runs); capture the post-`Focus prompt => True` tail showing the missing
+   `[Telescope] key=Return mode=insert handled=True` / `opened implementation`.
+   (Note: `[Hook] key=Return` cannot appear — `Keys.Return` is not in
+   `GlobalKeyboardHook.IsInteresting`; the debug-agent confirmed the harness focus race.)
+2. State the no-unit-test reason.
+3. No new diagnostic/scenario required.
 
 ---
 
 ## Known-RED allowlist (for VERIFY)
-
-- `neovisual-editor-insert` — pre-existing flake (IntelliSense autocomplete), retry-once.
-- `telescope-implementation` — tracked intermittent Enter-delivery issue (separate queue
-  item #5.5); not part of this run set.
-- `neovisual-explorer-open-o` — recorded flaky (x5). **This item targets the same
-  focus/`o` path, so treat a repeat failure here carefully: it may be THIS item's
-  regression, not a flake** — flag it explicitly if it fails.
-- No other scenario allowlisted.
+- `neovisual-editor-insert` — pre-existing flake (retry-once).
+- `telescope-references` — newly recorded flake (x1); report if it recurs.
+- Everything else must stay GREEN; `telescope-implementation` is this item's target.
 
 ---
 
 ## Build Plan
 
-> **Lane: bugfix (no-seam).** Changes are in `MyExtension/` plus the two test surfaces
-> (`tests/NeoVisual.Tests/Program.cs`, `tools/test-e2e.ps1`) and the doc-sync set.
-> **No** `[Telescope]`/`[NeoVisual]` **log** literal is added or changed (M-M7 NOT
-> triggered). UI-thread only; `net472` (no `IReadOnlySet<T>`); SDK refs stay
-> `ExcludeAssets="runtime"`. The fix is a **focus-truth guard**, not a live COM probe:
-> the editor's keyboard focus is already tracked event-driven by `VimModeTracker`, so no
-> per-key polling or new P/Invoke is added.
+> **Lane: bugfix — HARNESS only (`tools/test-e2e.ps1`).** **No** `[Telescope]`/`[NeoVisual]`
+> diagnostic added/changed (M-M7 NOT triggered). The product
+> (`Telescope/TelescopeOverlay.cs`, `MyExtension/GlobalKeyboardHook.cs`) is **untouched**.
+> All steps are PowerShell; no `net472`/UI-thread code changes. `Root cause`/`A2`/`Tests`
+> above reflect the debug-agent's confirmed harness-race diagnosis.
 
-### Phase 1 — Core fix (production)
-
-**BP-1 — Track editor keyboard focus in `VimModeTracker` (event-driven; cannot go stale).**
-- **Files:** `MyExtension/VimModeTracker.cs`.
-- **Change:** add `private ITextView? _focusedView;` + `private volatile bool _editorFocused;`
-  and `public bool IsEditorFocused => _editorFocused;`. Set `_focusedView = view;`
-  `_editorFocused = true;` as the FIRST statements of `OnViewGotFocus` (BEFORE buffer
-  resolution, so it works with or without VsVim). In `OnViewLostFocus` set
-  `_editorFocused = false` only when `ReferenceEquals(_focusedView, view)`; in
-  `OnViewClosed` clear `_focusedView`/`_editorFocused` when the closed view is
-  `_focusedView`. Rationale: `GotAggregateFocus`/`LostAggregateFocus` already fire on the
-  UI thread for every `IWpfTextView` (content type `text`, `TextViewCreated` `:114`), the
-  same path the typing gate already trusts — focus is known without polling and cannot
-  go stale like `WindowManager`'s frame-selection cache.
-- **Verify-with:** no hermetic unit surface (needs a live view); proven live by BP-7.
-  Structural grounding: Trailmark `callees_of("OnViewGotFocus")` → `SubscribeBuffer`/
-  `GetBufferForView` (`VimModeTracker.cs:139-157`); `TextViewCreated` is the MEF
-  `IWpfTextViewCreationListener` entry (`:114`).
-- **Fails-if:** build error; or BP-7 still sees `solution-explorer move` (means
-  `IsEditorFocused` did not become true when the Telescope-opened editor got focus).
-
-**BP-2 — Pure decision helper `FocusGuard` (predicate = `isToolWindow && !editorFocused`).**
-- **Files:** `MyExtension/ToolWindows/FocusGuard.cs` (new; SDK-style project auto-includes it;
-  namespace **`MyExtension`** — matching every sibling under `MyExtension/ToolWindows/` and the
-  `InputHandler` call site, verified: `TextMotionHelper.cs`/`SolutionExplorerController.cs`/
-  `HierarchyResolver.cs` all use `namespace MyExtension`).
-- **REVIEW FIX (round 2 — critical+major resolved).** The previous draft added an `isInputMode`
-  term to the routing predicate to protect text-input surfaces, but that BOTH contradicted its own
-  unit expectation AND rested on an unsound premise: `VimModeTracker` is a MEF `IWpfTextViewCreationListener`
-  and is **never created for a Command Window view** (verified: opening the Command Window logs
-  neither `editor-view-opened` nor `vim-mode=` — `log/87-neovisual-exp.log` 16:12:03–16:12:11), so
-  `IsEditorFocused` is simply `false` there and no special case is needed. Adopt the SIMPLE predicate.
-- **Change:** `internal static class FocusGuard` (namespace `MyExtension`), dependency-free
-  predicates:
-  - `HasToolWindowActionKeys(bool isToolWindow, bool isInputMode, int actionKeyCount, bool editorFocused)`
-    → `isToolWindow && !isInputMode && actionKeyCount > 0 && !editorFocused`;
-  - `ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused)`
-    → `isToolWindow && !editorFocused`  ← **two args only**; leaks `(true, editorFocused:true)` →
-    **false**, text-input/Command Window `(true, editorFocused:false)` → **true**;
-  - `IsTyping(bool isToolWindow, bool isInputMode, bool editorFocused, bool editorInTypingMode)`
-    → `isInputMode ? true : (editorFocused ? editorInTypingMode : (isToolWindow ? isInputMode : editorInTypingMode))`
-    (`isInputMode ? true` keeps the Space-typing gate correct for a tool window in input mode, which
-    is orthogonal to routing).
-- **Verify-with:** BP-5 unit tests `Run_FocusGuard_*`, which MUST include:
-  - `ShouldRouteToolWindowKey(true, editorFocused:true)` → **false** (the leak is fixed);
-  - `ShouldRouteToolWindowKey(true, editorFocused:false)` → **true** (tree/tool-window routing kept);
-  - `IsTyping(isToolWindow:true, isInputMode:true, editorFocused:false, editorInTypingMode:false)` → **true**.
-- **Fails-if:** any predicate returns the wrong truth-table value; or the routing predicate keeps the
-  `isInputMode` term (it would be dead/wrong for Command-Window normal mode).
-
-**BP-3 — Wire the guard into `InputHandler`, gating BEFORE any action.**
-- **Files:** `MyExtension/InputHandler.cs`.
+**BP-1 — Add the overlay-foreground probe + bounded wait helper.**
+- **Files:** `tools/test-e2e.ps1` — `Win32.Fg` `Add-Type` member definition (line 1863) and
+  a new helper near `Assert-OverlayFocused` (line 230).
 - **Change:**
-  > **DEVIATION D4 (ACCEPTED — plan defect corrected by verify-time debug).** The first build passed
-  > `_vsVim.IsEditorFocused` DIRECTLY as `FocusGuard`'s `editorFocused` argument. That is WRONG: the
-  > flag goes stale `true` for shell-routed non-code text tool windows — `VimModeTracker` is never
-  > created for the Command Window and the code editor's `LostAggregateFocus` does not fire on that
-  > transition — so gating `ExitToolWindowInputMode`/the routing branch on it stranded Escape and broke
-  > `neovisual-textinput-motions` (fail-twice regression). BP-2's round-2 premise ("IsEditorFocused is
-  > simply false there") was empirically false. **Corrected contract:** the boolean passed as
-  > `editorFocused` is `EditorFocusedVeto` (`InputHandler.cs:82`) =
-  > `_vsVim.IsEditorFocused && _windowManager.CurrentController?.IsInputMode != true && !GeneralToolWindowController.IsTextInputType(_windowManager.Type)`.
-  > A genuine text-input surface or an input-mode controller OWNS the keyboard and is never vetoed;
-  > SE-style navigation windows still honour the editor flag. `FocusGuard` itself is unchanged (pure),
-  > so its unit tests are unaffected.
-  1. `HasToolWindowActionKeys` (`:59-67`): `FocusGuard.HasToolWindowActionKeys(_windowManager.IsToolWindow,
-     c?.IsInputMode == true, c?.ActionKeys.Count ?? 0, EditorFocusedVeto)`. `GlobalKeyboardHook.IsInteresting`
-     (`:169`) consumes this, so an editor-focused `m` stops being "interesting" and is never
-     inspected/consumed.
-  2. Tool-window branch (`:276`): `if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))`.
-     With a focused editor (and no trusted text-input/input-mode surface) NO key reaches
-     `controller.TryMove`/`EnterInputMode`, so `m` cannot open the Move command and cannot focus the
-     SE search box. (Two-arg predicate — see BP-2.)
-  3. `ExitToolWindowInputMode()` (`:393`): same `EditorFocusedVeto` guard — **never** the raw flag
-     (the D4 defect). This is what keeps Escape reaching the Command Window.
-  4. `IsTyping()` (`:413-419`): `FocusGuard.IsTyping(_windowManager.IsToolWindow,
-     _windowManager.CurrentController?.IsInputMode == true, EditorFocusedVeto, _vsVim.IsInTypingMode)`.
-- **Structural evidence (Trailmark):** `callers_of("proxy.unresolved:controller.TryMove")` →
-  `['InputHandler.HandleKey', 'Run_SolutionExplorer_ActionKeys', 'Run_ToolWindowMode_HjklMoves']`
-  — the two `Run_*` entries are offline unit-test call sites; the only PRODUCTION routing site is
-  `InputHandler.HandleKey` (`InputHandler.cs:274` and `:287`), so gating it here is complete;
-  `callees_of("HandleKey")` lists `IsTyping`/`ExitToolWindowInputMode`/`controller.TryMove` —
-  exactly the branches this step edits. No unrelated controller is touched.
-- **Verify-with:** `dotnet build MyExtension/MyExtension.csproj`; behavioural proof BP-6/BP-7.
-- **Fails-if:** the tree-focused scenarios stop logging their actions (guard inverted); build error.
+  - Extend the `Win32.Fg` member definition (keep the existing three imports) with
+    `[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);`
+    (add `GetWindowTextLength` only if needed).
+  - Add `Get-ForegroundTitle([object]$vs)`: returns the foreground HWND's window text
+    (a `[System.Text.StringBuilder]`, capacity 256 → `[Win32.Fg]::GetWindowText($h,$sb,$sb.Capacity)`),
+    or `''` when `GetForegroundWindow()` is `IntPtr.Zero`.
+  - Add `Wait-OverlayForeground([object]$vs, [int]$maxMs = 5000)`: a **positive bounded
+    poll** (Stopwatch loop + `Start-Sleep -Milliseconds 100`) returning `$true` when the
+    foreground HWND's PID `-eq $vs.Id` **AND** `Get-ForegroundTitle` `-eq 'Telescope'`
+    (the overlay's `Title = "Telescope"`, `TelescopeOverlay.cs:83`); `$false` on timeout.
+    This waits for a **state change** (foreground title), never an absence timer and never
+    a fixed sleep.
+  - **Trailmark grounding:** `callers_of("FocusPrompt")` →
+    `TelescopeOverlay` ctor (WPF `Activated`/`ContentRendered`) + `ApplyAction`;
+    `callers_of("IsVisualStudioFocused")` → `HookCallback` only. Both are PID/logical-focus
+    signals — confirming the harness, not the product, is where the window identity is missing.
+- **Verify-with:** the debug probe's observed transition — foreground title is the VS main
+  window at logical focus, then flips to `Telescope` (~800 ms). After BP-1,
+  `Wait-OverlayForeground $vs` returns `$true` within its bound on a live boot; a bad
+  foreground reports `$false`. (Harness-only: no `[Telescope]`/`[NeoVisual]` literal is added.)
+- **Fails-if:** `GetWindowText`/`Wait-OverlayForeground` throws (`Add-Type` compile error /
+  marshal signature wrong); `Get-ForegroundTitle` returns `''` on the overlay (window text
+  not retrievable — wrong HWND); or `Wait-OverlayForeground` returns `$true` while the VS
+  main window is still foreground (the title comparison is missing — PID-only again).
 
-**BP-4 — Deterministic stale-focus fault-injection seam in `WindowManager`.**
-- **Files:** `MyExtension/WindowManager.cs`.
-- **Change:** rename backing fields to `_isToolWindow`/`_type` (set only in
-  `OnWindowFocusChanged`) and make the public members consult a test-only sentinel:
-  - `private static readonly string? TestStaleSentinelPath = BuildTestSentinelPath();` where the
-    path is `Path.Combine(Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR"), "stale-toolwindow")`
-    (`null` when the env var is unset → zero cost in normal user runs);
-  - `private static bool IsTestStaleInjected() => TestStaleSentinelPath != null &&
-    System.IO.File.Exists(TestStaleSentinelPath);`
-  - `public bool IsToolWindow => _isToolWindow || IsTestStaleInjected();`
-  - `public ToolWindowType Type => IsTestStaleInjected() ? ToolWindowType.SolutionExplorer : _type;`
-  - `CurrentController`/`RegisterController`/`Dispose` unchanged.
-  Rationale: a file sentinel is **runtime-togglable at an exact scenario boundary** and is read by
-  presence/absence only, reproducing the *stale-frame + editor-focused* state deterministically —
-  no elapsed time, no retry. (A whole-run env-var override was REJECTED: it would force every
-  tool-window branch on for all 34 scenarios and break editor-typing/tool-window tests.)
-- **Verify-with:** BP-7's negative scenario is RED without BP-1/BP-3 (it reproduces the leak) and
-  GREEN with them; in normal runs (no sentinel) `WindowManager` behaviour is unchanged.
-- **REVIEW FIX (minor) — documented cost:** in a harness run `NEOVISUAL_LOG_DIR` IS set, so
-  `IsToolWindow` performs one `File.Exists` per access on the UI thread while the hook considers a
-  candidate key. This is a single cached-path stat (microseconds) and only inside the harness; the
-  plan accepts it **explicitly** (and notes it here) rather than leaving it undocumented. If the
-  builder prefers, cache the sentinel's existence and re-stat only when `_isToolWindow` itself
-  changes — but the simple form is acceptable for a test-only seam.
-- **Fails-if:** the sentinel has no effect (negative scenario passes on the OLD code too → not a
-  regression pair).
+**BP-2 — Strengthen `Assert-OverlayFocused` to require the overlay HWND (not just the PID).**
+- **Files:** `tools/test-e2e.ps1:230-234`.
+- **Change:** keep the signature `Assert-OverlayFocused([object]$vs)` (all call sites
+  unchanged). Body becomes: keep `Assert-VsFocused $vs '…'` (PID check), then require the
+  foreground window **text** to be `Telescope` — implement via `Wait-OverlayForeground $vs`
+  so the assert is a **materialised-state gate**, throwing a specific error that names the
+  observed `Get-ForegroundTitle` value on timeout. Update the doc comment: the overlay is
+  NOT "any window of the VS PID" — it must be the actual overlay HWND (a PID-only check
+  passes for the VS main window, the exact defect).
+- **Verify-with:** after a passing `Open-Telescope*`,
+  `Assert-OverlayFocused $vs` succeeds and the scenario proceeds to
+  `[Telescope] key=Return mode=insert handled=True` → `opened implementation:`.
+- **Fails-if:** the thrown message reports a foreground title equal to the VS main-window
+  title (`… Experimental Instance`) while the overlay is logically focused — i.e. the race
+  reproduced and the gate did not wait / is still PID-only.
 
-### Phase 2 — Tests + harness
+**BP-3 — Gate every `Open-Telescope*` helper's success return on the materialised overlay.**
+- **Files:** `tools/test-e2e.ps1` — `Open-Telescope` (`270-293`), `Open-TelescopeIssues`
+  (`295-313`), `Open-TelescopeReferences` (`315-334`), `Open-TelescopeGrep` (`336-356`),
+  `Open-TelescopeImplementation` (`358-379`).
+- **Change:** in each helper, replace the `Assert-OverlayFocused $vs; return` success branch
+  with `if (Wait-OverlayForeground $vs 5000) { Assert-OverlayFocused $vs; return }`, and let
+  a failed wait fall through to the existing retry/`throw`. A helper may now return ONLY
+  once the overlay HWND is the real OS foreground window, so the caller's next injected key
+  (Enter) cannot race OS activation. (Between the logical-focus `Wait-NewLogLine` and
+  `Wait-OverlayForeground` the helper simply blocks on the observable state — no new
+  arbitrary delay.)
+- **Verify-with:** the scenario's Enter now reaches the overlay:
+  `[Telescope] key=Return mode=insert handled=True` (`TelescopeOverlay.cs:934`) appears
+  after the gate, followed by `opened implementation: file=.*Shape\.cs line=2`.
+- **Fails-if:** a helper returns while `Get-ForegroundTitle` is still the VS main window
+  (gate placed before the `Wait-NewLogLine`s / bypassed); or `telescope-implementation`
+  still shows no `[Telescope] key=Return` post-baseline across ≥3 runs.
 
-**BP-5 — Offline unit tests for `FocusGuard` (`tests/NeoVisual.Tests/Program.cs`).**
-- **Change:** add `Run_FocusGuard_*` public static tests (auto-discovered via the `Run_`
-  convention): editor-focused blocks action keys + routing; tree-focused allows both; input-mode
-  blocks; zero action keys blocks; non-tool-window blocks; `IsTyping` truth table (editor
-  insert/replace → true, editor normal → false, tool-window input → true). ~7 tests →
-  **NeoVisual 31 → 38**.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests` → 38/38 (and `-- FocusGuard`).
-- **Fails-if:** any truth-table assertion fails.
-
-**BP-6 — Keep the POSITIVE half of the regression pair.**
-- **Files:** none (`neovisual-explorer-move`, `tools/test-e2e.ps1:962-979`, unchanged).
-- **Change:** none — it already ensures SE is focused (`Space+E`) then asserts `m` →
-  `solution-explorer move`. This is the "tree case still passes" positive; it must stay GREEN.
-- **Verify-with:** `neovisual-explorer-move` → `[NeoVisual] solution-explorer move`.
-- **Fails-if:** it regresses (guard over-blocking, e.g. `IsEditorFocused` stuck true).
-
-**BP-7 — NEW deterministic NEGATIVE scenario `neovisual-explorer-move-editor-focus` (`tools/test-e2e.ps1`).**
-- **Files:** `tools/test-e2e.ps1` (register immediately after `neovisual-explorer-move`).
-- **Change (all primitives explicit; NO timeout-based absence, NO probe scenario):**
-  1. `Reset-LogBaseline $logPath`; open `Program.cs` via the existing gated overlay chain
-     (`Open-Telescope` → `Send-Text 'Program'` → assert `results count=1 selected=0` +
-     `preview file=.*Program\.cs` → Enter → assert `opened file: .*Program\.cs` +
-     `editor-view-opened file=.*Program\.cs` → `Close-Telescope`). The editor now holds focus
-     (same mechanism `neovisual-editor-insert` relies on).
-  2. `Enter-NormalContext $vs`; `Assert-VsFocused $vs 'editor-focused m'`.
-  3. Create the fault sentinel `$sentinel = Join-Path (Split-Path $logPath) 'stale-toolwindow'`
-     (`New-Item -Force`), inside `try { … } finally { Remove-Item -Force $sentinel
-     -ErrorAction SilentlyContinue }`. This makes `WindowManager` report the SE frame as current
-     — the exact stale state the user hit.
-  4. `Send-Tap 0x4D` (`m`); `Send-Tap Escape` (dismisses any dialog on the OLD path only); then the
-     **positive bound**: `Send-Tap Space` + `Send-Tap 0x57` (`W`) and
-     `Assert-NewLogLine "$($script:PfxNeo)leader-binding executed: W" 'editor kept focus; m was
-     not a tree action'`. On the NEW code no Move dialog opens, so Space+W saves → the line fires;
-     it is written only AFTER `m` was handled (same UI thread), deterministically bounding the window.
-  5. **Absence assertion (deterministic read, not a wait):** re-read the log and throw if any line
-     in `[$script:LogBaseline .. end]` matches `$($script:PfxNeo)solution-explorer move`. Because
-     the bound line is already on disk and `MoveSelected` logs synchronously before any later key,
-     a `move` line from `m` would already be present — its absence is a fact, not a race.
-- **Why deterministic:** the fault is a file presence toggle (no timing); the bound is a real log
-  line produced after the key under test; the absence is a post-hoc scan of a fixed window. No
-  `-TimeoutMs` absence wait, no retry loop, no temporary scenario.
-- **Verify-with:** RED against the pre-fix build (finds `solution-explorer move`); GREEN after
-  BP-1/BP-3. Companion of the pair with BP-6.
-- **Fails-if:** the absence scan passes on pre-fix code (seam ineffective) or the bound line never
-  appears on post-fix code (guard over-blocking).
-
-### Phase 3 — Docs + verification
-
-**BP-8 — Doc sync + reference propagation.**
-- **Files:** `docs/spec.md`, `AGENTS.md`, `.opencode/skills/vs-extension-dev/SKILL.md`,
-  `docs/progress.md`.
-- **Change:** scenario count **34 → 35** and add `neovisual-explorer-move-editor-focus` to the
-  scenario list (spec/AGENTS/SKILL); NeoVisual unit count **31 → 38** (spec/AGENTS/SKILL); document
-  the new `FocusGuard` helper, `VimModeTracker.IsEditorFocused`, and the test-only
-  `stale-toolwindow` sentinel in the spec architecture/diagnostics section; queue the item in
-  progress.md. No type/method referenced by these docs is renamed, so no reference breaks.
-- **Verify-with:** `pwsh tools/check-doc-refs.ps1` → `[PASS]`.
-- **Fails-if:** the lint reports an unresolved symbol; a stale count remains.
-
-**BP-9 — Discipline + full verification.**
-- **Change:** confirm no `[Telescope]`/`[NeoVisual]` **log** literal was added/changed (M-M7);
-  confirm no new MEF/DI registration is required (the SE controller is already registered in
-  `MyExtensionPackage.cs:85`; `FocusGuard` is static; `IsEditorFocused` is a property read off the
-  existing MEF-resolved `VimModeTracker`).
-- **Verify-with:** `dotnet build MyExtension/MyExtension.csproj`;
-  `dotnet run --project tests/NeoVisual.Tests` → 38/38;
-  `dotnet run --project tests/Telescope.Tests` → 56/56 (staggered, never simultaneous);
-  e2e subset `neovisual-explorer-move,neovisual-explorer-move-editor-focus,neovisual-explorer-open,
-  neovisual-explorer-open-o,neovisual-explorer-rename,neovisual-explorer-add,explorer-open-navigation,
-  explorer-open-searchbox,neovisual-toolwindow,neovisual-editor-insert,neovisual-textinput-motions` → exit 0; then the full suite.
-- **Fails-if:** any neighbour regresses; a `solution-explorer move/open/rename/add` line appears
-  while an editor is focused; a new log literal is introduced.
+**BP-4 — Gate the `telescope-implementation` Step-5 Enter explicitly.**
+- **Files:** `tools/test-e2e.ps1:1533-1540` (the Step-5 comment + `Send-Tap $script:VkEnter`).
+- **Change:** insert `Assert-OverlayFocused $vs` (now materialised, BP-2) immediately before
+  `Send-Tap $script:VkEnter`, and extend the comment to say the Enter is gated on the
+  overlay being the real foreground window (not just the VS PID). This makes the trace
+  self-contained and covers the no-typing race window of this specific scenario.
+- **Verify-with:** identical pass chain, on **≥3 sequential runs**:
+  `implementations gathered count=1` → `open finder=Implementation candidates=1` →
+  `preview file=.*Shape\.cs` / `preview caret=\d+ line=2` →
+  `[Telescope] key=Return mode=insert handled=True` →
+  `opened implementation: file=.*Shape\.cs line=2`.
+- **Fails-if:** no `[Telescope] key=Return` post-baseline and no `opened implementation`
+  even though the gate assert passed — re-open the product hypothesis (the gate is not the
+  culprit); or the assert throws with the VS main-window title (BP-2/BP-3 not materialised).
 
 ## Verification Trace
 
-| failing/leaking behaviour | implicated steps | expected diagnostic / pass signal |
+| Failing test/scenario (RED) | Implicated steps | Expected diagnostic / pass signal |
 |---|---|---|
-| editor-focused `m` fires `[NeoVisual] solution-explorer move` (the user leak) | BP-1, BP-2, BP-3, BP-4, BP-7 | ABSENCE of `[NeoVisual] solution-explorer move` in the post-baseline window bounded by `[NeoVisual] leader-binding executed: W` |
-| editor-focused `o`/`r`/`a`/Enter likewise consumed as tree actions | BP-1, BP-2, BP-3 | same absence guard (no `solution-explorer open/rename/add`); key falls through |
-| `m` must not focus the SE search box or inject the Move command | BP-3 | no `solution-explorer search-focus`, no `solution-explorer move`; Space+W still saves |
-| tree-focused `m`/`o`/`r`/`a` must still work | BP-2, BP-3, BP-6 | existing `[NeoVisual] solution-explorer move/open/rename/add` unchanged |
-| search-box chain (A4) | BP-3 | `solution-explorer search-focus` → `toolwindow-exit-input` → `solution-explorer open` → `editor-view-opened …GrepProbe.cs` |
-| `g` selection (A5) | BP-3 | `solution-explorer select file=…` + `editor-view-opened file=…` |
-| guard truth table (pure) | BP-2, BP-5 | `Run_FocusGuard_*` all pass (NeoVisual 38/38) |
-| unit suites (A6) | BP-5, BP-9 | NeoVisual 38/38, Telescope 56/56 |
-| no log literal added/changed (A7) | BP-9 | `git diff -- MyExtension` adds no `[NeoVisual]`/`[Telescope]` log literal |
+| e2e `telescope-implementation` — missing `opened implementation` (intermittent, debug-repro 3/3) | BP-1, BP-2, BP-3, BP-4 | gate: foreground HWND == overlay (PID + window text `Telescope`) BEFORE Enter → `implementations gathered count=1` → `open finder=Implementation candidates=1` → `preview file=.*Shape\.cs` / `preview caret=\d+ line=2` → `[Telescope] key=Return mode=insert handled=True` → `opened implementation: file=.*Shape\.cs line=2`; held across **≥3 sequential runs** |
+| e2e Enter lost with foreground still `… Experimental Instance` (race) | BP-2, BP-3 | `Assert-OverlayFocused` error names the observed foreground title; `Wait-OverlayForeground` returns `$true` only after title `Telescope` |
+| neighbours (A3) — other finders' Enter | BP-1, BP-2, BP-3 | existing `opened file:` / `opened issue:` / `opened reference:` / `opened grep:` lines unchanged (same chain, now via the stronger gate) |
+| product contract unchanged (A5) | — (no product step) | `[Telescope] Focus prompt => True, mode=insert` and `[Telescope] key=Return mode=insert handled=True` literals byte-identical; `git diff` touches only `tools/test-e2e.ps1` |
+| unit suites (A4) | — (harness-only) | NeoVisual 38/38, Telescope 56/56 (run staggered, W11) |
 
-**Known-RED allowlist (do NOT report as this item's regression):**
+**Known-RED allowlist (carried from `docs/progress.md` — do NOT report as regressions):**
 - `neovisual-editor-insert` — pre-existing flake (IntelliSense autocomplete); retry-once.
-- `telescope-implementation` — tracked intermittent Enter-delivery issue (separate queue item #5.5).
-- **`neovisual-explorer-open-o`** — recorded flaky (x5), but it exercises the **same focus/`o`
-  path** as this item: a repeat failure here is a **REGRESSION CANDIDATE for this item, not a
-  flake** — flag it explicitly.
+- `telescope-references` — recorded flake (x1); report if it recurs.
+
+`telescope-implementation` MUST go GREEN (≥3 sequential runs) — it is this item's target and
+is **not** allowlisted. `neovisual-explorer-move` (the `m`-key leak, backlog #1) is a separate
+item and remains outside this change set.
 
 ---
 
 ## Execution Log
 
-### Attempt 1 — GREEN (final gate PASS, independently re-verified)
+### Attempt 1 — GREEN (final gate PASS)
 
-Lane: `bugfix (no-seam)`. RED: the leak was that `WindowManager.IsToolWindow` is driven by VS's
-`SEID_WindowFrame` selection event (not WPF keyboard focus), so `InputHandler` kept routing
-`o`/`r`/`m`/`a` to `SolutionExplorerController` while an editor held focus — the key was consumed as
-a tree action (and, in the user's `ljoljoljoljoljo` case, keys landed in the editor). Fix: a pure
-`FocusGuard` (`MyExtension/ToolWindows/FocusGuard.cs`, namespace `MyExtension`) consuming an
-event-driven `VimModeTracker.IsEditorFocused` flag, wired into `InputHandler`'s
-`HasToolWindowActionKeys` / tool-window branch / `ExitToolWindowInputMode` / `IsTyping`, plus a
-test-only stale-frame sentinel in `WindowManager` and a deterministic new negative scenario
-`neovisual-explorer-move-editor-focus` (Gamma.cs + sentinel; absence scan bounded by the Space+W
-leader line — **no timeouts, no temporary probes**).
+Lane: `bugfix` (harness-only). RED: the debug-agent reproduced the
+`telescope-implementation` failure **3/3 standalone** and isolated the layer as the
+**harness**, not a product key-handler bug — `Assert-OverlayFocused` was PID-only, so it
+passed while the OS foreground window was still the VS **main** window; Enter was injected
+before the overlay became foreground (probe: foreground was the main window before Enter,
+the overlay ~800ms after). Fix: strengthen `Assert-OverlayFocused` to require the actual
+overlay window (PID **and** title `Telescope`) and add the positive `Wait-OverlayForeground`
+gate to all five `Open-Telescope*` helpers + before the Step-5 Enter. Product untouched; no
+new diagnostic literal (M-M7 not triggered).
+`delegations: 3 | VS boots: 5 | iterations: 1`.
 
-`delegations: 9 | VS boots: 6 | iterations: 1`.
+### PLAN CORRECTIONS (adjudicated during the item)
 
-### DEVIATION ADJUDICATIONS (hub)
-
-- **D4 → ACCEPT (recorded in BP-3).** The first build passed the raw `_vsVim.IsEditorFocused` as the
-  `editorFocused` argument; that flag goes stale `true` for shell-routed non-code text tool windows
-  (Command Window), stranding Escape and breaking `neovisual-textinput-motions` (fail-twice). Fix:
-  `EditorFocusedVeto` = `IsEditorFocused && CurrentController?.IsInputMode != true &&
-  !GeneralToolWindowController.IsTextInputType(...)`. `FocusGuard` stays pure (unit tests unaffected).
-- **D-A → ACCEPT.** `neovisual-explorer-open` / `-open-o` success gate reworked from the
-  new-view-only `editor-view-opened` to `solution-explorer open` AND a NEW line after a pre-key
-  line-index snapshot (`Wait-NewLogLineAfter`), with the tree refocused each iteration. Independently
-  verified as **strictly STRONGER, not weakened**: `solution-explorer open` is emitted only when
-  `o`/Enter is actually routed (a swallowed key still fails the scenario), and the new-line filter is
-  genuinely post-key (stale preview lines cannot satisfy it). Fixes the already-open-tab false negative.
-- **D-B → ACCEPT.** `neovisual-explorer-move-editor-focus` opens **Gamma.cs** (not Beta.cs, which
-  `neovisual-editor-insert` needs as a fresh view; not Program.cs, the startup file). Verified Gamma.cs
-  is opened by no other scenario; the sentinel is created+removed; the absence scan is non-vacuous.
-- **D-C → ACCEPT.** `tools/dte-command.ps1` gained a read-only `GetActiveDocument` query branch (a
-  DTE property read, `ExecuteCommand`-free) and the harness gained `Focus-SolutionExplorer`
-  (`View.SolutionExplorer`) + bounded POSITIVE waits. No product code, no diagnostic, no absence-timer.
-
-No `[NeoVisual]`/`[Telescope]` log literal added or changed (M-M7 not triggered).
-Final gate: full suite 33/35 (the 2 failures are the allowlisted `neovisual-editor-insert` flake and
-the separately-queued `telescope-implementation` #5.5); NeoVisual 38/38; Telescope 56/56.
+- **A2 diagnostic corrected:** `[Hook] key=Return …` is impossible (`Keys.Return` ∉
+  `GlobalKeyboardHook.IsInteresting`); the real pass line is
+  `[Telescope] key=Return mode=insert handled=True` (`TelescopeOverlay.cs:934`).
+- **Approach corrected:** the original text ("reuse the existing `Assert-OverlayFocused`
+  semantics") overestimated the PID-only helper; BP-2 now strengthens it.
+- **Rejected alternative recorded:** the product `SetForegroundWindow` one-liner was
+  rejected as the primary fix (harness path judged sufficient and it avoids changing
+  product behaviour without its own deterministic assertion).

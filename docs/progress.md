@@ -227,6 +227,10 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W16: review hub only appends to progress.md** (Lane: trivial config edit).
+  `neovim_review_hub.md` Hard constraints + Step 4 now state it is APPEND-ONLY and does not
+  own `docs/progress.md`; `neovim_hub.md` states the same ownership boundary. **Restart
+  required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W15: reconcile the conventions handoff** (Lane: trivial config edit).
   `neovim_hub.md`'s Delegation contract now lists the real handoff inputs and states it
   does NOT re-send conventions; `e2e-test-builder.md` + `implementation-planner.md` now say
@@ -881,8 +885,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     (`e2e-test-builder.md`, `implementation-planner.md`) now say the same thing: the hub
     does NOT re-send conventions (AGENTS.md is auto-loaded; SKILL.md is read by the agent);
     only a step-specific convention not already covered is passed inline.
-16. **W16** — both hubs claim `docs/progress.md` write access; `neovim_hub.md:15` says sole owner.
-    State that the review hub only appends filed items.
+16. **W16** — both hubs claim `docs/progress.md` write access.
+    ✅ **FIXED 2026-09-27** — `neovim_hub.md` now states the review hub does not own
+    `docs/progress.md` (it appends filed findings only, on user approval); the review
+    hub's Hard constraints + Step 4 now state append-only, never rewrite.
 17. **W17** — `sprint-plan-gate/SKILL.md:19`, `test-driven-development/SKILL.md:9`,
     `command/hub.md:2` pipeline strings omit `debug-agent` and the plan gates.
 18. **W18** — off-by-one "Load all three/both" (`e2e-test-builder.md:21` lists 4;

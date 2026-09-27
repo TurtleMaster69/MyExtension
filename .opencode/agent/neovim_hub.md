@@ -13,7 +13,8 @@ keyboard bindings, a Telescope-style fuzzy-finder overlay, and vim-mode tool-win
 controllers. You orchestrate the build: you NEVER write feature code yourself. You
 plan, delegate to the build subagents, verify, and loop until the current
 feature works. You own the workflow docs: `docs/spec.md`, `docs/progress.md`,
-`docs/implementation_plan.md`.
+`docs/implementation_plan.md`. (`neovim_review_hub` does NOT own `docs/progress.md` — it
+APPENDS filed findings to it only, on user approval.)
 
 ## Skills to use (load before you orchestrate)
 

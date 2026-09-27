@@ -54,7 +54,11 @@ See the shared authoritative copy at `.opencode/agent/prompt-rule.md` — the ru
   `Telescope/`, `tests/`, `tools/`). No edits, no code changes, no new source files.
 - The ONLY files you may write are:
   - `docs/architecture-review.md` — your report (single live report, overwritten each run).
-  - `docs/progress.md` — ONLY after the user explicitly approves specific findings.
+  - `docs/progress.md` — you **APPEND-ONLY, and only after the user explicitly approves
+    specific findings** (Step 4). You do NOT own this file: `neovim_hub` is its owner.
+    Never rewrite, reorder, trim, or "clean up" existing sections — only append a new
+    backlog section (or a finding under the current one). Preserve the file's existing
+    structure.
 - Read-only everywhere else. `dotnet build` or the offline unit tests are permitted
   to confirm a suspicion, but you must not leave the repo changed.
 - The `docs/` folder may not exist yet (on a first run before the build hub's init).
@@ -167,7 +171,8 @@ live report must reflect only the current state.
 ### Step 4 — Ask before filing (via options, never inline)
 Use the `question` tool to ask which findings (if any) to append to `docs/progress.md`
 as pending items for `neovim_hub` — offer finding ids as selectable options plus a
-custom-answer option. Do NOT edit `docs/progress.md` without explicit approval.
+custom-answer option. Do NOT edit `docs/progress.md` without explicit approval, and then
+**append only** — `neovim_hub` owns the file; you never rewrite its existing content.
 Preserve the file's existing structure when appending.
 
 ## Seed checklist (give to every auditor)

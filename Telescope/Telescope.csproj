@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <RootNamespace>Telescope</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Xaml" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+  </ItemGroup>
+
+  <!--
+    Make internals visible to the unit-test project (tests/Telescope.Tests) so it can exercise
+    the pure logic (ResultsFormatter, FzfFilter, TelescopeLog, TextMotionNavigator,
+    SyntaxHighlighter) without widening public API — and to MyExtension so the text-input tool
+    window controller reuses the shared TextMotionNavigator for its vim caret motions.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Telescope.Tests" />
+    <InternalsVisibleTo Include="MyExtension" />
+  </ItemGroup>
+
+</Project>

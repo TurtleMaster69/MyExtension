@@ -1,11 +1,6 @@
 ﻿using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CardinalNavigation
 {
@@ -16,14 +11,7 @@ namespace CardinalNavigation
     class IVsFrameView : IVsWindowFrame4, IVsWindowFrame, IVsWindowFrameNotify
     {
 
-        private int m_Px, m_Py, m_Pcx, m_Pcy;
         private int m_screenLeft, m_screenTop, m_screenWidth, m_screenHeight;
-
-        private VSSETFRAMEPOS[] m_FramePos;
-
-        private Guid m_GuidRelativeTo;
-
-        private bool m_isVisible;
 
         private IVsWindowFrame4 m_Frame2;
         private IVsWindowFrame m_Frame;
@@ -32,8 +20,6 @@ namespace CardinalNavigation
         /// getter for base internal frame; useful for equality checks
         /// </summary>
         public IVsWindowFrame internalFrame { get => m_Frame; }
-
-        private readonly string m_FrameName;
 
         public IVsFrameView(IVsWindowFrame frame)
         {
@@ -47,22 +33,7 @@ namespace CardinalNavigation
             m_Frame = frame;
             m_Frame2 = (IVsWindowFrame4)frame;
 
-            m_isVisible = this.IsTabbedAndInvisible();
-
-            m_FrameName = m_Frame.ToString();
-            m_FramePos = new VSSETFRAMEPOS[1];
-
             m_Frame2.GetWindowScreenRect(out m_screenLeft, out m_screenTop, out m_screenWidth, out m_screenHeight);
-            this.GetFramePos(m_FramePos, out m_GuidRelativeTo, out m_Px, out m_Py, out m_Pcx, out m_Pcy);
-        }
-
-        private void GetIVsWindowFrame4()
-        {
-            Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
-            IntPtr pObj;
-            Guid iid = typeof(IVsWindowFrame4).GUID;
-            ErrorHandler.ThrowOnFailure(m_Frame.QueryViewInterface(ref iid, out pObj));
-            m_Frame2 = (IVsWindowFrame4)Marshal.GetObjectForIUnknown(pObj);
         }
 
         /// <summary>
@@ -75,27 +46,6 @@ namespace CardinalNavigation
             int pfOnScreen = 0;
             ErrorHandler.ThrowOnFailure(this.IsOnScreen(out pfOnScreen));
             return pfOnScreen == 0;
-        }
-
-        /// <summary>
-        /// gets the name ('caption') of this window frame
-        /// </summary>
-        /// <returns></returns>
-        public string GetWindowName()
-        {
-            Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
-            object name;
-            var ok = this.m_Frame.GetProperty((int)__VSFPROPID.VSFPROPID_Caption, out name);
-            ErrorHandler.ThrowOnFailure(ok);
-
-            var windowName = name.ToString();
-
-            if (windowName.EndsWith("*"))
-            {
-                return windowName.Substring(0, windowName.Length - 1);
-            }
-
-            return name.ToString();
         }
 
         public int Show()

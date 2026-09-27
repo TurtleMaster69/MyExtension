@@ -21,23 +21,27 @@ namespace MyExtension
     /// </summary>
     internal sealed class PopupNavigation
     {
-        private readonly VsVimIntegration _vsVim;
+        private readonly WindowManager _windowManager;
 
-        public PopupNavigation(VsVimIntegration vsVim)
+        public PopupNavigation(WindowManager windowManager)
         {
-            _vsVim = vsVim ?? throw new ArgumentNullException(nameof(vsVim));
+            _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
         }
 
         /// <summary>
         /// Navigates the currently-focused popup list down or up by injecting an arrow key.
-        /// Only acts while focus is in a code editor, so global shortcuts like Ctrl+N ("New
-        /// File") are left alone elsewhere. Returns true (key swallowed) when it injects.
+        /// Only acts while focus is in a document (code editor), so global shortcuts like Ctrl+N
+        /// ("New File") are left alone in tool windows. Returns true (key swallowed) when it
+        /// injects.
         /// </summary>
         public bool TryNavigate(bool down)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (!_vsVim.IsInEditor())
+            // Ctrl+N/P only drive editor popups (completion / quick actions / peek); in a tool
+            // window the key should pass through to VS. Replaces the old _vsVim.IsInEditor()
+            // check with WindowManager's cached tool-window state.
+            if (_windowManager.IsToolWindow)
             {
                 return false;
             }

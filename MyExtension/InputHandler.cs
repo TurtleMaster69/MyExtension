@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
+using Telescope;
 
 namespace MyExtension
 {
@@ -32,9 +33,10 @@ namespace MyExtension
     internal class InputHandler
     {
         private readonly AsyncPackage _package;
-        private readonly VsVimIntegration _vsVim;
+        private readonly VimModeTracker _vsVim;
         private readonly PopupNavigation _popupNav;
-        private readonly ToolWindowNavigation _toolNav;
+        private readonly WindowManager _windowManager;
+        private readonly TelescopeController _telescope;
 
         // Leader-sequence state: the keys typed since the leader key, and whether a sequence is
         // currently in progress. _leaderActive is volatile because the hook thread's cheap
@@ -49,6 +51,39 @@ namespace MyExtension
         /// </summary>
         public bool IsLeaderActive => _leaderActive;
 
+        /// <summary>
+        /// True when the current tool window (in normal mode) has action keys beyond hjkl (e.g.
+        /// Solution Explorer's o/r/m/a). Used by the hook's cheap pre-filter so those keys reach
+        /// <see cref="HandleKey"/> instead of being skipped as plain typing keys.
+        /// </summary>
+        public bool HasToolWindowActionKeys
+        {
+            get
+            {
+                var c = _windowManager.CurrentController;
+                return FocusGuard.HasToolWindowActionKeys(
+                    _windowManager.IsToolWindow,
+                    c?.IsInputMode == true,
+                    c?.ActionKeys.Count ?? 0,
+                    EditorFocusedVeto);
+            }
+        }
+
+        /// <summary>
+        /// Whether the event-driven editor-focus flag should veto tool-window routing. The flag is
+        /// reliable for document editors but NOT for shell-routed text-input tool windows (Command
+        /// Window, Find, ...): their focus transitions never reach <see cref="VimModeTracker"/> (its
+        /// <c>IWpfTextViewCreationListener</c> is not created for them), so the flag can remain stuck
+        /// <c>true</c> while such a window owns the keyboard. A tool window that is a text-input
+        /// surface, or whose controller is in input mode, therefore genuinely owns its surface and is
+        /// trusted regardless of the flag. Navigation tool windows (Solution Explorer) still honor
+        /// it, which is what stops their action keys leaking into a focused editor.
+        /// </summary>
+        private bool EditorFocusedVeto =>
+            _vsVim.IsEditorFocused
+            && _windowManager.CurrentController?.IsInputMode != true
+            && !GeneralToolWindowController.IsTextInputType(_windowManager.Type);
+
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
 
@@ -58,16 +93,44 @@ namespace MyExtension
         // Simple modifier shortcuts (matched directly): "Ctrl+H", "Alt+X"...
         private readonly Dictionary<string, Action> _simpleBindings;
 
-        public InputHandler(AsyncPackage package)
+        public InputHandler(AsyncPackage package, TelescopeController telescope, WindowManager windowManager)
         {
             _package = package;
-            _vsVim = new VsVimIntegration(package);
-            _popupNav = new PopupNavigation(_vsVim);
-            _toolNav = new ToolWindowNavigation(_vsVim);
+            _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
+            _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
+
+            // The Vim mode tracker is a shared MEF part (also an IWpfTextViewCreationListener
+            // that VS instantiates for every code view). We retrieve the same singleton instance
+            // here so its event-driven cached mode is what gates the leader key.
+            _vsVim = ResolveVimModeTracker();
+
+            _popupNav = new PopupNavigation(_windowManager);
 
             var config = KeybindingConfig.Load();
             _leaderKey = config.LeaderKey;
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
+        }
+
+        /// <summary>
+        /// Retrieves the shared <see cref="VimModeTracker"/> from the VS MEF container. Falls back
+        /// to a fresh instance (whose cached mode stays false) if MEF composition is unavailable.
+        /// </summary>
+        private VimModeTracker ResolveVimModeTracker()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var componentModel = ((System.IServiceProvider)_package).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                    as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+                return componentModel?.DefaultExportProvider.GetExportedValue<VimModeTracker>()
+                    ?? new VimModeTracker();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to resolve VimModeTracker: {ex.Message}");
+                return new VimModeTracker();
+            }
         }
 
         /// <summary>
@@ -86,7 +149,7 @@ namespace MyExtension
                 var action = ResolveAction(pair.Value);
                 if (action == null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[NeoVisual] Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
+                    System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
                     continue;
                 }
 
@@ -120,6 +183,12 @@ namespace MyExtension
                 case "navigate-right": return () => Navigate(CardinalNavigationConstants.RIGHT);
                 case "navigate-up": return () => Navigate(CardinalNavigationConstants.UP);
                 case "navigate-down": return () => Navigate(CardinalNavigationConstants.DOWN);
+                case "telescope": return () => OpenTelescope();
+                case "telescope-issues": return () => OpenTelescopeIssues();
+                case "telescope-references": return () => OpenTelescopeReferences();
+                case "telescope-implementation": return () => OpenTelescopeImplementation();
+                case "telescope-grep": return () => OpenTelescopeGrep();
+                case "toggle-solution-explorer": return () => ToggleSolutionExplorer();
                 default:
                     break;
             }
@@ -154,7 +223,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[NeoVisual] Command '{command}' failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
 
@@ -168,9 +237,22 @@ namespace MyExtension
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            // Escape always cancels an in-progress leader sequence (and otherwise passes through).
+            // While the Telescope overlay is open it owns keyboard focus. Every key must pass
+            // through to the overlay's filter box / key handlers — the extension must NOT act on
+            // Space (leader), hjkl, or Escape. Returning false lets the key reach the overlay.
+            if (_telescope.IsOpen)
+            {
+                return false;
+            }
+
+            // Escape: exits a tool window's input mode first (back to normal), otherwise cancels
+            // an in-progress leader sequence (and otherwise passes through).
             if (key == Keys.Escape)
             {
+                if (ExitToolWindowInputMode())
+                {
+                    return true;
+                }
                 ResetSequence();
                 return false;
             }
@@ -180,28 +262,68 @@ namespace MyExtension
             // etc.), so the Ctrl key-down is always passed through untouched.
 
             // Ctrl+N / Ctrl+P: navigate the focused list/popup (completion, quick actions, peek)
-            // by injecting a Down/Up arrow key.
+            // by injecting a Down/Up arrow key. Only meaningful in a document (code editor)
+            // context; popup navigation gates on that itself.
             if ((key == Keys.N || key == Keys.P) && ctrl && !shift && !alt)
             {
                 return _popupNav.TryNavigate(down: key == Keys.N);
             }
 
-            // hjkl in tool-window lists/trees. Never in the editor (VsVim owns hjkl there) and
-            // never mid leader-sequence.
-            if (!_leaderActive && !ctrl && !shift && !alt &&
-                (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L))
+            // Tool window: route through its controller's normal/input mode — but only while the
+            // tool window actually holds keyboard focus. VS's frame-selection state can lag behind
+            // real WPF focus, so when an editor is focused the key must fall through to VS instead
+            // of being consumed by the (stale) tool-window controller.
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))
             {
-                if (_toolNav.TryNavigate(key))
+                var controller = _windowManager.CurrentController;
+                if (controller != null)
                 {
-                    return true;
+                    // Input mode: typing passes through. Only Escape (handled above) exits it.
+                    if (controller.IsInputMode)
+                    {
+                        return false;
+                    }
+
+                    // Normal mode: i/I enter input mode (the controller may position the caret
+                    // first, e.g. I = insert at line start in text-input windows); hjkl move the
+                    // focused surface; the controller's action keys (e.g. Solution Explorer
+                    // o/r/m/a, text-input w/b/e) act on it. Shift is NOT gated here so text-input
+                    // controllers can tell I/i and A/a apart — they return false for any key they
+                    // do not consume, which then falls through to VS.
+                    if (!ctrl && !alt)
+                    {
+                        // A controller-specific insert key (text-input I = insert at line start) is
+                        // handled by TryMove first; the generic 'i' below is the plain-insert
+                        // fallback for controllers that don't consume it.
+                        if (key == Keys.I)
+                        {
+                            if (controller.TryMove(key))
+                            {
+                                return true;
+                            }
+
+                            NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-enter-input");
+                            controller.EnterInputMode();
+                            return true;
+                        }
+
+                        if (!_leaderActive &&
+                            (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L ||
+                             controller.ActionKeys.Contains(key)) &&
+                            controller.TryMove(key))
+                        {
+                            return true;
+                        }
+                    }
                 }
             }
 
-            // 1. Leader key pressed: begin a sequence, unless the user is typing (VsVim insert/
-            //    replace mode, or a text input elsewhere) — then Space must type a literal space.
+            // 1. Leader key pressed: begin a sequence, unless the user is typing — then Space
+            //    types a literal space. "Typing" means a tool window in input mode, or the VsVim
+            //    editor in insert/replace mode.
             if (key == _leaderKey && !ctrl && !shift && !alt)
             {
-                if (_vsVim.IsInTypingMode() || ToolWindowNavigation.IsTextInputFocused())
+                if (IsTyping())
                 {
                     return false;
                 }
@@ -221,6 +343,7 @@ namespace MyExtension
 
                 if (_leaderBindings.TryGetValue(sequence, out var action))
                 {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding executed: {sequence}");
                     action();
                     ResetSequence();
                     return true;
@@ -243,6 +366,7 @@ namespace MyExtension
 
             if (_simpleBindings.TryGetValue(simple, out var simpleAction))
             {
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}shortcut-binding executed: {simple}");
                 simpleAction();
                 return true;
             }
@@ -254,6 +378,43 @@ namespace MyExtension
         {
             _leaderActive = false;
             _currentSequence.Clear();
+        }
+
+        /// <summary>
+        /// If the focused tool window is in input mode, exits it (back to normal) and returns
+        /// true so the Escape key is swallowed. Returns false otherwise.
+        /// </summary>
+        private bool ExitToolWindowInputMode()
+        {
+            // A focused tool-window controller in input mode owns Escape: exit it. This must NOT be
+            // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
+            // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
+            // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))
+            {
+                var controller = _windowManager.CurrentController;
+                if (controller?.IsInputMode == true)
+                {
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-exit-input");
+                    controller.ExitInputMode();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// True when the user is typing, so the leader key must type a literal space instead of
+        /// starting a leader sequence: a tool window in input mode, or the VsVim editor in
+        /// insert/replace mode.
+        /// </summary>
+        private bool IsTyping()
+        {
+            return FocusGuard.IsTyping(
+                _windowManager.IsToolWindow,
+                _windowManager.CurrentController?.IsInputMode == true,
+                EditorFocusedVeto,
+                _vsVim.IsInTypingMode);
         }
 
         /// <summary>Builds the canonical shortcut string, e.g. Ctrl+H, Shift+F4, Alt+X.</summary>
@@ -289,8 +450,170 @@ namespace MyExtension
         /// <summary>Performs Cardinal window navigation in a compass direction (see WindowMatrix).</summary>
         private void Navigate(char direction)
         {
-            var wm = new WindowMatrix(_package);
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}navigate direction={direction}");
+            // Rebuild the window matrix each navigation (windows can be resized/opened/closed),
+            // but source the active window from WindowManager's cached frame rather than re-deriving
+            // it from DTE.
+            var wm = new WindowMatrix(_package, _windowManager.CurrentWindow);
             wm.NavigateInDirection(direction);
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Files" finder, centered over the VS main window.
+        /// The <see cref="FileFinder"/> gathers its candidates via DTE on the UI thread.
+        /// </summary>
+        private void OpenTelescope()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Files", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Issues" finder (warnings/errors/TODO markers),
+        /// centered over the VS main window. The <see cref="CodeIssuesFinder"/> gathers candidates
+        /// via DTE on the UI thread.
+        /// </summary>
+        private void OpenTelescopeIssues()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Issues", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope issues: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "References" finder (read/write references to the
+        /// symbol at the caret), centered over the VS main window. The
+        /// <see cref="ReferencesFinder"/> gathers candidates via the host's Roslyn call on the UI
+        /// thread.
+        /// </summary>
+        private void OpenTelescopeReferences()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("References", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope references: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Implementation" finder (implementations/overrides
+        /// of the symbol at the caret), centered over the VS main window. The
+        /// <see cref="ImplementationFinder"/> gathers candidates via the host's Roslyn call on the
+        /// UI thread.
+        /// </summary>
+        private void OpenTelescopeImplementation()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Implementation", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope implementation: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the Telescope overlay with the "Grep" finder (query-driven live grep over the
+        /// solution's files), centered over the VS main window. The <see cref="GrepFinder"/>
+        /// gathers candidates via DTE on the UI thread per typed query.
+        /// </summary>
+        private void OpenTelescopeGrep()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
+                _telescope.Open("Grep", centerRect, dte.MainWindow.HWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope grep: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Toggles the Solution Explorer tool window: opens + focuses it when hidden, closes it
+        /// when visible. Backed by the DTE <c>View.SolutionExplorer</c> command and window Close.
+        /// </summary>
+        private void ToggleSolutionExplorer()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var window = dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer);
+                if (window.Visible)
+                {
+                    window.Close();
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer toggled closed");
+                }
+                else
+                {
+                    window.Activate();
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer toggled open");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>Retrieves the on-screen rectangle (in pixels) of a window handle.</summary>
+        private static System.Drawing.Rectangle? GetWindowRect(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || !GetWindowRectNative(hwnd, out var rect))
+            {
+                return null;
+            }
+            return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowRect")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetWindowRectNative(IntPtr hWnd, out NativeRect rect);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct NativeRect
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
         }
     }
 }

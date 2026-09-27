@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <RootNamespace>Telescope.Tests</RootNamespace>
+    <StartupObject>Telescope.Tests.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Telescope\Telescope.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Telescope project references Microsoft.VisualStudio.SDK with ExcludeAssets="runtime",
+         so the DTE/EnvDTE interop assemblies are NOT copied to output. The FileFinder tests touch
+         types that derive from EnvDTE (DTE, Project), so pull the interop assembly in here for
+         runtime resolution in the test process. -->
+    <PackageReference Include="Microsoft.VisualStudio.Interop" Version="17.14.40260" ExcludeAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" ExcludeAssets="build;analyzers" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System" />
+  </ItemGroup>
+
+</Project>

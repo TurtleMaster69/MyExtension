@@ -31,12 +31,18 @@ namespace MyExtension
         public const int VK_RIGHT = 0x27;
         public const int VK_DOWN = 0x28;
 
+        // Virtual-key codes for the actions the Solution Explorer controller injects.
+        public const int VK_RETURN = 0x0D;
+        public const int VK_F2 = 0x71;
+        public const int VK_ESCAPE = 0x1B;
+
         // KEYEVENTF_KEYUP flag: emit the release after the press.
         private const uint KEYEVENTF_KEYUP = 0x0002;
 
         /// <summary>Presses and releases the given virtual key into the focused window.</summary>
         public static void Press(int vk)
         {
+            InjectedKeyGuard.Instance.Record(vk);
             keybd_event((byte)vk, 0, 0, UIntPtr.Zero);            // key down
             keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // key up
         }

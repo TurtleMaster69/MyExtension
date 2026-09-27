@@ -2,15 +2,51 @@
 using Microsoft.VisualStudio.Shell.Interop;
 using MyExtension;
 using System;
+using System.Collections.Generic;
 
 public sealed class WindowManager : IDisposable
 {
     private readonly IVsMonitorSelection _monitorSelection;
     private uint _selectionEventsCookie;
 
+    // The active tool window's controller. Specific controllers can be registered here; any
+    // unregistered type falls back to a shared GeneralToolWindowController, giving hjkl + an
+    // i/Esc normal-input mode to every tool window by default.
+    private readonly Dictionary<ToolWindowType, IToolWindowController> _controllers = new();
+    private readonly GeneralToolWindowController _defaultController = new(ToolWindowType.Unknown);
+
     public IVsWindowFrame? CurrentWindow { get; private set; }
-    public bool IsToolWindow { get; private set; }
-    public ToolWindowType Type { get; private set; }
+
+    // The frame-derived tool-window state, set only in OnWindowFocusChanged. Exposed through the
+    // sentinel-aware public members below so the test-only stale-focus fault can be injected.
+    private bool _isToolWindow;
+    private ToolWindowType _type;
+
+    // Test-only fault injection: when the harness creates a 'stale-toolwindow' sentinel file under
+    // NEOVISUAL_LOG_DIR, report the Solution Explorer frame as current even when it is not — the
+    // stale-frame + editor-focused state the leak was observed in. Absent in normal user runs
+    // (the env var is unset -> null path -> no file stat).
+    private static readonly string? TestStaleSentinelPath = BuildTestSentinelPath();
+
+    private static string? BuildTestSentinelPath()
+    {
+        string? dir = Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR");
+        return string.IsNullOrEmpty(dir) ? null : System.IO.Path.Combine(dir, "stale-toolwindow");
+    }
+
+    private static bool IsTestStaleInjected() =>
+        TestStaleSentinelPath != null && System.IO.File.Exists(TestStaleSentinelPath);
+
+    public bool IsToolWindow => _isToolWindow || IsTestStaleInjected();
+
+    public ToolWindowType Type => IsTestStaleInjected() ? ToolWindowType.SolutionExplorer : _type;
+
+    /// <summary>
+    /// The controller driving the currently focused tool window, or null when focus is not in a
+    /// tool window. Re-evaluated from <see cref="Type"/> on every access (cheap dictionary lookup).
+    /// </summary>
+    public IToolWindowController? CurrentController =>
+        IsToolWindow ? GetController(Type) : null;
 
     public WindowManager(IVsMonitorSelection monitorSelection)
     {
@@ -20,11 +56,49 @@ public sealed class WindowManager : IDisposable
             new SelectionEvents(this),
             out _selectionEventsCookie);
 
-        // Initialize the current window once.
-        UpdateCurrentWindow();
+        // Initialize the current window (and its classification) once so InputHandler has
+        // correct state immediately, not only after the first focus-change event.
+        RefreshCurrentWindow();
     }
 
-    private void UpdateCurrentWindow()
+    /// <summary>
+    /// Registers a controller for a tool-window type, overriding the default. Called on the UI
+    /// thread (e.g. from package init or by specific tool-window integrations).
+    /// </summary>
+    public void RegisterController(IToolWindowController controller)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        _controllers[controller.Type] = controller;
+    }
+
+    private IToolWindowController GetController(ToolWindowType type)
+    {
+        // Return a stable per-type controller so mode is remembered per window type.
+        if (_controllers.TryGetValue(type, out var registered))
+        {
+            return registered;
+        }
+
+        if (type == ToolWindowType.Unknown)
+        {
+            return _defaultController;
+        }
+
+        // Text-input surfaces (Command Window, Find and Replace, Immediate Window, ...) get the
+        // vim text-motion controller: normal-mode h/l/w/b/e/a/A/I caret motions over the text box.
+        if (GeneralToolWindowController.IsTextInputType(type))
+        {
+            var text = new TextInputToolWindowController(type);
+            _controllers[type] = text;
+            return text;
+        }
+
+        var general = new GeneralToolWindowController(type);
+        _controllers[type] = general;
+        return general;
+    }
+
+    private void RefreshCurrentWindow()
     {
         _monitorSelection.GetCurrentElementValue(
             (uint)VSConstants.VSSELELEMID.SEID_WindowFrame,
@@ -36,29 +110,29 @@ public sealed class WindowManager : IDisposable
     private void OnWindowFocusChanged()
     {
         Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
-        UpdateCurrentWindow();
+        RefreshCurrentWindow();
         if (CurrentWindow == null) { return; }
         CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
         if ((__WindowFrameTypeFlags)(int)value == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
         {
-            IsToolWindow = true;
+            _isToolWindow = true;
             CurrentWindow.GetGuidProperty(
                     (int)__VSFPROPID.VSFPROPID_GuidPersistenceSlot,
                     out Guid guid);
             if (guid != null)
             {
-                Type = ToolWindowTypeResolver.FromGuid(guid);
+                _type = ToolWindowTypeResolver.FromGuid(guid);
             }
             else
             {
-                Type = ToolWindowType.Unknown;
+                _type = ToolWindowType.Unknown;
             }
 
         }
         else
         {
-            IsToolWindow = false;
-            Type = ToolWindowType.Unknown;
+            _isToolWindow = false;
+            _type = ToolWindowType.Unknown;
         }
     }
     public void Dispose()

@@ -833,6 +833,12 @@ normal loop; W-ids are local to this review.
 (M-M1…M-N6, A1…A10) above already fixed most orchestration items; these are net-new
 defects plus DONE/OPEN items whose record no longer matches the repo.
 
+> ✅ **ALL W1–W21 FIXED (2026-09-27).** Each item below is annotated FIXED with a pointer
+> to its `## Done` entry, in commits `8f71dbd` … `cc4f700`. W14 was a user decision (wire
+> `code-slice-worker`); W18's boilerplate de-dup was deferred (low value — the canonical
+> Trailmark fallback lives in AGENTS.md). **Restart opencode** for the agent/skill edits
+> to take effect (agent files load once at startup; A10).
+
 ### Critical (fix first)
 
 1. **W1 — `bugfix` lane has no valid RED path for a diagnostic-neutral bug with no

@@ -113,6 +113,19 @@ the per-gate 3-round cap are independent counters.
 ## LOOP (one feature/bugfix at a time)
 
 1. **Pick the next pending item** from `docs/progress.md` (top of the queue).
+1f. **FEATURE-TRIAGE GATE (user-instruction, mandatory before any FEATURE item).**
+    Before spending any build effort on a **feature** item, you MUST:
+    1. **Research LazyVim** (the reference) for how the feature should work — its
+       workflow/functionality — and design against it.
+    2. Check whether **native VS already does it** and could be extended/reused rather
+       than reimplemented (e.g. VS already updates references on a file move/rename —
+       extend that QoL, don't rebuild it).
+    3. **ASK the user via the `question` tool**: build vs extend/reuse vs skip — with
+       concrete selectable options + a custom answer.
+    4. Wait for the user's decision BEFORE starting the feature pipeline. Skip/redirect
+       accordingly; never dive into a feature pipeline without this gate.
+    This gate applies to every feature item (including the user-requested queue items
+    6-9 and any future feature). Bugfix/trivial items do not need it.
 1a. **Triage the item** (feature / bugfix / trivial) — this decides the loop weight;
     record it as `Lane: feature|bugfix|trivial` at the top of
     `docs/implementation_plan.md` (and in each Execution Log entry) so it survives
@@ -389,7 +402,11 @@ UTF-8 fzf input) — the subagent's own file covers the rest, and AGENTS.md is
 already in every subagent's context — never re-send its content. Subagents:
 `e2e-test-builder`, `implementation-planner`, `build-agent`, `debug-agent`,
 `verification-agent`, `docs-reviewer` — they report in their fixed formats; you
-decide. Never prompt the user mid-loop except for escalation and queue-empty cases.
+decide. **Allowed prompts (the only cases you may use the `question` tool):** (a) the
+FEATURE-TRIAGE gate — build vs extend/reuse vs skip before any feature item (LOOP step
+1f); (b) escalation (gate exhaustion, iteration cap, identical-repeat failure, budget
+exhaustion); (c) the empty-queue "what feature next" question. Never prompt the user
+mid-loop for anything else.
 
 ### Per-delegation time budgets (M-M1)
 

@@ -226,6 +226,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W8: encode the user feature-triage gate as a LOOP step** (Lane: trivial
+  config edit). Added LOOP step **1f FEATURE-TRIAGE GATE** to `neovim_hub.md` (research
+  LazyVim → check native VS reuse → ask the user build vs extend/reuse vs skip via the
+  `question` tool → wait) and added it to the allowed-prompt list in the Delegation
+  contract. **Restart required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W7: reconcile the M-M4 model-pinning record** (Lane: trivial config
   edit). Marked M-M4 ❌ REVERTED/SUPERSEDED citing `4a2ec0b` (model pins removed; agents
   inherit the session default model) and narrowed the nested `trailmark-recon` spawn
@@ -796,9 +801,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
 7. **W7 — M-M4 record is false.** ✅ **FIXED 2026-09-27** — M-M4 marked
    ❌ REVERTED/SUPERSEDED citing `4a2ec0b` (agents inherit the session default model);
    the "cheaper model" rationale for nested recon narrowed to context isolation only.
-8. **W8 — the user feature-triage gate is not a hub step.** docs/progress.md lines 132-144 requires
-   LazyVim research + ask-user before ANY feature; `neovim_hub.md:91,333,347` lets step 1 run a
-   queued feature without it. Fix: encode the gate as a LOOP step + allowed-prompt.
+8. **W8 — the user feature-triage gate is not a hub step.** ✅ **FIXED 2026-09-27** —
+   added LOOP step **1f FEATURE-TRIAGE GATE** (research LazyVim → check native VS reuse →
+   ask the user build vs extend/reuse vs skip via `question` → wait for the decision) and
+   added it to the Delegation contract's allowed-prompt list.
 9. **W9 — incomplete delegation inputs.** Steps 3/5/6/8 (`:139-141,161-162,168-171,200-211`)
    omit the affected unit project(s), final-gate flag, and (step 4) the known-RED allowlist that
    `build-agent.md:72-75`, `debug-agent.md:60-62`, `verification-agent.md:69-78`, and

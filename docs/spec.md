@@ -188,7 +188,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`SyntaxHighlighter`), prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
   implementation finder (`ImplementationFinder`/`ImplementationHit`).
-- `dotnet run --project tests/NeoVisual.Tests` — **26 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **31 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -212,8 +212,8 @@ pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **34 scenarios** (33 passing; 1 known-RED — `explorer-open-searchbox`,
-tracked in docs/progress.md) are: `telescope-open`,
+The **34 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
+2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
 `telescope-grep`, `telescope-implementation`, `telescope-open-file-searchbox`,
@@ -225,7 +225,7 @@ tracked in docs/progress.md) are: `telescope-open`,
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
 `neovisual-explorer-add`, `neovisual-explorer-move`,
 `neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
-`seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox` (known-RED).
+`seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox`.
 
 ### 5.3 E2E harness gotchas
 
@@ -237,13 +237,16 @@ tracked in docs/progress.md) are: `telescope-open`,
   assertions). A bootstrap `Assert-SeedConsistent` self-check fails fast if a seed
   file has mixed EOL or drifted content — this prevents VS's "normalize line
   endings?" modal from stealing focus mid-test.
-- **Seed-leak guard (end-of-run):** the bootstrap snapshots every seeded file's
-  SHA-256 (`log/seed-baseline.json`) right after the fresh reseed, and the LAST
-  scenario (`seed-leak`) re-hashes the seeds at the end of the run and fails on any
-  seeded file that was **added / removed / modified** during the run — proving no
-  scenario wrote into the seed. Expected writes (a scenario that legitimately edits a
-  seed) are excluded via an explicit `$AllowLeak` filename list in the scenario (empty
-  by default). Skips gracefully under `-NoBootstrap` reuse mode.
+- **Seed-leak guard (end-of-run):** the bootstrap generates an **expected-result copy**
+  of every seeded file (`log/seed-expected/`) right after the fresh reseed, and the LAST
+  scenario (`seed-leak`) byte-compares the seed tree to that expected-result tree at the
+  end of the run, failing on any seeded file that was **added / removed / modified** —
+  proving no scenario wrote into the seed. There is **no ignorelist**: the one scenario
+  that intentionally writes a seed (`neovisual-editor-insert` saves typed text into
+  `Beta.cs`) refreshes that file's expected copy (`Update-SeedExpected`) after it
+  validates the write, so any *other* or *later* change to any seed still fails.
+  `obj/`+`bin/` build outputs are excluded from the seed set (they are not seeds).
+  Skips gracefully under `-NoBootstrap` reuse mode.
 - The overlay **closes on focus loss** (`Deactivated` → `CloseOverlay`), so a
   stale open overlay never swallows the next leader sequence.
 - The harness verifies the foreground window before every key sequence and
@@ -323,6 +326,6 @@ tracked in docs/progress.md) are: `telescope-open`,
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (56) and
-  `dotnet run --project tests/NeoVisual.Tests` (26).
-- Live E2E: `pwsh tools/test-e2e.ps1` (33 scenarios; 32 passing + 1 known-RED);
+  `dotnet run --project tests/NeoVisual.Tests` (31).
+- Live E2E: `pwsh tools/test-e2e.ps1` (34 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

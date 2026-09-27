@@ -63,3 +63,21 @@ Documented in `.opencode/skills/trailmark/SKILL.md` ("Graph export shapes"),
 and `.opencode/agent/{arch-auditor,trailmark-recon}.md`. Verified 2026-09-27.
 FIXED 2026-09-27: documentation fix landed in the six files listed above (the sweep's
 first pass) — this entry stays as the record of the recurring agent-syntax defect.
+
+## 2026-09-27 | verification-agent | agent-syntax
+COMMAND: `pwsh tools/test-e2e.ps1 -Tests seed-leak` — an ISOLATED retry of the
+end-of-run leak guard, applied as the flaky-retry policy.
+RESULT: the isolated run PASSED and the agent classified the full-run failure as
+`flaky`. That classification is WRONG: `seed-leak` asserts over the WHOLE run's
+side effects, and an isolated re-run re-bootstraps/reseeds the scratch first, so it
+cannot reproduce a leak caused by earlier scenarios. A pass-on-retry is evidence of
+flakiness only for state-INDEPENDENT scenarios. The real failure was genuine: the
+`Get-SeedFiles` guard counted `Probe/obj/**/*.cs` build artifacts as "added" seeds
+and `neovisual-editor-insert`'s intentional `Beta.cs` save as "modified"
+(user-confirmed real). (Also discovered: the W22 `$AllowLeak` mechanism itself was
+broken — deleting allowlisted entries from the snapshot re-reported them as "added".)
+FIX: `.opencode/agent/verification-agent.md` step 6 now forbids isolated retries of
+end-of-run aggregate/guard scenarios — such a failure is a real harness finding
+regardless of an isolated retry. The guard defect itself was fixed in
+`tools/test-e2e.ps1` (exclude `obj/`+`bin/`; `Assert-NoSeedLeak` takes the allowlist
+and skips allowlisted files instead of mutating the snapshot). FIXED 2026-09-27.

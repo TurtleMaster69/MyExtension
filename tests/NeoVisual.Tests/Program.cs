@@ -268,6 +268,55 @@ namespace NeoVisual.Tests
                 "empty nodes resolve to null");
         }
 
+        public static void Run_HierarchyResolver_FirstMatch_FindsByName()
+        {
+            // Query "GrepProbe" finds GrepProbe.cs (name with extension contains the query).
+            var file = new HierarchyNode(
+                HierarchyResolver.PhysicalFileKind, "GrepProbe.cs", @"C:\p\GrepProbe.cs", null);
+            Assert.Equal(@"C:\p\GrepProbe.cs",
+                HierarchyResolver.FirstPathMatching(new HierarchyNode[] { file }, "GrepProbe"));
+        }
+
+        public static void Run_HierarchyResolver_FirstMatch_CaseInsensitive()
+        {
+            var file = new HierarchyNode(
+                HierarchyResolver.PhysicalFileKind, "GrepProbe.cs", @"C:\p\GrepProbe.cs", null);
+            Assert.Equal(@"C:\p\GrepProbe.cs",
+                HierarchyResolver.FirstPathMatching(new HierarchyNode[] { file }, "grepprobe"));
+        }
+
+        public static void Run_HierarchyResolver_FirstMatch_RecursesFolders()
+        {
+            // A folder-wrapped hit recurses in tree order; folder nodes have no file path.
+            var folder = new HierarchyNode(
+                HierarchyResolver.PhysicalFolderKind, "Services", "",
+                new HierarchyNode[]
+                {
+                    new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Other.cs", @"C:\p\Services\Other.cs", null),
+                    new HierarchyNode(HierarchyResolver.PhysicalFileKind, "GrepProbe.cs", @"C:\p\Services\GrepProbe.cs", null),
+                });
+            Assert.Equal(@"C:\p\Services\GrepProbe.cs",
+                HierarchyResolver.FirstPathMatching(new HierarchyNode[] { folder }, "GrepProbe"));
+        }
+
+        public static void Run_HierarchyResolver_FirstMatch_NoMatchReturnsNull()
+        {
+            var file = new HierarchyNode(
+                HierarchyResolver.PhysicalFileKind, "Alpha.cs", @"C:\p\Alpha.cs", null);
+            Assert.True(
+                HierarchyResolver.FirstPathMatching(new HierarchyNode[] { file }, "GrepProbe") == null,
+                "a non-matching query resolves to null");
+        }
+
+        public static void Run_HierarchyResolver_FirstMatch_EmptyQueryReturnsNull()
+        {
+            var file = new HierarchyNode(
+                HierarchyResolver.PhysicalFileKind, "GrepProbe.cs", @"C:\p\GrepProbe.cs", null);
+            Assert.True(
+                HierarchyResolver.FirstPathMatching(new HierarchyNode[] { file }, "") == null,
+                "an empty query resolves to null");
+        }
+
         // ================================================================
         // TextInputToolWindowController — vim text motions in text-input windows
         // ================================================================

@@ -34,5 +34,23 @@ namespace MyExtension
             }
             return null;                                                       // empty / no reachable file -> null
         }
+
+        public static string? FirstPathMatching(
+            System.Collections.Generic.IReadOnlyList<HierarchyNode> nodes, string query)
+        {
+            if (string.IsNullOrEmpty(query)) return null;
+            foreach (var n in nodes)
+            {
+                if (n.Kind == PhysicalFileKind &&
+                    n.Name.IndexOf(query, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    return n.FilePath;                                  // name (with ext) contains the query
+                if (n.Kind == PhysicalFolderKind && n.Children != null)
+                {
+                    var hit = FirstPathMatching(n.Children, query);     // folders recurse, in order
+                    if (hit != null) return hit;
+                }
+            }
+            return null;                                                 // no match / empty query -> null
+        }
     }
 }

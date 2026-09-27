@@ -98,6 +98,34 @@ raw literals = 1 each = the `$script:Pfx*` definitions; Pfx usage = 102 = exact
 expected 91+4 + 3+4), and the 19-scenario e2e subset ran green (the only 2 failures
 were known-backlog assertion bugs, not regressions).
 
+## Known bug backlog (added 2026-09-27, while fixing `explorer-open-searchbox`)
+
+> **USER-REPORTED (user saw a real leak).** Both items below were found during the
+> `explorer-open-searchbox` item and are **not** accessory — they are real harness/teardown
+> defects. Fix them promptly.
+
+1. **`neovisual-explorer-move` leaks the `m` key straight into the editor.**
+   `SolutionExplorerController`'s `m` action injects the VS Move command with NO focus guard:
+   when Solution Explorer is NOT focused (a document holds focus), the physical `m` falls
+   through to the editor and is typed (in VsVim normal mode `m` starts a motion → `ljoljoljo`
+   becomes a typed storm). Reproduced in `log/79-neovisual-exp.log` (15:30:29.338 `m` →
+   `solution-explorer move`, then LMenu; the run's forced teardown saved 20s later). The
+   user observed `ljoljoljoljoljo` typed into a seeded file (likely `Models/Order.cs`, the
+   first file in the loop iteration order) from the **explorer-navigation** storm — the same
+   class of defect. **Fix direction:** only act (and only consume the key) when the Solution
+   Explorer tree is the WPF-focused element (the controller already has `TextMotionHelper`
+   focus probes); otherwise fall through / swallow. Also stop the harness's
+   `Assert-NoEnterStorm`/teardown from happening mid-scenario (the 20s LMenu gap proves the
+   teardown fired while a scenario was still running — see #2).
+2. **Harness teardown force-killed VS without saving → next run gets the "did not close
+   properly / unsaved changes" prompt, and the leak evidence is lost.** ✅ **FIXED 2026-09-27**
+   (part of this item): `tools/test-e2e.ps1` now has `Save-AllDocuments` (resolves the
+   instance's DTE from the ROT by PID via `dte-command.ps1` and runs `File.SaveAll`) and calls
+   it on EVERY kill path — `Stop-SpawnedVs`, `Stop-HarnessVs`, and the stale-exploration
+   cleanup — so open documents are flushed to disk *before* the process is stopped. This both
+   preserves a leak's file content for inspection and prevents the next run's clean-close
+   warning. (Item #1 remains OPEN.)
+
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
@@ -127,6 +155,13 @@ Top of the queue, in priority order:
    - **`explorer-open-searchbox`** — fix the search-box focus-exit gap
      (KNOWN-RED scenario registered). **← next item.**
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
+5.5. **`telescope-implementation` — intermittent injected-Enter loss (fail-twice in full
+   runs; passes in isolated/other runs).** `implementations gathered count=1` + correct
+   preview, then the Step-5 Enter never reaches the hook (no `[Hook] key=Return`), so
+   `opened implementation: ... Shape.cs line=2` never fires. Outside the
+   `explorer-open-searchbox` diff (ImplementationFinder/overlay untouched); needs its own
+   debug-lane item (likely an overlay focus/`Assert-OverlayFocused` timing gap). Not
+   blocking, but it is a real intermittent failure — queue it after #1 above.
 
 ## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
 
@@ -227,6 +262,46 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — `explorer-open-searchbox` search-box focus-exit gap** (Lane:
+  `bugfix (no-seam)`, 5 VERIFY boots + 1 RED boot; attempt 1 GREEN after 1 regression
+  iteration). **The last known-RED scenario is now GREEN — the 34-scenario suite has no
+  known-RED left** (remaining failures are flaky/known-flaky + the separately-queued
+  intermittent `telescope-implementation`). Fix: `ExitInputMode` captures the search-box
+  query, and `ReturnFocusToTree(query)` resolves the query-matched tree node via the new
+  pure `HierarchyResolver.FirstPathMatching` (VS's native search filter does NOT select
+  the matching node — falsified live), injects a bounded (≤4) `VK_ESCAPE` loop while the
+  box is still focused (Escape #1 only CLEARS the query — also falsified live), then
+  `Select`s the target + a ~1.5 s keeper. **No new/changed `[Telescope]`/`[NeoVisual]`
+  log literal** (M-M7 not triggered).
+  **Change summary:** `MyExtension/ToolWindows/HierarchyResolver.cs` (+`FirstPathMatching`),
+  `MyExtension/ToolWindows/SolutionExplorerController.cs` (`ExitInputMode`,
+  `ReturnFocusToTree`, `SelectFirstSourceFile` now emits `editor-view-opened file=` for the
+  file it opens and activates an already-open document), `MyExtension/KeyInjection.cs`
+  (`VK_ESCAPE`), `tests/NeoVisual.Tests/Program.cs` (+5, 26→31), `tools/test-e2e.ps1`
+  (seed-leak expected-result rework, teardown save, nav assertion re-scope),
+  `tools/check-doc-refs.ps1` (allowlist). **If this regresses, look first at
+  `ReturnFocusToTree`'s bounded-Escape loop + `FirstPathMatching`, then
+  `SelectFirstSourceFile`'s direct `editor-view-opened` emission (the D1 fix).**
+  Doc sync: spec.md seed-leak section, AGENTS.md/SKILL.md counts (Telescope 56,
+  NeoVisual 31). Commit: (recorded below)
+  - **D1 (ACCEPT):** `g` emits the existing `editor-view-opened file=` literal directly
+    (activating an already-open view raises no `TextViewCreated` — the plan's premise was
+    false); this fixed the full-suite `explorer-open-navigation` fail-twice.
+  - **D2 (ACCEPT):** `explorer-open-navigation`'s `editor-view-opened` assertion was
+    mislabelled "`o` opened the selected source file" but was in fact satisfied by the
+    `g`-path emission — re-attributed to `g`; `o` asserts `solution-explorer open`. Not a
+    weakening (the searchbox scenario still asserts the full open chain).
+  - **D3 (ACCEPT, user-requested):** W22's snapshot+`$AllowLeak` guard was defective
+    (counted `obj/` build artifacts + `neovascular-editor-insert`'s intentional `Beta.cs`
+    save; the allowlist itself re-reported removed entries as "added"). Replaced by an
+    **expected-result tree** (`log/seed-expected/`, byte-compared, no ignorelist) with the
+    intentional write refreshing its expected copy in a `finally`; teardown now runs
+    `File.SaveAll` before killing VS (leak evidence survives; no next-run
+    "did not close properly" prompt).
+  - **New queue items** (found while fixing): `neovisual-explorer-move` leaks `m` into the
+    editor when SE is unfocused (#1) and `telescope-implementation` intermittent Enter
+    (#5.5). Failure-log sweep: 2 entries read, 2 annotated, 0 queued-by-sweep, 0 new fixed.
+  - `delegations: 4 | VS boots: 6 | iterations: 1`.
 - **2026-09-27 — W24 (user-requested): make the failure log a per-run step** (Lane:
   trivial config edit; agent docs only — no source/tests/tools). Closes the gap that
   `.opencode/AGENT-FAILURES.md` (W23) had no consumer: a failure log nobody reads is
@@ -271,17 +346,25 @@ Top of the queue, in priority order:
 
 - **2026-09-27 — W22 (user-requested): `seed-leak` end-of-run leak guard** (Lane:
   bugfix/harness-only). `tools/test-e2e.ps1` now takes a SHA-256 snapshot of every seeded
-  file at bootstrap (right after the fresh reseed → `log/seed-baseline.json`) and runs a
+  file at bootstrap (right after the fresh reseed) and runs a
   new LAST scenario `seed-leak` that re-hashes the seeds at the END of the run and FAILS
   on any seeded file that was **added / removed / modified** during the run. Purpose: prove
   no e2e test wrote into a seeded file, so a real leak (a test that mutated a seed, or a
   future in-flight item that intends to) is caught rather than silently corrupting later
-  runs. Expected/correct writes are excluded via an explicit `$AllowLeak` filename list
-  (empty by default); the guard skips gracefully in `-NoBootstrap` reuse mode. Filesystem
-  only — no keystrokes, no diagnostics (M-M7 N/A). Helpers `Get-SeedFiles` /
-  `Write-SeedSnapshot` / `Assert-NoSeedLeak`; verified by a no-VS self-check (clean→pass,
-  modify→fail, remove→fail). Scenario count 33→34 (32→33 passing) synced across
-  spec.md / AGENTS.md / SKILL.md; `check-doc-refs.ps1` PASS. Commit: (recorded below)
+  runs. **SUPERSEDED DESIGN (2026-09-27, see the explorer-open-searchbox Done entry):** the
+  original bootstrap wrote a SHA-256 snapshot (log/seed-baseline.json) and the scenario
+  held an `$AllowLeak` filename list. **That design was broken and is replaced by an
+  expected-result tree** (`log/seed-expected/`, byte-compared at the end — no ignorelist):
+  (a) the snapshot counted `Probe/obj/**/*.cs` build artifacts as "added" seeds and
+  `neovisual-editor-insert`'s intentional `Beta.cs` save as "modified" (a real full-run
+  failure that W22's self-check-only verification missed); (b) the `$AllowLeak` mechanism
+  itself was defective (deleting allowlisted entries from the snapshot re-reported them as
+  "added"). The guard skips gracefully in `-NoBootstrap` reuse mode. Filesystem only — no
+  keystrokes, no diagnostics (M-M7 N/A). Helpers `Get-SeedFiles` / `Write-SeedExpected` /
+  `Update-SeedExpected` / `Assert-NoSeedLeak`; re-verified by a no-VS self-check (clean→pass,
+  obj-artifact→pass, intentional Beta.cs→pass, foreign edit→fail, remove→fail). Scenario
+  count 33→34 (32→33 passing) synced across spec.md / AGENTS.md / SKILL.md;
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W21: add docs/architecture-review.md to the doc-ref lint** (Lane: trivial
   config edit). `tools/check-doc-refs.ps1`: added `docs/architecture-review.md` to the
   default `$Docs` set + the header list; taught `Test-PathRef` to strip `:N-M` line-range

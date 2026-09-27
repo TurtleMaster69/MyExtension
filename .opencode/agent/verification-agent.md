@@ -90,7 +90,16 @@ authoritative input list.) Do:
    "tweaked" it), flag it as a DEVIATION and treat any resulting pass as suspect.
 6. **Flaky-retry policy:** on a scenario failure, re-run that scenario ONCE (`-Tests
    <failing-scenario>`). Pass-on-retry = FLAKY (report it as flaky, NOT a
-   regression). Fail-twice = real RED. **Report the scenario's flaky count** — the
+   regression). Fail-twice = real RED.
+   **NEVER retry an END-OF-RUN aggregate/guard scenario in isolation — its pass is
+   meaningless.** `seed-leak` (and any scenario that asserts over the WHOLE run's
+   side effects) can only fail because earlier scenarios ran; re-running it alone
+   re-bootstraps/reseeds and cannot reproduce the leak, so a pass-on-retry is NOT
+   evidence of flakiness. Report such a failure as a **real regression / harness
+   finding** (fail = real, regardless of an isolated retry) and classify it as
+   harness-layer if the root cause is in `tools/`. (This exact mistake misclassified
+   the `seed-leak` Beta.cs/obj write in the 2026-09-27 explorer-open-searchbox run.)
+   **Report the scenario's flaky count** — the
    cumulative count the hub passed you for this item, plus 1 if this run flakes —
    so the hub can apply the flaky-budget (M-M2). The **hub** performs the 3rd-strike
    upgrade (3 cumulative flakes → regression); report the count and your classification,

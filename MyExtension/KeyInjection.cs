@@ -34,6 +34,7 @@ namespace MyExtension
         // Virtual-key codes for the actions the Solution Explorer controller injects.
         public const int VK_RETURN = 0x0D;
         public const int VK_F2 = 0x71;
+        public const int VK_ESCAPE = 0x1B;
 
         // KEYEVENTF_KEYUP flag: emit the release after the press.
         private const uint KEYEVENTF_KEYUP = 0x0002;

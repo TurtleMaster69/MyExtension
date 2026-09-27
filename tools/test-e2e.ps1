@@ -57,7 +57,7 @@
 # Side effects (M-N5 — this is NOT a read-only run):
 #   - Writes per-run logs to log/<index>-neovisual-{exp,main}.log.
 #   - Reseeds the scratch solution at %TEMP%\telescope_scratch (delete + recreate).
-#   - Records a bootstrap SHA-256 snapshot of every seeded file (log/seed-baseline.json) so the
+#   - Generates a bootstrap expected-result copy of every seeded file (log/seed-expected/) so the
 #     seed-leak scenario can prove no seeded file was written into during the run.
 #   - Sets NEOVISUAL_TEST_SOLUTION / NEOVISUAL_LOG_DIR / NEOVISUAL_LOG_INDEX in PROCESS scope only
 #     (the spawned main VS inherits them; they do NOT persist past this run).
@@ -96,9 +96,31 @@ function Add-SpawnedVs([object]$proc) {
     }
 }
 
+function Save-AllDocuments([int]$devenvPid) {
+    # Save every open document in the given VS instance BEFORE killing it. Two reasons:
+    #  1. Leak evidence: a scenario that typed into an open file leaves its content only in the
+    #     editor buffer until saved; a force-kill discards it, so the leak can never be inspected.
+    #  2. Clean teardown: VS must not be killed with unsaved changes, or the NEXT run greets the
+    #     user with the "Visual Studio did not close properly / there are unsaved changes" prompt.
+    # Resolves the instance's DTE from the ROT by PID (the same helper the harness already uses to
+    # open the scratch solution) and runs File.SaveAll. Best-effort: a missing/unresponsive
+    # instance is reported but not fatal (the caller still stops the process).
+    if (-not $devenvPid) { return }
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { Write-Info 'dte-command.ps1 missing; cannot SaveAll before stop'; return }
+    try {
+        & $dteCmd -DevenvPid $devenvPid -Command 'File.SaveAll' 2>$null | Out-Null
+        Write-Info "saved all open documents (PID $devenvPid) before stopping VS"
+    } catch {
+        Write-Info "could not File.SaveAll on PID $devenvPid ($($_.Exception.Message)); stopping VS anyway"
+    }
+}
+
 function Stop-SpawnedVs {
     # Kill ONLY the VS instances this run spawned (M-M5). Never a blanket `Get-Process devenv`.
-    foreach ($id in $script:SpawnedVsPids) {
+    # Save open documents first (leak evidence + clean next-run start; see Save-AllDocuments).
+    foreach ($id in @($script:SpawnedVsPids)) {
+        Save-AllDocuments $id
         try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch { }
     }
     $script:SpawnedVsPids.Clear()
@@ -108,9 +130,12 @@ function Stop-HarnessVs {
     # Pre-spawn cleanup (M-M5): kill ONLY devenv instances that look harness-spawned — a main VS
     # window titled 'MyExtension' or an 'Experimental' window. Never a blanket `Get-Process devenv
     # | Stop-Process`, which would terminate the user's unrelated open VS instances.
-    Get-Process devenv -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowTitle -match 'MyExtension' -or $_.MainWindowTitle -match 'Experimental' } |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+    # Save open documents first so a previous run's leak evidence survives and this run starts from
+    # a clean state (no "VS did not close properly / unsaved changes" prompt).
+    $targets = @(Get-Process devenv -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -match 'MyExtension' -or $_.MainWindowTitle -match 'Experimental' })
+    foreach ($p in $targets) { Save-AllDocuments $p.Id }
+    foreach ($p in $targets) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }
 
 function Write-ToolsHash {
@@ -542,54 +567,75 @@ function Reset-ScratchSolution([string]$scratchDir) {
 }
 
 # ---------------------------------------------------------------------------
-# Seed-leak guard (filesystem-only): snapshot every seeded file at bootstrap and
-# prove the suite did not WRITE into any of them. Codespace scenarios (grep/references)
-# only READ, and no scenario saves an opened file, so any change is an unintended leak
-# (an editor mutation, a format-on-edit, a stray command). Excludes the harness's own
-# logs/scratch — the diff is scoped to the seeded solution dir.
+# Seed-leak guard (filesystem-only): generate an EXPECTED-RESULT copy of every
+# seeded file at bootstrap, then prove the suite left the seed tree exactly as
+# expected. Codespace scenarios (grep/references) only READ; the ONE scenario that
+# intentionally writes a seed (`neovascular-editor-insert` saves typed text into
+# Beta.cs) refreshes that file's expected copy at the point it validates the
+# write. There is NO ignorelist: an intentional write is represented as its
+# expected RESULT, and any OTHER (or later) change to any seed still fails.
+# Excludes the harness's own logs/scratch — the diff is scoped to the seeded dir.
 # ---------------------------------------------------------------------------
 function Get-SeedFiles([string]$scratchDir) {
     # Every seeded source file (mirrors Assert-SeedConsistent's gather): *.cs + *.sln/*.csproj.
-    # Sorted by name so the snapshot/diff are deterministic.
+    # EXCLUDES build-output dirs (obj/ + bin/): VS/dotnet builds generate *.cs there
+    # (AssemblyInfo/GlobalUsings/AssemblyAttributes) that are NOT seeds, so counting them as
+    # "added" is a false leak (W22 follow-up: the guard was only self-checked, never full-run).
+    # Sorted by name so the expected/diff are deterministic.
     Get-ChildItem -Path $scratchDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in '.cs', '.sln', '.csproj' } |
+        Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } |
         Sort-Object FullName
 }
 
-function Write-SeedSnapshot([string]$scratchDir, [string]$outPath) {
-    # SHA-256 per seeded file -> JSON map { relPath -> hash }. Materialized at bootstrap (after the
-    # reseed) so seed-leak can diff against a known-clean baseline.
-    $map = [ordered]@{}
+function Write-SeedExpected([string]$scratchDir, [string]$expectedDir) {
+    # Materialize the bootstrap expected-result tree: a golden COPY of every seeded file, in the
+    # same relative layout. seed-leak byte-compares the seed tree to this tree at the end.
+    if (Test-Path $expectedDir) { Remove-Item $expectedDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $expectedDir | Out-Null
     foreach ($f in Get-SeedFiles $scratchDir) {
         $rel = $f.FullName.Substring((Resolve-Path $scratchDir).Path.Length + 1)
-        $map[$rel] = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+        $dst = Join-Path $expectedDir $rel
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+        Copy-Item -LiteralPath $f.FullName -Destination $dst -Force
     }
-    New-Item -ItemType Directory -Force -Path (Split-Path $outPath) | Out-Null
-    ($map | ConvertTo-Json) | Set-Content -Path $outPath -Encoding utf8
 }
 
-function Assert-NoSeedLeak([string]$scratchDir, [string]$snapshotPath) {
-    # Compare current content against the bootstrap snapshot. Reports added/removed/modified
-    # seeded files as a leak. Skips gracefully (never false-fails) when the snapshot or
-    # scratch dir is absent — e.g. under -NoBootstrap reuse where bootstrap did not reseed.
-    if (-not (Test-Path $snapshotPath)) {
-        Write-Pass "seed-leak: no bootstrap snapshot (reuse mode?) - skipped"
+function Update-SeedExpected([string]$scratchDir, [string]$expectedDir, [string]$rel) {
+    # Refresh ONE file's expected result after a scenario INTENTIONALLY wrote (and validated) it.
+    # E.g. neovascular-editor-insert saves typed text into Beta.cs; this records the post-write
+    # content as the expected RESULT. This replaces the ignorelist: nothing is skipped — the
+    # expected state is simply the intended one, so any further change still fails at seed-leak.
+    $src = Join-Path $scratchDir $rel
+    $dst = Join-Path $expectedDir $rel
+    if (-not (Test-Path $src)) { return }
+    New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+}
+
+function Assert-NoSeedLeak([string]$scratchDir, [string]$expectedDir) {
+    # Compare the seed tree to its expected-result tree. Reports added/removed/modified seeded
+    # files as a leak. Skips gracefully (never false-fails) when the expected tree or scratch dir
+    # is absent — e.g. under -NoBootstrap reuse where bootstrap did not reseed.
+    if (-not (Test-Path $expectedDir)) {
+        Write-Pass "seed-leak: no expected-result tree (reuse mode?) - skipped"
         return
     }
     if (-not (Test-Path $scratchDir)) {
         Write-Pass "seed-leak: scratch dir absent - skipped"
         return
     }
-    $baseline = Get-Content $snapshotPath -Raw | ConvertFrom-Json
     $changes = @()
     foreach ($f in Get-SeedFiles $scratchDir) {
         $rel = $f.FullName.Substring((Resolve-Path $scratchDir).Path.Length + 1)
-        $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
-        $before = $baseline.$rel
-        if ($null -eq $before) { $changes += "added: $rel" }
-        elseif ($before -ne $hash) { $changes += "modified: $rel" }
+        $exp = Join-Path $expectedDir $rel
+        if (-not (Test-Path $exp)) { $changes += "added: $rel"; continue }
+        $actualHash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+        $expectedHash = (Get-FileHash $exp -Algorithm SHA256).Hash
+        if ($actualHash -ne $expectedHash) { $changes += "modified: $rel" }
     }
-    foreach ($rel in $baseline.PSObject.Properties.Name) {
+    foreach ($ef in (Get-ChildItem -Path $expectedDir -Recurse -File -ErrorAction SilentlyContinue)) {
+        $rel = $ef.FullName.Substring((Resolve-Path $expectedDir).Path.Length + 1)
         if (-not (Test-Path (Join-Path $scratchDir $rel))) { $changes += "removed: $rel" }
     }
     if ($changes.Count -gt 0) {
@@ -953,14 +999,17 @@ Register-Scenario 'explorer-open-navigation' {
     if (-not $opened) { throw 'could not ensure Solution Explorer open' }
 
     # g -> programmatically select the first physical source file under the project (UIHierarchy
-    # walk; escapes the injected-key/csproj-open trap). The diagnostic is the truthful selection
-    # signal the harness asserts.
-    Send-Tap 0x47; Start-Sleep -Milliseconds 800   # g -> select first source file
+    # walk; escapes the injected-key/csproj-open trap), SELECT it in the tree, and OPEN it in the
+    # editor. `g` deliberately opens (and emits `editor-view-opened file=`) so the deterministic
+    # selection is observable even when the target file is already open (activating an existing
+    # view raises no TextViewCreated) — the assertion below proves `g` reached the controller with
+    # the real selected path, and is order-independent of `o` (which then opens what `o` selects).
+    Send-Tap 0x47; Start-Sleep -Milliseconds 800   # g -> select + open first source file
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer select file=.*\.cs" 'g selected the first source file'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*\.cs" 'g opened the selected source file'
     Assert-VsFocused $vs 'explorer navigation (o)' # keys must land in the VS instance
-    Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open the selected file
+    Send-Tap 0x4F; Start-Sleep -Milliseconds 800   # o -> open the selected item (tree focus intact)
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*\.cs" 'o opened the selected source file'
     Assert-NoEnterStorm $logPath 'explorer-open-navigation'
 }
 
@@ -1096,14 +1145,26 @@ Register-Scenario 'neovisual-editor-insert' {
 
     $probeDir = Join-Path (Join-Path $env:TEMP 'telescope_scratch') 'Probe'
     $file = Join-Path $probeDir 'Beta.cs'
-    if (-not (Test-Path $file)) { throw "editor file missing: $file" }
-    $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
-    if (-not $content) { throw 'editor file is empty after save' }
-    if (-not $content.Contains($marker)) {
-        $preview = if ($content.Length -gt 200) { $content.Substring(0, 200) } else { $content }
-        throw "typed text was swallowed/not inserted (file lacks marker '$marker'). Content: $preview"
+    # This scenario INTENTIONALLY writes Beta.cs (the Space+W save above). Record the observed
+    # post-save content as the expected RESULT **in a finally** — i.e. atomically with the write,
+    # before any assertion can throw. This keeps the no-ignorelist seed-leak guard coupled to the
+    # ACTUAL write rather than to this scenario's success: if this scenario flakes (its own
+    # known-RED marker assertion throws), seed-leak must still see the expected post-save content,
+    # not a stale bootstrap copy. Any OTHER or LATER change to any seed (including Beta.cs) still
+    # fails at seed-leak.
+    try {
+        if (-not (Test-Path $file)) { throw "editor file missing: $file" }
+        $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
+        if (-not $content) { throw 'editor file is empty after save' }
+        if (-not $content.Contains($marker)) {
+            $preview = if ($content.Length -gt 200) { $content.Substring(0, 200) } else { $content }
+            throw "typed text was swallowed/not inserted (file lacks marker '$marker'). Content: $preview"
+        }
+        Write-Pass "typed text reached the editor (file contains '$marker')"
+    } finally {
+        $scratchRoot = Split-Path $probeDir -Parent
+        Update-SeedExpected $scratchRoot (Join-Path $logDir 'seed-expected') 'Probe\Beta.cs'
     }
-    Write-Pass "typed text reached the editor (file contains '$marker')"
 }
 
 # --- neovisual-textinput-motions -----------------------------------------
@@ -1607,28 +1668,17 @@ Register-Scenario 'seed-reset' {
 }
 
 # --- seed-leak ------------------------------------------------------------
-# Filesystem-only leak guard: NO scenario may WRITE into a seeded file. The bootstrap records a
-# SHA-256 snapshot of every seeded file (log/seed-baseline.json) right after the reseed; this
-# scenario re-hashes them and fails on any added / removed / modified seeded file. Put it LAST so
-# the whole run's writes are checked. Legitimately WRITTEN seeds (an intentional edit) must be
-# allowlisted here by name. Skips gracefully under -NoBootstrap (no snapshot).
+# Filesystem-only leak guard: NO scenario may WRITE into a seeded file. The bootstrap generates
+# an expected-result copy of every seeded file (log/seed-expected/) right after the reseed; a
+# scenario that INTENTIONALLY writes a seed refreshes that file's expected copy (Update-SeedExpected)
+# once it has validated the write; this scenario byte-compares the whole seed tree to the expected
+# tree and fails on any added / removed / modified seeded file. There is NO ignorelist. Put it LAST
+# so the whole run's writes are checked. Skips gracefully under -NoBootstrap (no expected tree).
 Register-Scenario 'seed-leak' {
     param($vs, $logPath)
-    $snapshot = Join-Path $logDir 'seed-baseline.json'
+    $expected = Join-Path $logDir 'seed-expected'
     $scratch = if ($env:NEOVISUAL_TEST_SOLUTION) { Split-Path $env:NEOVISUAL_TEST_SOLUTION } else { Join-Path $env:TEMP 'telescope_scratch' }
-    # $AllowLeak: seeded files a scenario may INTENTIONALLY modify (bare filenames, empty by
-    # default). When a planned scenario is SUPPOSED to edit that seed, add its name here so the
-    # expected write is not reported as a leak — e.g. @('Beta.cs') if a rename test edits it.
-    $AllowLeak = @()
-    if ($AllowLeak.Count -gt 0 -and (Test-Path $snapshot) -and (Test-Path $scratch)) {
-        $baseline = Get-Content $snapshot -Raw | ConvertFrom-Json
-        foreach ($f in Get-SeedFiles $scratch) {
-            $rel = $f.FullName.Substring((Resolve-Path $scratch).Path.Length + 1)
-            if ($AllowLeak -contains (Split-Path $rel -Leaf)) { $baseline.PSObject.Properties.Remove($rel) }
-        }
-        ($baseline | ConvertTo-Json) | Set-Content -Path $snapshot -Encoding utf8
-    }
-    Assert-NoSeedLeak $scratch $snapshot
+    Assert-NoSeedLeak $scratch $expected
 }
 
 # ---------------------------------------------------------------------------
@@ -1702,7 +1752,7 @@ if ($NoBootstrap) {
     # Reuse mode: no reseed happened, so seed-leak has no clean baseline in this process. Snapshot
     # the current scratch (best-effort) so seed-leak still guards against writes from THIS run.
     $reuseScratch = Join-Path $env:TEMP 'telescope_scratch'
-    if (Test-Path $reuseScratch) { Write-SeedSnapshot $reuseScratch (Join-Path $logDir 'seed-baseline.json') }
+    if (Test-Path $reuseScratch) { Write-SeedExpected $reuseScratch (Join-Path $logDir 'seed-expected') }
     Write-Pass "reusing Experimental instance (PID $($vsProc.Id)), log: $(Split-Path $logPath -Leaf)"
 } else {
 # HARD ORDERING REQUIREMENT: stop ANY prior harness VS BEFORE the scratch reset below, so the
@@ -1719,7 +1769,7 @@ Assert-SeedConsistent $scratch
 # Seed-leak baseline: snapshot every seeded file NOW (post-reseed, pre-run) so the seed-leak
 # scenario can prove no scenario wrote into a seed during the run.
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-Write-SeedSnapshot $scratch (Join-Path $logDir 'seed-baseline.json')
+Write-SeedExpected $scratch (Join-Path $logDir 'seed-expected')
 Write-Pass "solution ready: $slnPath"
 
 # Run index: auto-incrementing integer from existing logs.
@@ -1771,7 +1821,11 @@ Add-SpawnedVs $mainVs
 Write-Pass "main VS open (PID $($mainVs.Id))"
 Start-Sleep -Seconds 10
 
-Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Experimental' } | Stop-Process -Force -ErrorAction SilentlyContinue
+# Stale experimental instance from a prior run (main VS deploys a fresh one below): save then kill,
+# so its leak evidence survives and it is never left with unsaved changes.
+$staleExp = @(Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match 'Experimental' })
+foreach ($p in $staleExp) { Save-AllDocuments $p.Id }
+foreach ($p in $staleExp) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 if (Test-Path $logPath) { Remove-Item $logPath -Force }
 

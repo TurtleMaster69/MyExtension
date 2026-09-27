@@ -82,7 +82,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
   the injected-key re-entry guard (`InjectedKeyGuard`), helpers.
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`, etc.
-  run subsets. Currently **26 tests, all passing**.
+  run subsets. Currently **31 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -104,8 +104,9 @@ pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (34 total; 33 passing, 1 known-RED — `explorer-open-searchbox`,
-root cause tracked in docs/progress.md):
+Scenarios (34 total; no known-RED remaining — `explorer-open-searchbox` was GREened
+2026-09-27; a few scenarios are flaky on retry, and `telescope-implementation` has a
+tracked intermittent Enter-delivery issue):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search

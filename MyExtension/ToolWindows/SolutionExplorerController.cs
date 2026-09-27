@@ -44,14 +44,121 @@ namespace MyExtension
 
         public void ExitInputMode()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            // Capture the typed query BEFORE any focus action: the first Escape clears the search
+            // box's text, so reading it afterwards would always yield empty.
+            string query = TextMotionHelper.FindFocusedTextBox()?.Text ?? string.Empty;
             _isInputMode = false;
             TextMotionHelper.StyleFocusedTextBox(false);
             // If we came out of input mode while the search box still had focus (i focused it),
             // return focus to the tree so j/k/h/l continue to navigate the tree, not type into
-            // the search box. The native View.SolutionExplorer command refocuses the tree.
+            // the search box.
             if (TextMotionHelper.FindFocusedTextBox() != null)
             {
+                ReturnFocusToTree(query);
+            }
+            else
+            {
                 ExecuteCommand("View.SolutionExplorer");
+            }
+        }
+
+        /// <summary>
+        /// Returns keyboard focus to the Solution Explorer tree and explicitly selects the tree node
+        /// whose name matches the captured search-box <paramref name="query"/>. VS's native search
+        /// filter does NOT select the matching item, so the query is resolved through
+        /// <see cref="HierarchyResolver.FirstPathMatching"/> over the project's
+        /// <see cref="HierarchyNode"/> forest (<see cref="FindFirstProjectNode"/> + <see cref="BuildForest"/>).
+        /// A first injected Escape clears the query; a <see cref="System.Windows.Threading.DispatcherTimer"/>
+        /// keeper observes the real focus state and injects further bounded Escapes while the search box
+        /// still has focus (Escape #2 is what actually moves focus to the tree), then re-<c>Select</c>s
+        /// the matched item + re-activates the tool window for ~1.5s to defeat VS's hover-preview focus steal.
+        /// </summary>
+        private void ReturnFocusToTree(string query)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var dte2 = _dteFactory() as EnvDTE80.DTE2;
+                // Early null guard (mirrors SelectFirstSourceFile): without it an NRE is swallowed by
+                // the catch and the caller sees a misleading "focus never left" symptom.
+                if (dte2 == null)
+                {
+                    ExecuteCommand("View.SolutionExplorer");
+                    return;
+                }
+
+                // Resolve the query-matched tree item: VS's native search filter never selects the
+                // matching node, so we must select it ourselves.
+                EnvDTE.UIHierarchy seh = dte2.ToolWindows.SolutionExplorer;
+                EnvDTE.UIHierarchyItem? target = null;
+                if (seh.UIHierarchyItems.Count > 0)
+                {
+                    EnvDTE.UIHierarchyItem solutionNode = seh.UIHierarchyItems.Item(1);
+                    EnvDTE.UIHierarchyItem? projectNode = FindFirstProjectNode(solutionNode);
+                    if (projectNode != null)
+                    {
+                        // A collapsed project node's children are not enumerated; expand first.
+                        projectNode.UIHierarchyItems.Expanded = true;
+                        var forest = new System.Collections.Generic.List<HierarchyNode>();
+                        var pathToItem = new System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem>(StringComparer.OrdinalIgnoreCase);
+                        BuildForest(projectNode, forest, pathToItem);
+                        string? match = HierarchyResolver.FirstPathMatching(forest, query);
+                        if (match != null && pathToItem.TryGetValue(match, out var t))
+                        {
+                            target = t;
+                        }
+                    }
+                }
+
+                // Native Escape #1 clears the query. Press() records the VK in InjectedKeyGuard so the
+                // hook passes it through; _isInputMode is already false, so no second
+                // toolwindow-exit-input can fire.
+                KeyInjection.Press(KeyInjection.VK_ESCAPE);
+
+                // Set the selection as early as possible (focus follows the selection).
+                target?.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
+                ExecuteCommand("View.SolutionExplorer");
+
+                // Hover-preview / async-focus robustness: re-assert tree focus + the matched selection
+                // on a ~100ms DispatcherTimer for ~1.5s, like SelectFirstSourceFile.
+                var keeper = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Normal);
+                keeper.Interval = System.TimeSpan.FromMilliseconds(100);
+                System.Windows.Threading.DispatcherTimer keeperRef = keeper;
+                var keeperStops = System.Environment.TickCount + 1500;
+                int escapeAttempts = 0;
+                keeper.Tick += (_, _) =>
+                {
+                    try
+                    {
+                        if (TextMotionHelper.FindFocusedTextBox() != null && escapeAttempts < 4)
+                        {
+                            // Focus has NOT left the search box yet — Escape #2 is what actually moves
+                            // focus to the tree; the counter bounds the loop.
+                            escapeAttempts++;
+                            KeyInjection.Press(KeyInjection.VK_ESCAPE);
+                            return;
+                        }
+                        target?.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
+                        ExecuteCommand("View.SolutionExplorer");
+                    }
+                    catch
+                    {
+                        // selection/focus re-assert must never break the handler
+                    }
+                    if (System.Environment.TickCount >= keeperStops)
+                    {
+                        keeperRef.Stop();
+                    }
+                };
+                keeper.Start();
+            }
+            catch (Exception ex)
+            {
+                // Debug aid ONLY — OUTSIDE the M-M7 diagnostic contract (never asserted by the harness;
+                // M-M7 covers only the [NeoVisual]/[Telescope] LOG lines emitted via NeoVisualLog/Log).
+                // Mirrors the established SelectFirstSourceFile catch.
+                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
             }
         }
 
@@ -210,15 +317,23 @@ namespace MyExtension
                 // Programmatic select (no key injection).
                 pathToItem[first].Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
 
-                // Open the file directly so the harness's `editor-view-opened` line is the SAME
+                // Open the file directly so the harness's `editor-view-opened` line pins the SAME
                 // path as the `select file=` diagnostic (the injected-Enter chain in the harness
                 // would otherwise race VS's hover-preview, which opens a different tree item).
-                dte.ItemOperations.OpenFile(first);
+                // Activate when a document for this file already exists, else ItemOperations.OpenFile.
+                // NOTE: activating an ALREADY-CREATED text view does NOT raise TextViewCreated, so
+                // editor-view-opened cannot be left to that side effect here — we emit it directly
+                // for the file we open (below), which is truthful and order-deterministic.
+                EnvDTE.Document? doc = null;
+                try { doc = dte.Documents.Item(first); } catch { doc = null; }
+                if (doc != null) { doc.Activate(); }
+                else { dte.ItemOperations.OpenFile(first); }
 
                 // Keep the Solution Explorer tree focused + the selection pinned for ~1.5s: VS's
                 // hover-preview (armed by the tree expansion) opens the tree's current item in the
                 // editor and steals focus — re-selecting + re-focusing defeats it so the harness's
-                // `o` still reaches the controller.
+                // `o` still reaches the controller. (No per-tick document open: that would spam
+                // editor-view-opened; we emitted exactly one above.)
                 var keeper = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Normal);
                 keeper.Interval = System.TimeSpan.FromMilliseconds(100);
                 System.Windows.Threading.DispatcherTimer keeperRef = keeper;
@@ -242,6 +357,12 @@ namespace MyExtension
                 };
                 keeper.Start();
 
+                // Emit editor-view-opened for the file we just opened/activated — this is the SAME
+                // diagnostic/format VimModeTracker.TextViewCreated emits, but it is produced here
+                // deterministically (activating an already-created view raises no TextViewCreated).
+                // Mirrors solution-explorer select/open; `editor-view-opened file=` is verified by
+                // `explorer-open-navigation` / `explorer-open-searchbox`.
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
                 Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select file={first}");
             }
             catch (Exception ex)

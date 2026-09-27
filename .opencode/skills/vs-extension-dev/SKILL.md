@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 34 live E2E scenarios (33 passing + 1 known-RED), feature
+> test commands, the 34 live E2E scenarios (no known-RED; a few flake on retry), feature
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -207,7 +207,7 @@ of any of these only when the task needs it.
 
 See **AGENTS.md** for the full picture. Summary:
 - Offline unit tests: `dotnet run --project tests/Telescope.Tests` (56) and
-  `dotnet run --project tests/NeoVisual.Tests` (26), with substring filter +
+  `dotnet run --project tests/NeoVisual.Tests` (31), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/test-e2e.ps1` (34 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,

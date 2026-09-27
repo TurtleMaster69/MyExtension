@@ -157,13 +157,13 @@ Top of the queue, in priority order:
    - **`explorer-open-searchbox`** — fix the search-box focus-exit gap
      (KNOWN-RED scenario registered). **← next item.**
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
-5.5. **`telescope-implementation` — intermittent injected-Enter loss (fail-twice in full
-   runs; passes in isolated/other runs).** `implementations gathered count=1` + correct
-   preview, then the Step-5 Enter never reaches the hook (no `[Hook] key=Return`), so
-   `opened implementation: ... Shape.cs line=2` never fires. Outside the
-   `explorer-open-searchbox` diff (ImplementationFinder/overlay untouched); needs its own
-   debug-lane item (likely an overlay focus/`Assert-OverlayFocused` timing gap). Not
-   blocking, but it is a real intermittent failure — queue it after #1 above.
+5.5. ~~**`telescope-implementation` — intermittent injected-Enter loss.**~~ ✅ **DONE
+   2026-09-27** (see the Done section; commit `7c6569b`). Root cause was a **harness focus
+   race** — `Assert-OverlayFocused` was PID-only, so Enter was injected before the overlay
+   became the OS foreground window. Fixed by requiring the actual overlay window (PID +
+   title `Telescope`); `telescope-implementation` now passes 3/3 sequential runs. (The
+   original "no `[Hook] key=Return`" clue was a red herring — `Keys.Return` is not in
+   `IsInteresting`; the real line is `[Telescope] key=Return … handled=True`.)
 
 ## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
 
@@ -264,6 +264,23 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — `telescope-implementation` intermittent injected-Enter loss** (Lane:
+  `bugfix`, harness-only; 3 delegations, 5 VS boots, 1 iteration). Root cause was a
+  **harness focus race**, not a product bug: `Assert-OverlayFocused` only checked the
+  foreground window's VS **PID**, which the VS *main* window also satisfies, so Enter was
+  injected before the overlay became the OS foreground window (`Focus prompt => True` is
+  WPF *logical* focus; probe showed the main window foreground before Enter, the overlay
+  ~800ms after). Other finders masked it by typing a query first (~360ms).
+  **Change summary:** `tools/test-e2e.ps1` only — `Assert-OverlayFocused` now requires the
+  actual overlay (PID **and** window text `Telescope`), via new `Get-ForegroundTitle` +
+  positive `Wait-OverlayForeground`, wired into all five `Open-Telescope*` helpers + before
+  the Step-5 Enter. **If this regresses, look first at `Assert-OverlayFocused` /
+  `Wait-OverlayForeground`** (a false-strict gate would fail every telescope-* scenario).
+  Also corrected the plan's red herring (`[Hook] key=Return` can never exist — `Keys.Return`
+  is not in `IsInteresting`; the real line is `[Telescope] key=Return … handled=True`).
+  Verified: `telescope-implementation` **3/3 sequential GREEN** (was 3/3 RED), 7/7 finder
+  neighbours GREEN, full suite 34/35 (only the allowlisted `neovisual-editor-insert` flake),
+  NeoVisual 38/38, Telescope 56/56. No product code changed. Commit: `7c6569b`
 - **2026-09-27 — Tool-window action-key leak guard (`FocusGuard`)** (Lane:
   `bugfix (no-seam)`; 9 delegations, 6 VS boots, 1 iteration). **Closes the
   user-reported leak** where, with Solution Explorer unfocused, `m`/`o`/`r`/`a` were

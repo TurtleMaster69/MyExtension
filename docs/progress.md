@@ -227,6 +227,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W15: reconcile the conventions handoff** (Lane: trivial config edit).
+  `neovim_hub.md`'s Delegation contract now lists the real handoff inputs and states it
+  does NOT re-send conventions; `e2e-test-builder.md` + `implementation-planner.md` now say
+  the same (AGENTS.md auto-loaded, SKILL.md self-read). **Restart required.**
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W14: wire `code-slice-worker` into `arch-auditor`** (Lane: trivial config
   edit; user decision via `question`). Added a `code-slice-worker` `task` rule to
   `arch-auditor.md` + a "Large-slice offload" section (packet built via the
@@ -871,8 +876,11 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     `code-slice-worker` `task` rule to `arch-auditor.md` (+ a "Large-slice offload"
     section using the `slicing-code-context` packet), and referenced the nested spawn in
     `neovim_review_hub.md`. Requires `subagent_depth ≥ 2` (already set).
-15. **W15** — `e2e-test-builder.md:40` / `implementation-planner.md:40` expect the hub to pass
-    conventions, but `neovim_hub.md:141,152` deliberately does not.
+15. **W15** — handoff conventions mismatch.
+    ✅ **FIXED 2026-09-27** — `neovim_hub.md`'s Delegation contract and both agent files
+    (`e2e-test-builder.md`, `implementation-planner.md`) now say the same thing: the hub
+    does NOT re-send conventions (AGENTS.md is auto-loaded; SKILL.md is read by the agent);
+    only a step-specific convention not already covered is passed inline.
 16. **W16** — both hubs claim `docs/progress.md` write access; `neovim_hub.md:15` says sole owner.
     State that the review hub only appends filed items.
 17. **W17** — `sprint-plan-gate/SKILL.md:19`, `test-driven-development/SKILL.md:9`,

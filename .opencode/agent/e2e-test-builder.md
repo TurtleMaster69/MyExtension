@@ -39,8 +39,10 @@ entrypoint-reach/taint passes.
 
 ## Your task
 
-The hub gives you the path to `docs/implementation_plan.md` and the harness
-conventions. Do this:
+The hub gives you the path to `docs/implementation_plan.md`, the affected scenario names,
+and (for unit RED) the affected unit project name(s). The hub does NOT re-send the harness
+conventions — AGENTS.md is auto-loaded into your context and `tools/test-e2e.ps1` is a
+file you read yourself. Do this:
 
 1. Read `docs/implementation_plan.md` — especially its **E2E test plan** section —
    and `tools/test-e2e.ps1` to learn the scenario registry (`Register-Scenario`).

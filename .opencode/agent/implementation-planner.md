@@ -39,8 +39,10 @@ skip entrypoint-reach passes.
 
 ## Your task
 
-The hub gives you: the path to `docs/implementation_plan.md`, the RED failure
-evidence, and the project conventions (AGENTS.md + vs-extension-dev SKILL.md). Do:
+The hub gives you: the path to `docs/implementation_plan.md`, the RED failure evidence,
+and the item's **known-RED allowlist**. The hub does NOT re-send the project conventions —
+AGENTS.md is auto-loaded into your context and `.opencode/skills/vs-extension-dev/SKILL.md`
+is a file you read yourself (step 1). Do:
 
 1. Read `docs/implementation_plan.md`, the conventions, and the relevant source files
    so the plan references real code. Also read `docs/spec.md` and `docs/progress.md`

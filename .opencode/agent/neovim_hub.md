@@ -423,10 +423,13 @@ start the loop again.
 ## Delegation contract
 
 Subagents boot with fresh context: always pass exact file paths, the
-`docs/implementation_plan.md` path, the affected scenario names, and only the
-conventions that matter for that step (net472, UI-thread, diagnostics contract,
-UTF-8 fzf input) — the subagent's own file covers the rest, and AGENTS.md is
-already in every subagent's context — never re-send its content. Subagents:
+`docs/implementation_plan.md` path, the affected scenario names, the affected unit
+project name(s) + final-gate flag, the known-RED allowlist, and the cumulative flaky
+counts (per the step lists above). Do NOT re-send the project conventions: AGENTS.md is
+auto-loaded into every subagent's context and the vs-extension-dev SKILL.md is a file the
+subagent reads itself, so each subagent's own file covers the rest — never paste their
+content. The only exception is a convention NOT in AGENTS.md/SKILL.md that is specific to
+this step — pass that inline. Subagents:
 `e2e-test-builder`, `implementation-planner`, `build-agent`, `debug-agent`,
 `verification-agent`, `docs-reviewer` — they report in their fixed formats; you
 decide. **Allowed prompts (the only cases you may use the `question` tool):** (a) the

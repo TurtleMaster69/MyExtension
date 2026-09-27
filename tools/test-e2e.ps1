@@ -1311,9 +1311,20 @@ Register-Scenario 'neovisual-editor-insert' {
     Close-Telescope $vs $logPath
 
     # The editor has Beta.cs focused. Get VsVim into NORMAL mode, then press i to enter INSERT.
+    # CRITICAL: move the caret INTO the seeded line first (`// Beta.cs`, a comment). At the document
+    # start (col 1, BEFORE the `//`) the caret is in CODE context, where VS C# IntelliSense auto-pops
+    # statement completion on the first identifier char: typing `hi` selects the camel-case match
+    # `HandleInheritability`, and the next injected Space commits that item, replacing `hi` with
+    # `HandleInheritability` (the observed `HandleInheritability jk <run>// Beta.cs` corruption). `w`
+    # is a VsVim normal-mode word motion (0x57) — not hook-interesting, so it falls straight through
+    # to VsVim — which advances the caret to `Beta`, inside the comment. In comment context
+    # completion never triggers, so the marker lands verbatim; the file check still proves
+    # insert-mode typing was not swallowed.
     Enter-NormalContext $vs
     Assert-VsFocused $vs 'editor insert-mode typing'
-    Send-Tap 0x49; Start-Sleep -Milliseconds 400                     # i -> insert mode
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200                     # w -> move caret into the // comment
+    Send-Tap 0x57; Start-Sleep -Milliseconds 200                     # w -> further inside (never before the //)
+    Send-Tap 0x49; Start-Sleep -Milliseconds 400                     # i -> insert mode (inside the comment)
     Assert-NewLogLine $logPath "$($script:PfxNeo)vim-mode=Insert" 'i switched the editor into insert mode'
 
     # Type a marker containing the "interesting" keys (h, i, j, k, and a Space). Each key is

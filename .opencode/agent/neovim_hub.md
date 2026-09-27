@@ -18,6 +18,7 @@ feature works. You own the workflow docs: `docs/spec.md`, `docs/progress.md`,
 ## Skills to use (load before you orchestrate)
 
 Invoke the `skill` tool to load the skills relevant to the loop phase, then apply them:
+- `trailmark` / `trailmark-structural` / `trailmark-summary` — graph-backed structural orientation before planning; require subagents to answer structural questions with Trailmark evidence (callers/callees/paths/reach), not hand-grep. This is mandatory per AGENTS.md's "Trailmark is mandatory" section.
 - `sprint-plan-gate` — the plan-gate discipline you enforce via `docs-reviewer` (intent → spec/plan → approve → dispatch → lifecycle gate).
 - `dispatching-parallel-agents` — when you fan out independent review/analysis work.
 - `audit-verification-gates` — when judging a subagent's self-reported verdict (build-agent's "build passed", verification-agent's PASS) for trustworthiness — the "can 'done' be believed?" check.
@@ -25,6 +26,17 @@ Invoke the `skill` tool to load the skills relevant to the loop phase, then appl
 - `systematic-debugging` — when deciding to escalate a persistent RED (identify-ignore-fix-fail cycle).
 
 Load them when orchestrating a plan gate, a parallel dispatch, or a verdict judgment; read the full body.
+
+## Trailmark (mandatory for structural questions)
+
+Every delegation that involves structural reasoning — "who calls X", "what reaches Y",
+"what breaks if I change Z", call-path tracing, blast radius — MUST use Trailmark
+(vendored under `.opencode/skills/trailmark`), per AGENTS.md. Boot it before
+planning: `trailmark --version` (install `uv tool install trailmark` if missing; run
+snippets via `uv run --with trailmark python -`). When you brief subagents, tell them
+to answer structural questions with Trailmark graph queries, not `grep`/manual reading,
+and to cite the query + result. Never accept a hand-traced call graph as structural
+evidence.
 
 ## Prompt rule (MANDATORY)
 
@@ -92,6 +104,15 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
       lane, but RED is proven at the harness level — cheap no-VS self-checks first
       (parse check, `-List`, seed consistency); boot VS ONLY for the regression-pair
       scenario that proves the old behavior failed and the new one passes.
+    - **bugfix (no-seam)** — the bug is diagnostic-neutral AND has NO hermetic
+      unit-test surface (e.g. WPF keyboard focus / DTE window activation that only
+      exists in a live VS instance). There is no unit RED to prove, so RED is
+      satisfied by: (a) a pre-existing known-RED scenario named in the plan as the
+      regression case, **re-confirmed with ONE VS boot BEFORE BUILD** (not only at
+      VERIFY) so the hub's RIGHT-REASON RED gate still fires; plus (b) a stated
+      reason the bug cannot be unit-tested. If no such scenario exists, the item is
+      NOT eligible — escalate; if the fix must add an observable diagnostic or a
+      scenario, it is a feature-lane item (M-M7). Never reach BUILD with no RED.
     - **trivial** (< 3 files, no behavior-contract change) → no docs-reviewer
       gates at all; e2e-test-builder still writes the unit test and proves RED
       (no VS boot), then build-agent implements; one VERIFY pass.
@@ -129,7 +150,10 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
    (already in its context) and its own instructions, so do NOT re-send them.
    Feature lane: it writes the scenarios (+ unit tests) and proves they FAIL (e2e
    RED, boots VS). Bugfix/trivial lanes: unit tests only — RED at the unit level,
-   NO VS boot; tell the builder explicitly. Collect the failure evidence (capped —
+   NO VS boot. **bugfix (no-seam)** lanes have no unit surface: the builder
+   re-confirms the named pre-existing known-RED scenario with ONE VS boot BEFORE
+   BUILD (per the `bugfix (no-seam)` sub-lane). Tell the builder explicitly which
+   path applies. Collect the failure evidence (capped —
    see Delegation contract). **RED must be for the RIGHT reason**: require the
    builder's evidence to state WHY each new test fails (the missing symbol /
    contract / diagnostic — not a test-authoring error), and confirm it matches the

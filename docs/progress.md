@@ -226,6 +226,15 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W1: `bugfix-no-seam` sub-lane** (Lane: trivial config edit). Added a
+  `bugfix (no-seam)` sub-lane to `.opencode/agent/neovim_hub.md` (mirroring the
+  harness-only lane) and threaded it into LOOP step 3: when a diagnostic-neutral bug has
+  no hermetic unit surface, RED is satisfied by re-confirming the named pre-existing
+  known-RED scenario with ONE VS boot BEFORE BUILD (plus a stated no-unit-test reason);
+  no such scenario ⇒ escalate, or upgrade to the feature lane if the fix adds a
+  diagnostic/scenario. Closes the hole where the in-flight `explorer-open-searchbox` fix
+  could reach BUILD with no RED. **Restart required** (agent files load at opencode
+  startup). `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-19 — Explorer tree-select capability** (Lane: feature, attempt 1 GREEN
   after 1 VERIFY round): gave `SolutionExplorerController` a deterministic
   programmatic tree-selection action — `g` walks the Solution Explorer's DTE
@@ -580,3 +589,216 @@ picks each fix or ignores; the hub implements + verifies, one item at a time).
 **Meta-review backlog COMPLETE (2026-09-19).** All 5 major + 8 minor items (M-M1..M-M5,
 M-C1, M-M6, M-M7, M-N1..M-N6) fixed, verified, and recorded. Committed orchestration layer
 `a37242e`; feature source (MyExtension/Telescope) still untracked.
+
+## Trailmark + agent-infrastructure review (2026-09-27)
+
+Verification that the vendored Trailmark skills and the hub/subagent wiring are usable on
+this repo. **Verified working:** Trailmark 0.5.0 CLI + `uv run --with trailmark python -`
+import; graph builds (`language="c_sharp"`, 1083 nodes / 2461 edges, parse 0.3s);
+`preanalysis()` populates subgraphs; queries return precise `file:line` evidence; all 8
+subagents are `question: deny` and the 4 read-only ones `edit: deny`; `command/hub.md`
+and `command/review.md` point at the right agents; AGENTS.md test counts (56/26) match.
+
+Findings + disposition (A-ids are local to this review; fixes to `.opencode/agent/*` and
+`AGENTS.md` were applied directly with user permission):
+
+1. **A1 (major) — proxy-mediated calls make `callers_of` silently return 0.** 485/1083
+   nodes are `proxy.unresolved:*`; `callers_of("KeyInjection.Press")` = 0 while 6 in-repo
+   callers exist (they attach to `proxy.unresolved:KeyInjection.Press`). ✅ FIXED — added
+   a "Repo-specific traps" bullet to `AGENTS.md` + a pointer in `vs-extension-dev/SKILL.md`.
+2. **A2 (major) — security passes vacuous + `trailmark diff` language trap.**
+   `entrypoints=0` → taint / privilege-boundary / attack-surface / review-gate all empty;
+   `trailmark diff` defaults `--language` to `python` and returns an empty diff on C#.
+   ✅ FIXED — same trap bullet; `verification-agent.md` now pins `--language c_sharp` and
+   drops review-gate/taint from its mandatory set.
+3. **A3 (major) — review-hub slice lists stale.** 12 files missing, incl. all three new
+   finders + the `TelescopeFinder.cs`/`IQueryFinder` seams, `InjectedKeyGuard`,
+   `HierarchyResolver`, `DiagnosticLog`, `check-doc-refs.ps1`. ✅ FIXED —
+   `neovim_review_hub.md` slice lists updated + "enumerate at dispatch time" note.
+4. **A4 (minor) — `prompt-rule.md` registered as a callable agent.** ✅ FIXED — added
+   `disable: true` frontmatter (path unchanged; both hubs still reference it).
+5. **A5 (minor) — `code-slice-worker` agent orphaned.** No hub/agent spawns it and
+   `slicing-code-context` is unreferenced. ⏳ OPEN — decide: wire into `arch-auditor` for
+   large slices, or delete.
+6. **A6 (minor) — `vs-extension-dev/SKILL.md` had no Trailmark guidance.** ✅ FIXED —
+   added a "Trailmark (structural queries)" section.
+7. **A7 (nit) — review hub loaded `trailmark-finding-triage` (a security-triage skill)
+   for architecture audits.** ✅ FIXED — dropped from `neovim_review_hub.md`.
+8. **A8 (minor) — the new trailmark skills + `code-slice-worker.md` are untracked
+   (`??`).** A clone/`git clean` would lose them (cf. M-N3). ⏳ OPEN — commit the
+   orchestration layer.
+9. **A9 (major) — the trailmark integration broke the blocking doc-ref lint.** The
+   committed HEAD had zero Trailmark references; the uncommitted integration added
+   `.opencode/skills/trailmark*/` (a glob in backticks the linter treats as a literal
+   path) to 10 docs + a backticked QueryEngine API name to AGENTS.md, so
+   `pwsh tools/check-doc-refs.ps1` exited **1 with 12 unresolved refs** — neovim_hub's
+   hard pre-review gate would fail on the next item. ✅ FIXED — reworded the glob to the
+   resolvable `.opencode/skills/trailmark` and un-backticked QueryEngine;
+   lint now `[PASS] 15 docs scanned, 2745 refs, 0 unresolved`.
+10. **A10 (major) — nested subagent spawning DOES work on 1.18.32; the first probe was
+   invalid (no-restart confound).** The binary's task-tool guard is
+   `while(b.parentID) h++; if (h >= (subagent_depth ?? 1)) fail("Subagent depth limit ...")`
+   plus a child ruleset that adds `task:* deny` UNLESS the subagent has an explicit `task`
+   rule. So hub→arch-auditor→trailmark-recon is allowed iff (a) `arch-auditor` has an
+   explicit `task` rule AND (b) global `subagent_depth >= 2`. The earlier capability probe
+   wrongly reported "no task tool" because agent files load only at STARTUP: the running
+   session still had the PRE-EDIT `arch-auditor` (no `task` rule) and `trailmark-recon`
+   was not yet a registered spawn target. ✅ RESOLVED — `task` rule restored on
+   `arch-auditor` (scoped to `trailmark-recon` only); the hub also dispatches a whole-repo
+   recon once (Step 1a) so auditors get a shared digest. ⚠️ **Fragility:** if
+   `subagent_depth` is removed/lowered to 1, the nested spawn degrades silently (no `task`
+   tool → the auditor runs the queries itself; the audit still completes). ⚠️ **Lesson
+   (general):** agent/skill/config edits cannot be exercised in the same opencode session
+   — you MUST restart before testing them, or the probe tests the stale definition. (A5
+   corollary, corrected: `code-slice-worker`, if wired to an auditor, needs a `task` rule +
+   `subagent_depth >= 2`, or hub-dispatch.)
+
+### Spawn graph & required `subagent_depth` (verified post-restart 2026-09-27)
+
+opencode's guard fails when the CALLER's ancestor count `h >= subagent_depth`. Verified
+end-to-end after a restart: hub → arch-auditor → trailmark-recon succeeded.
+
+| Level | Agent(s) | Spawns | h |
+|---|---|---|---|
+| L0 primary | `neovim_hub` | e2e-test-builder, implementation-planner, build-agent, debug-agent, verification-agent, docs-reviewer | 0 |
+| L0 primary | `neovim_review_hub` | trailmark-recon (whole-repo), arch-auditor (per slice) | 0 |
+| L1 subagent | `arch-auditor` | trailmark-recon (slice-scoped) | 1 |
+| L1 leaf | build-agent, debug-agent, docs-reviewer, e2e-test-builder, implementation-planner, verification-agent, code-slice-worker | none (no `task` rule) | 1 |
+| L2 leaf | `trailmark-recon` | none | 2 |
+
+Deepest chain = **2 subagent levels**, so the required and sufficient `subagent_depth` is
+**2** (the global config sets exactly 2). L1 `arch-auditor` (h=1) needs `depth > 1`; L2
+`trailmark-recon` (h=2) is correctly blocked at `depth=2`. Do NOT lower to 1 (kills the
+nested recon — it degrades to the hub-only Step 1a digest) and do NOT raise to ≥3 (no
+chain needs it; it would let the recon leaf recurse). If `code-slice-worker` is wired:
+hub-spawned = L1 (depth ≥1 suffices) or auditor-spawned = L2 (needs the `task` rule +
+depth ≥2) — depth 2 covers both.
+
+### Task-permission review — does any OTHER subagent need `task`? (2026-09-27)
+
+Reviewed all 9 subagents. Verdict: **no other subagent benefits** — the only `task` rule
+that earns its place is `arch-auditor` → `trailmark-recon`. Criterion: grant `task` only
+when the child yields a standardized artifact several consumers share, or needs a
+different/cheaper model or isolated context — NOT to run a CLI query the caller can run
+itself. Every build/verify/plan agent already runs Trailmark inline via bash (parse
+~0.2s), so spawning a recon subagent would add an LLM turn for no new information.
+- build-agent, debug-agent, docs-reviewer, e2e-test-builder, implementation-planner:
+  inline Trailmark queries suffice (each has a Trailmark section).
+- verification-agent: its structural need is a before/after `trailmark diff`, which it can
+  run itself — the `trailmark-recon` snapshot digest does not serve it.
+- code-slice-worker, trailmark-recon: leaves by design (recon is the leaf of the chain).
+All are L1 (spawned by a hub), so at `subagent_depth: 2` any of them COULD spawn L2 — the
+constraint is value, not depth. Revisit only if context cost becomes the bottleneck: then
+wire `code-slice-worker` (slicing-code-context) to offload bulky reads to a cheaper model,
+which is a context-reduction move rather than a Trailmark need.
+
+**New agent — `trailmark-recon` (added, per user request).** Read-only subagent that
+builds the C# graph + `preanalysis()` and returns one compact `RECON:` digest (counts,
+proxy share, empty entrypoint/taint passes, complexity hotspots, high-blast-radius count,
+false-dead-code traps). Wired as the review hub's Step 1a: `neovim_review_hub.md` (a
+PRIMARY agent) dispatches it ONCE per audit and passes the digest to every arch-auditor;
+`arch-auditor.md` consumes the digest and MAY spawn `trailmark-recon` for a slice-scoped
+digest (allowed by the explicit `task` rule + `subagent_depth >= 2`; see A10). This is the
+single place the proxy / no-entrypoint caveats are applied.
+
+> **Restart required:** agent/skill/config files are read once at opencode startup. Quit
+> and relaunch opencode before A1–A4/A6/A7/A9 and the `trailmark-recon` wiring take effect.
+
+## Workflow review backlog (meta-review, 2026-09-27) — `neovim_hub` + subagents
+
+Full detail, evidence, and exact file:line references live in
+`docs/architecture-review.md` (top section). Filed on 2026-09-27 with user approval
+(selection "All findings (W1–W20)"; W21 filed on request). `neovim_hub` picks these one at a time via the
+normal loop; W-ids are local to this review.
+
+**Severity: 2 critical, 11 major, 7 minor, 1 nit.** The prior meta-review
+(M-M1…M-N6, A1…A10) above already fixed most orchestration items; these are net-new
+defects plus DONE/OPEN items whose record no longer matches the repo.
+
+### Critical (fix first)
+
+1. **W1 — `bugfix` lane has no valid RED path for a diagnostic-neutral bug with no
+   unit seam.** ✅ **FIXED 2026-09-27** — added a `bugfix (no-seam)` sub-lane to
+   `neovim_hub.md` (mirroring the harness-only lane) + threaded into LOOP step 3; RED
+   is the named pre-existing known-RED scenario re-confirmed with ONE VS boot before
+   BUILD. See the `## Done` entry.
+2. **W2 — the orchestration layer is untracked and can be destroyed.** A8
+   (`docs/progress.md:618`) still OPEN and its list omits `trailmark-recon.md`; `git
+   status` shows the Trailmark skills, `slicing-code-context/`, `code-slice-worker.md`
+   and `trailmark-recon.md` all `??`. A `git clone`/`git clean` erases the integration the
+   review hub depends on (M-N3 regression). Fix: commit the orchestration layer; update A8.
+
+### Major
+
+3. **W3 — vacuous Trailmark skills prescribed + a self-contradiction.** `AGENTS.md:27-29,54-57`
+   says no entrypoints → taint / privilege-boundary / attack-surface / finding-triage /
+   review-gate carry no signal. Yet `debug-agent.md:17,29` prescribes `trailmark-finding-triage`
+   + taint + entrypoint reach; `docs-reviewer.md:19` and `verification-agent.md:17` prescribe
+   `trailmark-review-gate` (and `verification-agent.md:35-38` says the same gate must NOT be
+   run — direct self-contradiction); `e2e-test-builder.md:16,26` / `implementation-planner.md:28`
+   use entrypoint reach; `prompt-rule.md:21` lists taint/privilege as required. Fix: single-source
+   the per-repo Trailmark guidance; drop no-signal skills; fix the contradiction.
+4. **W4 — three gates, three post-REVISE policies.** spec `:86-87,327-328` ("until APPROVE");
+   initial-plan 2a `:137-138` ("then proceed" but also "until APPROVED") → livelock; build-plan
+   4a `:159-160` (APPROVED-only, no exit). Fix: one policy + explicit escalation on exhaustion.
+5. **W5 — the 5-iteration cap is counted two ways.** `:159` (plan-review rounds count) vs
+   `:291,:367` (regressions only). Fix: define "iteration" once.
+6. **W6 — flaky-budget (M-M2) is inert.** The cumulative per-scenario flaky count is never
+   passed to `verification-agent` (step 8 `:200-211`; `verification-agent.md:48-55`), so its
+   3rd-strike reclassification (`:88-97`) can never fire. Fix: pass the Execution-Log counts;
+   the hub applies the 3rd-strike upgrade.
+7. **W7 — M-M4 record is false.** `docs/progress.md:524` says model pins on all 9 agents;
+   commit `4a2ec0b` removed them and `rg "model:" .opencode/agent` = 0. The "cheaper model"
+   rationale for nested recon (`:673,683`) is void. Fix: mark M-M4 REVERTED citing `4a2ec0b`;
+   narrow the nested-spawn criterion to context isolation.
+8. **W8 — the user feature-triage gate is not a hub step.** docs/progress.md lines 132-144 requires
+   LazyVim research + ask-user before ANY feature; `neovim_hub.md:91,333,347` lets step 1 run a
+   queued feature without it. Fix: encode the gate as a LOOP step + allowed-prompt.
+9. **W9 — incomplete delegation inputs.** Steps 3/5/6/8 (`:139-141,161-162,168-171,200-211`)
+   omit the affected unit project(s), final-gate flag, and (step 4) the known-RED allowlist that
+   `build-agent.md:72-75`, `debug-agent.md:60-62`, `verification-agent.md:69-78`, and
+   `implementation-planner.md:46-48` require. Fix: pass them on every handoff.
+10. **W10 — deviation adjudication unreachable on the verify path.** 6b (`:173-189`) sits only
+    between build-time DEBUG and RE-PLAN; 8a→8b (`:238-243`) has no 6b. `debug-agent.md:68-80`
+    has no `DEVIATIONS` field and `verification-agent.md:101-113` has no DEVIATION slot, though
+    `:85-87` can flag one on a pass. Fix: add 6b-before-8b + the fields.
+11. **W11 — concurrent final-gate unit suites.** `verification-agent.md:71-77` mandates
+    concurrency; docs/progress.md lines 82-86 records a shared-`obj/` CS2012 lock and says prefer
+    sequential/staggered. Fix: stagger the two projects.
+12. **W12 — records contradict reality.** The code report (`docs/architecture-review.md` original
+    section) re-asserts fixed F1/F16/F45; `docs/progress.md:71` vs `:17,:124`
+    (`explorer-open-navigation`), `:392` (severity sums to 27, "of 46"), `:506,:534` vs `:580`
+    (meta-review status), `:96,:111` (stale 42/21). Fix: reconcile/annotate.
+13. **W13 — GREEN commit is non-atomic.** Source landed in `a48d597` ("WIP … awaiting VERIFY +
+    GREEN"); `4f36fde` read `Commit: <pending>`; `1910711` repaired the hash; `114460b` repaired
+    a false `check-doc-refs PASS`. Fix: single source commit, own hash, lint before commit.
+
+### Minor
+
+14. **W14** — `code-slice-worker` + `slicing-code-context` orphaned (A5 open). Wire (with `task`
+    + `subagent_depth ≥ 2`) or delete.
+15. **W15** — `e2e-test-builder.md:40` / `implementation-planner.md:40` expect the hub to pass
+    conventions, but `neovim_hub.md:141,152` deliberately does not.
+16. **W16** — both hubs claim `docs/progress.md` write access; `neovim_hub.md:15` says sole owner.
+    State that the review hub only appends filed items.
+17. **W17** — `sprint-plan-gate/SKILL.md:19`, `test-driven-development/SKILL.md:9`,
+    `command/hub.md:2` pipeline strings omit `debug-agent` and the plan gates.
+18. **W18** — off-by-one "Load all three/both" (`e2e-test-builder.md:21` lists 4;
+    `implementation-planner.md:22` lists 3); six Trailmark boilerplate copies lack the
+    `uv tool install trailmark` fallback.
+19. **W19** — known-RED allowlist example cites `neovisual-explorer-open` (now green) in
+    `docs-reviewer.md:81` and `neovim_hub.md:124`.
+
+### Nit
+
+20. **W20** — `code-testing-agent/SKILL.md:19` says 41/21 vs actual 56/26; `docs/progress.md:96,111`
+    stale 42/21. Plus: `neovim_hub` loads `dispatching-parallel-agents` though the build loop is
+    serial; the Trailmark-review section of this file is uncommitted.
+
+### Minor (filed on request)
+
+21. **W21 - `docs/architecture-review.md` is not covered by the doc-ref lint.**
+    `tools/check-doc-refs.ps1` (lines 44-52) scopes the lint to AGENTS.md, the vs-extension-dev SKILL,
+    `docs/spec.md`, `docs/progress.md`, and the agent files, so the "single live report" can
+    drift (W12) with no mechanical gate catching it. Fix: add `docs/architecture-review.md` to
+    the lint's doc set (or record an explicit exclusion). Filed on request 2026-09-27.

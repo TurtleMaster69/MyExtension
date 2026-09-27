@@ -237,7 +237,8 @@ the per-gate 3-round cap are independent counters.
     (trace-table-only updates need no gate).
 8. **VERIFY — delegate to `verification-agent` (owns the recheck of all bells and
    whistles).** Pass: affected scenario names + the lane + the item's known-RED
-   allowlist + **two flags**: whether `tools/` changed since the last verified run
+   allowlist + the **cumulative per-scenario flaky counts** for this item (read from the
+   Execution Log, e.g. `<scenario>: flaky x2`) so the agent reports count N+1, not N + **two flags**: whether `tools/` changed since the last verified run
    (compute by diffing a fresh `tools/` file-hash against `log/tools-hash.txt`
    recorded at the last GREEN — a non-empty diff triggers the harness-health
    self-checks) and whether this is the item's final
@@ -259,11 +260,14 @@ the per-gate 3-round cap are independent counters.
      single `-Tests <failing-scenario>` re-run); pass-on-retry = FLAKY (recorded in
      the Execution Log, NOT a regression); fail-twice = real RED. The 5-iteration
      cap counts real regressions only - flaky/known-RED failures do not consume it.
-   - **Flaky-budget (M-M2):** a single scenario may be classified FLAKY at most
-     **3 times within one item**. On the 3rd flaky classification of the SAME
-     scenario, reclassify it a REGRESSION and feed it to the re-plan loop — do NOT
-     keep retrying a scenario that flaked 3× (each retry is a full VS reboot). Track
-     the per-scenario flaky count in the Execution Log (`<scenario>: flaky x<N>`).
+   - **Flaky-budget (M-M2) — the HUB enforces the 3rd strike, not the fresh agent.**
+     A single scenario may be classified FLAKY at most **3 times within one item**.
+     The verification-agent reports the count it observes (with the hub-passed
+     cumulative count as its base, so it reports N+1); the **hub** owns the upgrade:
+     on the 3rd cumulative flaky classification of the SAME scenario, reclassify it a
+     REGRESSION and feed it to the re-plan loop — do NOT keep retrying a scenario that
+     flaked 3× (each retry is a full VS reboot). Track the per-scenario flaky count in
+     the Execution Log (`<scenario>: flaky x<N>`) and pass those counts into step 8.
    - **Known-RED classification:** each failure must be classified as
      known-RED (on the item's allowlist), flaky (passes on retry), or regression
      (real). Only regressions feed the re-plan loop.

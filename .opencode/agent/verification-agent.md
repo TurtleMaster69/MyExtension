@@ -48,7 +48,8 @@ report their emptiness as a finding; use `callers_of`/`callees_of`, `paths_betwe
 
 The hub gives you: the path to `docs/implementation_plan.md`, the affected scenario
 names, the lane, the item's **known-RED allowlist** (scenarios/tests allowed to
-fail for documented pre-existing reasons), and two flags — **`tools/`-changed**
+fail for documented pre-existing reasons), the **cumulative per-scenario flaky
+counts** for this item (so you can report count N+1), and two flags — **`tools/`-changed**
 (whether the harness scripts changed since the last verified run → triggers the
 harness-health self-checks) and **final-gate** (whether this is the item's final
 gate → full e2e suite + both unit projects, vs affected-only). (These inputs arrive
@@ -88,14 +89,16 @@ authoritative input list.) Do:
    "tweaked" it), flag it as a DEVIATION and treat any resulting pass as suspect.
 6. **Flaky-retry policy:** on a scenario failure, re-run that scenario ONCE (`-Tests
    <failing-scenario>`). Pass-on-retry = FLAKY (report it as flaky, NOT a
-   regression). Fail-twice = real RED. **Report the scenario's flaky count** so the
-   hub can apply the flaky-budget (M-M2): if the same scenario has now been
-   classified FLAKY **3 times within the item**, classify it **regression** instead
-   of flaky — a scenario that flaked 3× is a real failure, not flake.
+   regression). Fail-twice = real RED. **Report the scenario's flaky count** — the
+   cumulative count the hub passed you for this item, plus 1 if this run flakes —
+   so the hub can apply the flaky-budget (M-M2). The **hub** performs the 3rd-strike
+   upgrade (3 cumulative flakes → regression); report the count and your classification,
+   and let the hub decide. (If the hub passed no count, report the count you observe.)
 7. **Classify every failure** as one of: **known-RED** (on the item's allowlist —
    not a regression, do not feed the re-plan loop), **flaky** (passes on retry, and
-   flaky count < 3 for the item), or **regression** (real, or flaky count ≥ 3 — feed
-   to the hub for re-planning).
+   the cumulative count stays < 3 for the item), or **regression** (real). A
+   cumulative flaky count that reaches 3 is upgraded to regression by the HUB — you
+   report the count; do not keep retrying.
 
 ## Return format (final message)
 

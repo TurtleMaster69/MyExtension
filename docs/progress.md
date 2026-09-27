@@ -226,6 +226,12 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W6: make the flaky-budget enforceable** (Lane: trivial config edit).
+  `neovim_hub.md` step 8 now passes the cumulative per-scenario flaky counts to the
+  verification-agent; the flaky-budget rule makes the HUB apply the 3rd-strike →
+  REGRESSION upgrade; `verification-agent.md` input list + flaky policy now report count
+  N+1 based on the hub-passed base. **Restart required.** `check-doc-refs.ps1` PASS.
+  Commit: (recorded below)
 - **2026-09-27 — W4+W5: unify the review-gate policy + define "iteration" once** (Lane:
   trivial config edit). `neovim_hub.md` gained a `## REVIEW-GATE POLICY` section (one
   post-REVISE rule for spec/2a/4a: hub fixes, 3-round cap, `question`-tool escalation on
@@ -767,10 +773,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
    `## "Iteration" — defined once` section: an iteration is a RED→re-plan cycle from a
    real regression; doc-review rounds, flaky, known-RED, and budget exhaustion never
    consume the cap. 4a's "counts toward the cap" phrase removed.
-6. **W6 — flaky-budget (M-M2) is inert.** The cumulative per-scenario flaky count is never
-   passed to `verification-agent` (step 8 `:200-211`; `verification-agent.md:48-55`), so its
-   3rd-strike reclassification (`:88-97`) can never fire. Fix: pass the Execution-Log counts;
-   the hub applies the 3rd-strike upgrade.
+6. **W6 — flaky-budget (M-M2) is inert.** ✅ **FIXED 2026-09-27** — step 8 now passes the
+   cumulative per-scenario flaky counts into `verification-agent`; the HUB (not the fresh
+   agent) performs the 3rd-strike → REGRESSION upgrade; the agent reports count N+1.
+   `verification-agent.md` input list + flaky policy updated.
 7. **W7 — M-M4 record is false.** `docs/progress.md:524` says model pins on all 9 agents;
    commit `4a2ec0b` removed them and `rg "model:" .opencode/agent` = 0. The "cheaper model"
    rationale for nested recon (`:673,683`) is void. Fix: mark M-M4 REVERTED citing `4a2ec0b`;

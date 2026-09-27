@@ -227,6 +227,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W13: enforce the atomic GREEN commit policy** (Lane: trivial config
+  edit). `neovim_hub.md` step 9's COMMIT block now requires one atomic commit for the
+  whole change set, `check-doc-refs.ps1` PASS before committing, no "WIP … awaiting
+  VERIFY" commit, no `Commit: <pending>` Done entry. **Restart required.**
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W12: reconcile progress.md's internal contradictions** (Lane: trivial
   config edit). Fixed: the `explorer-open-navigation` KNOWN-RED line (now GREEN, matching
   the Baseline/Done records); the severity line (now "filed subset 27 of 46:
@@ -848,9 +853,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     the meta-review headers (`:506`/`:534`) now read ALL DONE matching the COMPLETE note;
     the F45 lines no longer carry the stale 42/21 counts (annotated "at the time" instead).
     (The code report's fixed-findings annotation was already refreshed.)
-13. **W13 — GREEN commit is non-atomic.** Source landed in `a48d597` ("WIP … awaiting VERIFY +
-    GREEN"); `4f36fde` read `Commit: <pending>`; `1910711` repaired the hash; `114460b` repaired
-    a false `check-doc-refs PASS`. Fix: single source commit, own hash, lint before commit.
+13. **W13 — GREEN commit is non-atomic.** ✅ **FIXED 2026-09-27** — `neovim_hub.md` step 9's
+    COMMIT block now carries an **ATOMIC COMMIT POLICY**: one commit for the whole change
+    set, `check-doc-refs.ps1` PASS before commit, no "WIP awaiting VERIFY" commit, no
+    `Commit: <pending>` Done entry; hash-repair/lint-repair commits are a process failure.
 
 ### Minor
 

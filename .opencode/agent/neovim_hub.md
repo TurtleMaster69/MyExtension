@@ -335,9 +335,17 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
       item from the pending queue.
       Record `log/tools-hash.txt` (SHA-256 of every file under `tools/`) so the next
       VERIFY's `tools/`-changed flag is computable.
-      **COMMIT + SHORT SUMMARY (on every GREEN):** commit the item's changes and
-      write a SHORT "what was done / where to look if it breaks" summary so the change
-      is trackable and any later breakage is localizable:
+      **COMMIT + SHORT SUMMARY (on every GREEN) — ATOMIC COMMIT POLICY (W13):**
+      the GREEN commit must be a SINGLE commit carrying the item's entire change set
+      (source + tests + tools + the synced docs + `docs/progress.md`), and it must be
+      preceded by `pwsh tools/check-doc-refs.ps1` PASSING. Do NOT land source in a
+      "WIP … awaiting VERIFY" commit — the source, the Done entry, and the doc sync all
+      go in ONE commit; never leave the Done entry reading `Commit: <pending>` (the
+      commit's own hash cannot be inside it — record the hash in a follow-up ONLY if a
+      genuinely separate need arises, and treat "hash repair" / "false lint PASS" repair
+      commits as a process failure to avoid, not routine). Write a SHORT "what was
+      done / where to look if it breaks" summary so the change is trackable and any
+      later breakage is localizable:
       1. `git add` the item's changed source/docs/harness files (the feature source,
          the synced docs, `docs/progress.md`, `docs/spec.md`, `AGENTS.md`, SKILL.md,
          `tools/*` if touched), then `git commit` with a message naming the item,

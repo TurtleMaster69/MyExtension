@@ -280,7 +280,7 @@ Top of the queue, in priority order:
   regression); `WindowManager` gained a test-only `stale-toolwindow` sentinel.
   New **36th** scenario `neovisual-explorer-move-editor-focus` (deterministic,
   no timeouts/probes: sentinel + bounded absence scan). D-A/D-B/D-C ACCEPT (open/
-  open-o gate strictly stronger; Gamma.cs; read-only `GetActiveDocument`).
+  open-o gate strictly stronger; Gamma.cs; read-only GetActiveDocument).
   **If this regresses, look first at `EditorFocusedVeto` (`InputHandler.cs:82`) and
   the sentinel scenario's bounded absence scan.** Doc sync: 34→35(36) scenarios,
   NeoVisual 31→38 in spec/AGENTS/SKILL. Commit: `1f32d00`

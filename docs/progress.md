@@ -10,12 +10,12 @@ reads at the start of every loop iteration.
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **56 passed**; `tests/NeoVisual.Tests`
-  **26 passed**.
-- Live E2E: `tools/test-e2e.ps1` lists **34 scenarios** (incl. `seed-reset`,
-  `seed-leak`). **33 passing**; **1 known-RED**: `explorer-open-searchbox` (search-box
-  focus-exit gap — queued as the next bugfix item; root cause in the queue
-  below). `explorer-open-navigation` is **GREEN** (tree-select capability, `g`).
-  The `neovisual-editor-insert` flake remains on record (retry-pass).
+  **38 passed**.
+- Live E2E: `tools/test-e2e.ps1` lists **35 scenarios** (incl. `seed-reset`,
+  `seed-leak`, `neovisual-explorer-move-editor-focus`). **No known-RED remains** —
+  `explorer-open-searchbox` was GREened 2026-09-27. Remaining failures are the
+  `neovisual-editor-insert` flake (IntelliSense autocomplete) and the separately-queued
+  intermittent `telescope-implementation` (#5.5).
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -117,6 +117,8 @@ were known-backlog assertion bugs, not regressions).
    focus probes); otherwise fall through / swallow. Also stop the harness's
    `Assert-NoEnterStorm`/teardown from happening mid-scenario (the 20s LMenu gap proves the
    teardown fired while a scenario was still running — see #2).
+> **STATUS 2026-09-27: FIXED** — `Save-AllDocuments` runs `File.SaveAll` on every kill path.
+
 2. **Harness teardown force-killed VS without saving → next run gets the "did not close
    properly / unsaved changes" prompt, and the leak evidence is lost.** ✅ **FIXED 2026-09-27**
    (part of this item): `tools/test-e2e.ps1` now has `Save-AllDocuments` (resolves the
@@ -262,6 +264,26 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — Tool-window action-key leak guard (`FocusGuard`)** (Lane:
+  `bugfix (no-seam)`; 9 delegations, 6 VS boots, 1 iteration). **Closes the
+  user-reported leak** where, with Solution Explorer unfocused, `m`/`o`/`r`/`a` were
+  consumed as tree actions and typed into the editor (the `ljoljoljoljoljo` storm).
+  Root cause: `WindowManager.IsToolWindow` is driven by VS's `SEID_WindowFrame`
+  selection event and goes **stale** when focus moves to an editor.
+  **Change summary:** new `MyExtension/ToolWindows/FocusGuard.cs` (pure:
+  `HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`); `VimModeTracker`
+  gained event-driven `IsEditorFocused`; `InputHandler` gates
+  `HasToolWindowActionKeys`/routing/`ExitToolWindowInputMode`/`IsTyping` on
+  `EditorFocusedVeto` (= `IsEditorFocused && controller not input-mode &&
+  !IsTextInputType`, so the Command Window / an input-mode controller is never
+  vetoed — DEVIATION **D4**, which fixed a fail-twice `neovisual-textinput-motions`
+  regression); `WindowManager` gained a test-only `stale-toolwindow` sentinel.
+  New **36th** scenario `neovisual-explorer-move-editor-focus` (deterministic,
+  no timeouts/probes: sentinel + bounded absence scan). D-A/D-B/D-C ACCEPT (open/
+  open-o gate strictly stronger; Gamma.cs; read-only `GetActiveDocument`).
+  **If this regresses, look first at `EditorFocusedVeto` (`InputHandler.cs:82`) and
+  the sentinel scenario's bounded absence scan.** Doc sync: 34→35(36) scenarios,
+  NeoVisual 31→38 in spec/AGENTS/SKILL. Commit: `1f32d00`
 - **2026-09-27 — `explorer-open-searchbox` search-box focus-exit gap** (Lane:
   `bugfix (no-seam)`, 5 VERIFY boots + 1 RED boot; attempt 1 GREEN after 1 regression
   iteration). **The last known-RED scenario is now GREEN — the 34-scenario suite has no

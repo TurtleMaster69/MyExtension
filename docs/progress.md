@@ -13,9 +13,8 @@ reads at the start of every loop iteration.
   **38 passed**.
 - Live E2E: `tools/test-e2e.ps1` lists **35 scenarios** (incl. `seed-reset`,
   `seed-leak`, `neovisual-explorer-move-editor-focus`). **No known-RED remains** —
-  `explorer-open-searchbox` was GREened 2026-09-27. Remaining failures are the
-  `neovisual-editor-insert` flake (IntelliSense autocomplete) and the separately-queued
-  intermittent `telescope-implementation` (#5.5).
+  `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
+  `telescope-implementation` 7c6569b) - the full 35-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -264,6 +263,19 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — `neovisual-editor-insert` marker corruption** (Lane: `bugfix`,
+  harness-only; 2 delegations, 5 VS boots, 1 iteration). The scenario was 2/2 RED and
+  had been carried on the known-RED allowlist as an "IntelliSense flake" — it was
+  neither intermittent nor a product bug. Root cause (**test artifact**): `i` was
+  pressed with the caret at **document position 0** (code context), so C# IntelliSense
+  auto-popped and the injected `Space` committed `HandleInheritability`, corrupting the
+  marker; the hook had correctly routed every key.
+  **Change summary:** `tools/test-e2e.ps1` only — two `w` normal-mode motions move the
+  caret into the `// Beta.cs` comment before `i`, so the marker lands where completion
+  cannot fire. Marker string + keystrokes unchanged (insertion point only) → the test
+  still fails closed on a swallowed key. **If this regresses, look first at the two
+  `Send-Tap 0x57` motions before the `i` tap.** Full suite now **35/35** (the allowlist
+  entry is closed). Commit: `fd18315`
 - **2026-09-27 — `telescope-implementation` intermittent injected-Enter loss** (Lane:
   `bugfix`, harness-only; 3 delegations, 5 VS boots, 1 iteration). Root cause was a
   **harness focus race**, not a product bug: `Assert-OverlayFocused` only checked the

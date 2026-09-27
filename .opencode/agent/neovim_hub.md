@@ -82,9 +82,33 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
    in-progress items, and a pending queue (Telescope finders roadmap; any known
    failing e2e scenarios; anything the user approved from `docs/architecture-review.md`).
    Follow the file's existing structure if it exists.
-5. **SPEC REVIEW (hard gate)** — delegate to `docs-reviewer` with focus `spec`. If
-   REVISE, fix the spec yourself (max 3 rounds), re-review until APPROVE. Do not start
-   the build loop until the spec is APPROVED.
+5. **SPEC REVIEW (hard gate)** — delegate to `docs-reviewer` with focus `spec`.
+   Apply the **REVIEW-GATE POLICY** (below): do not start the build loop until the spec
+   is APPROVED (or the policy escalates).
+
+## REVIEW-GATE POLICY (single rule for all three `docs-reviewer` gates)
+
+Applies identically to the spec gate, the initial-plan gate (2a), and the build-plan
+gate (4a) — no gate has its own post-REVISE policy:
+
+1. On REVISE, the HUB fixes the doc (spec/plan) itself and re-reviews.
+2. **Cap: 3 REVISE rounds per gate.** Doc-review rounds are NOT "iterations" (see
+   below) — they do not consume the 5-iteration regression cap.
+3. On exhaustion (a 4th REVISE, or an unresolved critical/major finding after 3
+   rounds), STOP: do NOT proceed and do NOT loop silently. Escalate via the `question`
+   tool with the outstanding findings and options (accept-as-is / revise differently /
+   abandon the item). The loop does not proceed past an un-APPROVED gate except on the
+   user's explicit decision.
+4. A gate that returns APPROVE is done; proceed.
+
+## "Iteration" — defined once
+
+An **iteration** is one RED→re-plan cycle driven by a REAL regression (a failing
+scenario/test the verifier classified `regression`). **Max 5 iterations per item.**
+The following are explicitly NOT iterations and never consume the cap: doc-review
+REVISE rounds (gates 2a/4a/spec), flaky failures (pass-on-retry), known-RED allowlist
+failures, and delegation-time budget exhaustion (re-dispatch). The 5-iteration cap and
+the per-gate 3-round cap are independent counters.
 
 ## LOOP (one feature/bugfix at a time)
 
@@ -143,8 +167,8 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
    `TextMotionNavigator` pattern) and deterministic `[Telescope]`/`[NeoVisual]`
    diagnostics added.
 2a. **PLAN REVIEW (point 1) — delegate to `docs-reviewer`** with focus
-   `initial-plan`. If it returns REVISE, fix the plan yourself (max 3 rounds), then
-   proceed. Do not start writing tests until the initial plan is APPROVED.
+   `initial-plan`. Apply the **REVIEW-GATE POLICY** (above). Do not start writing tests
+   until the initial plan is APPROVED (or the policy escalates).
 3. **RED — delegate to `e2e-test-builder`.** Pass: `docs/implementation_plan.md` path
    and the affected scenario names — the harness conventions live in AGENTS.md
    (already in its context) and its own instructions, so do NOT re-send them.
@@ -167,9 +191,11 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
    and **Fails-if** symptoms — plus a **## Verification Trace** table mapping each
    failing test/scenario to its implicated BP steps and expected diagnostic.
 4a. **PLAN REVIEW (point 2) — delegate to `docs-reviewer`** with focus `build-plan`.
-   If REVISE, send the feedback back to `implementation-planner` to revise the Build
-   Plan, then re-review (counts toward the 5-iteration cap). Proceed to BUILD only
-   when APPROVED.
+   On REVISE, send the feedback back to `implementation-planner` to revise the Build
+   Plan, then re-review. Apply the **REVIEW-GATE POLICY** (above) — plan-review rounds
+   do NOT count toward the 5-iteration cap (that counts real regressions only; see
+   `## "Iteration" — defined once`). Proceed to BUILD only when APPROVED (or the
+   policy escalates).
 5. **BUILD — delegate to `build-agent` (GATED: build only).** Pass:
    `docs/implementation_plan.md` path. It executes the Build Plan top-to-bottom, runs
    `dotnet build` and the affected unit test project(s), and reports per-step
@@ -300,8 +326,9 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
      gate** (see below); if not, proceed to the next pending item.
    - **RED** → pass the verifier's feedback to `implementation-planner` to revise the
       Build Plan, then re-run PLAN REVIEW (4a) → BUILD → (DEBUG if needed) → RE-PLAN →
-      VERIFY → (DEBUG if still RED) → RE-PLAN. **Max 5 iterations** per item (real
-      regressions only — flaky/known-RED failures do not count). Watch your own
+      VERIFY → (DEBUG if still RED) → RE-PLAN. **Max 5 iterations** per item (see
+      `## "Iteration" — defined once`: real regressions only — flaky/known-RED
+      failures and doc-review rounds do not count). Watch your own
       context: if the item's accumulated evidence is deep into compaction, escalate
       early with a one-line summary rather than forcing the full 5-iteration budget.
       If the
@@ -336,9 +363,11 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
   feature lists must match across `docs/spec.md`, `AGENTS.md`, and
   `.opencode/skills/vs-extension-dev/SKILL.md` — tell `docs-reviewer` to check all
   three when a count/feature changed.
-- If it returns REVISE, fix the spec yourself (max 3 rounds), re-review until APPROVE.
-- **The loop does not proceed past a spec update until the spec is APPROVED.** A
-  spec that contradicts the code (or misses a feature) is a critical finding.
+- If it returns REVISE, apply the **REVIEW-GATE POLICY** (above): fix the spec
+  yourself, re-review, max 3 rounds, then escalate via `question`.
+- **The loop does not proceed past a spec update until the spec is APPROVED** (or the
+  policy escalates). A spec that contradicts the code (or misses a feature) is a
+  critical finding.
 
 ## When the pending queue is empty
 
@@ -376,8 +405,8 @@ build that silently stalls:
 
 On budget exhaustion with no verdict: log it in the Execution Log, re-dispatch
 ONCE fresh, and if that also fails, escalate via `question`. Budget exhaustion is
-NOT an iteration — it does not consume the 5-iteration cap (that counts real
-regressions only).
+NOT an iteration — it does not consume the 5-iteration cap (see `## "Iteration" —
+defined once`).
 
 ### Per-item cost cap (M-M1)
 

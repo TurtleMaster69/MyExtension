@@ -226,6 +226,13 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W4+W5: unify the review-gate policy + define "iteration" once** (Lane:
+  trivial config edit). `neovim_hub.md` gained a `## REVIEW-GATE POLICY` section (one
+  post-REVISE rule for spec/2a/4a: hub fixes, 3-round cap, `question`-tool escalation on
+  exhaustion) and a `## "Iteration" — defined once` section (an iteration = a RED→re-plan
+  cycle from a real regression; doc-review rounds / flaky / known-RED / budget exhaustion
+  never count). Removed the conflicting `:159` "counts toward the cap" phrase. **Restart
+  required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W3: drop no-signal Trailmark skills/passes from agent lists** (Lane:
   trivial config edit). Edited `.opencode/agent/{debug-agent,docs-reviewer,verification-agent,
   e2e-test-builder,implementation-planner,prompt-rule}.md`: removed `trailmark-finding-triage`,
@@ -753,11 +760,13 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
    self-contradiction (skills list no longer loads the gate it later forbids); scoped
    `prompt-rule.md` away from taint/privilege and to this repo. Each edited Terrailmark
    section now also carries the `uv tool install trailmark` fallback.
-4. **W4 — three gates, three post-REVISE policies.** spec `:86-87,327-328` ("until APPROVE");
-   initial-plan 2a `:137-138` ("then proceed" but also "until APPROVED") → livelock; build-plan
-   4a `:159-160` (APPROVED-only, no exit). Fix: one policy + explicit escalation on exhaustion.
-5. **W5 — the 5-iteration cap is counted two ways.** `:159` (plan-review rounds count) vs
-   `:291,:367` (regressions only). Fix: define "iteration" once.
+4. **W4 — three gates, three post-REVISE policies.** ✅ **FIXED 2026-09-27** — added a
+   single `## REVIEW-GATE POLICY` section in `neovim_hub.md` (hub fixes; 3-round cap;
+   escalate via `question` on exhaustion) referenced by the spec gate, 2a, and 4a.
+5. **W5 — the 5-iteration cap is counted two ways.** ✅ **FIXED 2026-09-27** — added a
+   `## "Iteration" — defined once` section: an iteration is a RED→re-plan cycle from a
+   real regression; doc-review rounds, flaky, known-RED, and budget exhaustion never
+   consume the cap. 4a's "counts toward the cap" phrase removed.
 6. **W6 — flaky-budget (M-M2) is inert.** The cumulative per-scenario flaky count is never
    passed to `verification-agent` (step 8 `:200-211`; `verification-agent.md:48-55`), so its
    3rd-strike reclassification (`:88-97`) can never fire. Fix: pass the Execution-Log counts;

@@ -80,7 +80,7 @@ scoped context is given. Do not duplicate reads the hub already performed.
   needed with exact formats).
 - **Known-RED allowlist** is present and matches the `docs/progress.md` known-bug
   backlog (scenarios/tests the item is allowed to fail on for documented
-  pre-existing reasons — e.g. the excluded `neovisual-explorer-open` scenarios).
+  pre-existing reasons — e.g. the currently known-RED `explorer-open-searchbox`).
 - **Unit test plan** says which project (`tests/Telescope.Tests` vs
   `tests/NeoVisual.Tests`) and which class/state machine is being tested — the pure
   logic must be extracted into a dependency-free class (the `OverlayKeyHandler` /

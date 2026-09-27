@@ -168,8 +168,8 @@ the per-gate 3-round cap are independent counters.
    (`Lane: feature|bugfix|trivial`): goal, approach, acceptance criteria, tests, and
    a **known-RED allowlist** (scenarios/tests allowed to fail for documented
    pre-existing reasons from `docs/progress.md`'s known-bug backlog — e.g. the
-   excluded `neovisual-explorer-open` scenarios; VERIFY must not flag those as
-   regressions).
+   currently known-RED `explorer-open-searchbox` scenario; VERIFY must not flag those
+   as regressions).
    Feature lane: an **E2E test plan** (scenario names to add to `tools/test-e2e.ps1`
    via `Register-Scenario`, what each asserts, which diagnostics it depends on) plus
    the offline unit tests to extend (and where — Telescope vs NeoVisual project).

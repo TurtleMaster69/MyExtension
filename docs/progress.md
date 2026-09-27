@@ -227,6 +227,10 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W19: replace the stale known-RED allowlist example** (Lane: trivial
+  config edit). `docs-reviewer.md` + `neovim_hub.md` now cite `explorer-open-searchbox`
+  (the real known-RED) instead of `neovisual-explorer-open` (green). **Restart required.**
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W18: fix the "Load all four/three" off-by-one counts** (Lane: trivial
   config edit). `e2e-test-builder.md` (lists 4 → "all four"), `implementation-planner.md`
   (lists 3 → "all three"). The `uv tool install trailmark` fallback landed in the agent
@@ -908,8 +912,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     to the agent Trailmark sections in the same pass (W3). **Deferred:** de-duplicating the
     six boilerplate copies into one shared referenced file — the canonical fallback is
     already in AGENTS.md; a pure de-dup refactor is low-value next to the other findings.
-19. **W19** — known-RED allowlist example cites `neovisual-explorer-open` (now green) in
-    `docs-reviewer.md:81` and `neovim_hub.md:124`.
+19. **W19** — stale allowlist example.
+    ✅ **FIXED 2026-09-27** — `docs-reviewer.md` and `neovim_hub.md` now cite the
+    currently known-RED `explorer-open-searchbox` instead of the (now green)
+    `neovisual-explorer-open`.
 
 ### Nit
 

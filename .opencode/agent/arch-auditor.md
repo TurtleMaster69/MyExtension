@@ -7,6 +7,7 @@ permission:
   task:
     "*": deny
     "trailmark-recon": allow
+    "code-slice-worker": allow
   skill:
     "*": allow
 ---
@@ -31,7 +32,7 @@ Load only the ones that apply to your slice's files; if a slice has no P/Invoke,
 
 The hub passes you the shared `RECON:` digest in your prompt — consume it and do NOT
 re-run whole-repo recon. You MAY spawn the **`trailmark-recon`** subagent (you have `task`
-permission for that agent ONLY) to get a **slice-scoped** digest for your files when the
+permission for that agent) to get a **slice-scoped** digest for your files when the
 shared digest lacks your slice's traps; do not spawn any other agent. Treat the digest as
 ground truth: it names this repo's proxy share, the empty entrypoint/taint passes, the
 complexity hotspots, and the **false-dead-code traps** (members whose simple-name
@@ -43,6 +44,21 @@ fallback in your findings.
 > The nested spawn needs an explicit `task` rule here **and** `subagent_depth >= 2` in the
 > opencode config; if the `task` tool is absent, fall back to running the queries
 > yourself — never fail the audit for want of a digest.
+
+## Large-slice offload (`code-slice-worker`, W14)
+
+For a **large slice** whose files are too bulky to read inline, you MAY spawn the
+**`code-slice-worker`** subagent (you have `task` permission for it) to analyze ONE
+bounded, graph-derived packet and return source-cited JSON, keeping the bulk out of your
+context. Build the packet with the slicing method (`trailmark` graph slice + the
+`slicing-code-context` skill's packet format) — if a manifest script exists use
+`.opencode/skills/slicing-code-context/scripts/build_slice_packet.py`, otherwise assemble
+the packet from Trailmark query results. The worker has NO repository access — it sees
+ONLY the packet you pass. Rules: (a) use it for **context isolation on bulky slices**, not
+to answer questions you can answer with a direct query; (b) treat its JSON as a *proposal*
+— verify every cited file:line against the slice before turning it into a finding;
+(c) if the `task` tool is unavailable, read the slice yourself — never fail the audit for
+want of the offload. It is optional; `trailmark-recon` remains the structural ground truth.
 
 ## Trailmark (mandatory for structural questions)
 

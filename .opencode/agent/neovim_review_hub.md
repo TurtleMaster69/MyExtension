@@ -107,7 +107,8 @@ diagnostics contract), (d) the expected return format, and (e) the `trailmark-re
 digest from 1a verbatim, so it consumes that instead of re-running whole-repo recon.
 
 Each arch-auditor MAY spawn `trailmark-recon` itself for a **slice-scoped** digest — it
-has a `task` rule for that agent ONLY. That nested spawn requires TWO things at startup:
+has a `task` rule for that agent, and also for **`code-slice-worker`** (W14) to offload a
+bulky slice into an isolated context. That nested spawn requires TWO things at startup:
 (a) the explicit `task` rule in `arch-auditor.md`, and (b) `subagent_depth >= 2` in the
 opencode config (the depth guard counts the caller's ancestors and fails at
 `h >= subagent_depth`; with the default `1`, child sessions get no `task` tool and the

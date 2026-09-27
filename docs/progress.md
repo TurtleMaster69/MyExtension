@@ -227,6 +227,12 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W14: wire `code-slice-worker` into `arch-auditor`** (Lane: trivial config
+  edit; user decision via `question`). Added a `code-slice-worker` `task` rule to
+  `arch-auditor.md` + a "Large-slice offload" section (packet built via the
+  `slicing-code-context` method); `neovim_review_hub.md` now notes the nested spawn.
+  Requires `subagent_depth ≥ 2` (already set). Resolves A5. **Restart required.**
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W13: enforce the atomic GREEN commit policy** (Lane: trivial config
   edit). `neovim_hub.md` step 9's COMMIT block now requires one atomic commit for the
   whole change set, `check-doc-refs.ps1` PASS before committing, no "WIP … awaiting
@@ -860,8 +866,11 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
 
 ### Minor
 
-14. **W14** — `code-slice-worker` + `slicing-code-context` orphaned (A5 open). Wire (with `task`
-    + `subagent_depth ≥ 2`) or delete.
+14. **W14** — `code-slice-worker` + `slicing-code-context` orphaned (A5 open).
+    ✅ **FIXED 2026-09-27** — user chose to **WIRE it into `arch-auditor`**: added a
+    `code-slice-worker` `task` rule to `arch-auditor.md` (+ a "Large-slice offload"
+    section using the `slicing-code-context` packet), and referenced the nested spawn in
+    `neovim_review_hub.md`. Requires `subagent_depth ≥ 2` (already set).
 15. **W15** — `e2e-test-builder.md:40` / `implementation-planner.md:40` expect the hub to pass
     conventions, but `neovim_hub.md:141,152` deliberately does not.
 16. **W16** — both hubs claim `docs/progress.md` write access; `neovim_hub.md:15` says sole owner.

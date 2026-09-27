@@ -68,22 +68,22 @@ reads at the start of every loop iteration.
   insert mode, wait for the settle, Enter opens the filtered result.
 - ✅ **`telescope-open-file-navigation`** — DONE (see Done section): Esc to normal,
   **j moves the selection to index 1**, Enter opens the moved-to row (`Service.cs`).
-- ⚠️ **`explorer-open-navigation`** — **KNOWN-RED** (registered; real gap): the
-  solution auto-open leaves the tree in a non-normalized state (Models/ expanded,
-  IShape.cs selected), so a pinned l/j/k sequence cannot reach a specific file
-  node. Needs a tree-state normalization primitive (e.g. collapse-to-root
-  binding/action) or a harness normalization. **Queued as the next bugfix item.**
-- ⚠️ **`explorer-open-searchbox`** — **KNOWN-RED** (registered; real gap): after
+- ✅ **`explorer-open-navigation`** — **GREEN 2026-09-19** (tree-select capability, `g`;
+  see Done section). Historical note: it was KNOWN-RED here until the `g`
+  programmatic select-first-source-file action shipped. (`neovisual-explorer-open`
+  remains the separate Enter-storm scenario — that one is green too.)
+- ⚠️ **`explorer-open-searchbox`** — **KNOWN-RED** (registered; real gap; the ONE
+  remaining known-RED): after
   `i`→type→`Esc`, `ExitInputMode`'s `View.SolutionExplorer` refocus does NOT
   restore tree focus — `o` falls through into the search box (no
   `solution-explorer open`). Needs the search-box focus-exit path fixed.
   **Queued as the next bugfix item.**
 
-> Harness-health note (2026-09-19): the M-M6 concurrent unit-suite launch can hit
-> a build-output lock — both test projects compile the shared `Telescope.csproj`
-> into the same `obj/` path; Defender AV occasionally locks `Telescope.dll`
-> (CS2012). A re-run passes; not a test failure. Prefer sequential or staggered
-> unit-suite runs when both are needed.
+> Harness-health note (2026-09-19): the two test projects compile the shared
+> `Telescope.csproj` into the same `obj/` path; Defender AV occasionally locks
+> `Telescope.dll` (CS2012) on a simultaneous launch. A re-run passes; not a test
+> failure. **Policy now staggered/sequential** (W11, `verification-agent.md` step 4)
+> — do not launch both unit suites simultaneously.
 
 ## In-progress
 
@@ -93,7 +93,7 @@ reads at the start of every loop iteration.
 ## F45 status (Item 1 — log-prefix centralization)
 
 **COMPLETE** — code and e2e verified (see the Done section). `Run_LogPrefixes_Pinned`
-passes, both unit suites green (42/21), all rg gates pass (C# literals = 0; harness
+passes, all rg gates pass at the time of F45 (C# literals = 0; harness
 raw literals = 1 each = the `$script:Pfx*` definitions; Pfx usage = 102 = exact
 expected 91+4 + 3+4), and the 19-scenario e2e subset ran green (the only 2 failures
 were known-backlog assertion bugs, not regressions).
@@ -107,8 +107,9 @@ Top of the queue, in priority order:
    green; the only 2 failures were known-backlog assertion bugs (`prompt-motions`
    caret, `open-file-normal` key name), not F45 regressions. F45 is complete.
 2. ~~Fix the 4 known-bug items (test-harness fixes + the Enter-storm
-   investigation)~~ — **DONE**: full 26-scenario suite GREEN + both unit suites
-   (25/42); see the Done section.
+   investigation)~~ — **DONE** at the time (26-scenario suite GREEN; units were
+   25/42 then — both counts have since grown; see the Baseline section); see the Done
+   section.
 3. Implement the **Telescope finders** roadmap:
    - ~~`references` finder~~ — **DONE** (see Done section; `Space+F R`,
      read/write access, preview line-jump).
@@ -226,6 +227,12 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W12: reconcile progress.md's internal contradictions** (Lane: trivial
+  config edit). Fixed: the `explorer-open-navigation` KNOWN-RED line (now GREEN, matching
+  the Baseline/Done records); the severity line (now "filed subset 27 of 46:
+  1 critical, 15 major, 11 minor"); the meta-review headers (now ALL DONE matching the
+  COMPLETE note); the stale 42/21 F45 counts (annotated "at the time"). `check-doc-refs.ps1`
+  PASS. Commit: (recorded below)
 - **2026-09-27 — W11: stagger the final-gate unit run** (Lane: trivial config edit).
   `verification-agent.md` step 4 now runs the two unit projects staggered/sequentially
   (never simultaneous) per the recorded shared-`obj/` CS2012 lock note; treats a CS2012 as
@@ -450,7 +457,9 @@ Top of the queue, in priority order:
 
 Findings approved for filing (user selection: "Everything incl. harness + tooling").
 Full detail and the remaining report-only findings (F17-F21, F23-F35, F45) live in
-`docs/architecture-review.md`. Severity (of 46 total): 1 critical, 15 major, 11 minor.
+`docs/architecture-review.md`. Severity of this **filed subset (27 items, of the 46
+total findings)**: 1 critical, 15 major, 11 minor. (The remaining 19 findings —
+F17-F21, F23-F35, F45 — stayed report-only.)
 
 ### Critical
 
@@ -564,8 +573,8 @@ SKILL.md when counts/features changed, and re-run the SPEC REVIEW gate. See
 
 Meta-review of `.opencode/agent/*.md`, `tools/check-doc-refs.ps1`, and
 `tools/test-e2e.ps1` runner/bootstrap. Rechecked after the hub reinit: 0
-invalidations, M-C1 downgraded. **Status: 5 major done, 8 minor pending** (user
-picks each fix or ignores; the hub implements + verifies, one item at a time).
+invalidations, M-C1 downgraded. **Status: 5 major + 8 minor items — ALL DONE** (see
+the COMPLETE note below; this header was stale).
 
 ### Major — status
 
@@ -600,7 +609,7 @@ picks each fix or ignores; the hub implements + verifies, one item at a time).
    instance, skips kill/reseed/main-VS/Debug.Start; guard fails fast when none
    running). Parse OK, -List 26 scenarios, tools-hash refreshed.
 
-### Minor — pending (next items)
+### Minor — status (all done; see the COMPLETE note below)
 
 6. **M-C1 (downgraded from critical) — tools-hash is instruction-only, not enforced.** ✅ DONE
    `tools/test-e2e.ps1` now has `Write-ToolsHash` (SHA-256 of every file under `tools/`)
@@ -648,7 +657,8 @@ picks each fix or ignores; the hub implements + verifies, one item at a time).
 ---
 **Meta-review backlog COMPLETE (2026-09-19).** All 5 major + 8 minor items (M-M1..M-M5,
 M-C1, M-M6, M-M7, M-N1..M-N6) fixed, verified, and recorded. Committed orchestration layer
-`a37242e`; feature source (MyExtension/Telescope) still untracked.
+`a37242e`; feature source (MyExtension/Telescope) was still untracked at that time (the
+orchestration layer is now fully tracked as of `0490c41`, W2 2026-09-27).
 
 ## Trailmark + agent-infrastructure review (2026-09-27)
 
@@ -832,10 +842,12 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     `verification-agent.md` step 4 now runs the two unit projects staggered/sequentially
     (never simultaneous), per the recorded shared-`obj/` CS2012 lock note; a CS2012 is
     treated as a lock flake (re-run once).
-12. **W12 — records contradict reality.** The code report (`docs/architecture-review.md` original
-    section) re-asserts fixed F1/F16/F45; `docs/progress.md:71` vs `:17,:124`
-    (`explorer-open-navigation`), `:392` (severity sums to 27, "of 46"), `:506,:534` vs `:580`
-    (meta-review status), `:96,:111` (stale 42/21). Fix: reconcile/annotate.
+12. **W12 — records contradict reality.** ✅ **FIXED 2026-09-27** — the
+    `explorer-open-navigation` KNOWN-RED line now reads GREEN (matching `:17`/`:124`);
+    the severity line reads "filed subset (27 of 46): 1 critical, 15 major, 11 minor";
+    the meta-review headers (`:506`/`:534`) now read ALL DONE matching the COMPLETE note;
+    the F45 lines no longer carry the stale 42/21 counts (annotated "at the time" instead).
+    (The code report's fixed-findings annotation was already refreshed.)
 13. **W13 — GREEN commit is non-atomic.** Source landed in `a48d597` ("WIP … awaiting VERIFY +
     GREEN"); `4f36fde` read `Commit: <pending>`; `1910711` repaired the hash; `114460b` repaired
     a false `check-doc-refs PASS`. Fix: single source commit, own hash, lint before commit.

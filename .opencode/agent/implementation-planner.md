@@ -19,7 +19,7 @@ Invoke the `skill` tool to load the skills relevant to plan authoring, then appl
 - `planning-and-task-breakdown` — decompose into small, verifiable tasks with acceptance criteria + dependency ordering (maps to BP-n).
 - `sprint-plan-gate` — intent → spec/plan → approve → dispatch → lifecycle gate.
 
-Load both; read the full body, not just the description.
+Load all three; read the full body, not just the description.
 
 ## Trailmark (mandatory for structural questions)
 

@@ -227,6 +227,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W18: fix the "Load all four/three" off-by-one counts** (Lane: trivial
+  config edit). `e2e-test-builder.md` (lists 4 → "all four"), `implementation-planner.md`
+  (lists 3 → "all three"). The `uv tool install trailmark` fallback landed in the agent
+  Trailmark sections during W3. The boilerplate de-dup is deferred (canonical fallback is
+  in AGENTS.md). **Restart required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W17: fix the pipeline strings** (Lane: trivial config edit). Added
   `debug-agent` + both `docs-reviewer` plan gates to `sprint-plan-gate/SKILL.md` step 4,
   `test-driven-development/SKILL.md`, and `command/hub.md`'s description. **Restart
@@ -897,9 +902,12 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     ✅ **FIXED 2026-09-27** — `sprint-plan-gate/SKILL.md` step 4, `test-driven-development/SKILL.md`
     line 9, and `command/hub.md`'s description now include `debug-agent` and the two
     `docs-reviewer` plan gates.
-18. **W18** — off-by-one "Load all three/both" (`e2e-test-builder.md:21` lists 4;
-    `implementation-planner.md:22` lists 3); six Trailmark boilerplate copies lack the
-    `uv tool install trailmark` fallback.
+18. **W18** — off-by-one "Load all three/both". ✅ **FIXED 2026-09-27 (counts)** —
+    `e2e-test-builder.md` now says "all four" (it lists 4), `implementation-planner.md`
+    now says "all three" (it lists 3). The `uv tool install trailmark` fallback was added
+    to the agent Trailmark sections in the same pass (W3). **Deferred:** de-duplicating the
+    six boilerplate copies into one shared referenced file — the canonical fallback is
+    already in AGENTS.md; a pure de-dup refactor is low-value next to the other findings.
 19. **W19** — known-RED allowlist example cites `neovisual-explorer-open` (now green) in
     `docs-reviewer.md:81` and `neovim_hub.md:124`.
 

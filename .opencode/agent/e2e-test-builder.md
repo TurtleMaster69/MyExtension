@@ -18,7 +18,7 @@ Invoke the `skill` tool to load the skills relevant to writing the tests, then a
 - `verify-tests-fail-without-fix` — prove the test actually catches the bug (fails without fix, passes with it).
 - `code-testing-agent` — write meaningful .NET unit tests (behavior, not implementation; edge cases).
 
-Load all three for test-writing; read the full body, not just the description.
+Load all four for test-writing; read the full body, not just the description.
 
 ## Trailmark (mandatory for structural questions)
 

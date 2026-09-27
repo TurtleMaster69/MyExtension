@@ -268,7 +268,7 @@ Top of the queue, in priority order:
   had been carried on the known-RED allowlist as an "IntelliSense flake" — it was
   neither intermittent nor a product bug. Root cause (**test artifact**): `i` was
   pressed with the caret at **document position 0** (code context), so C# IntelliSense
-  auto-popped and the injected `Space` committed `HandleInheritability`, corrupting the
+  auto-popped and the injected `Space` committed HandleInheritability, corrupting the
   marker; the hook had correctly routed every key.
   **Change summary:** `tools/test-e2e.ps1` only — two `w` normal-mode motions move the
   caret into the `// Beta.cs` comment before `i`, so the marker lands where completion

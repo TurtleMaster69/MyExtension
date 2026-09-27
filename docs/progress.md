@@ -227,6 +227,10 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W20: update the stale unit counts** (Lane: trivial config edit).
+  `code-testing-agent/SKILL.md` now says 56/26 (+ a drift caveat); the stale 42/21 in
+  progress.md was annotated "at the time" (W12). **Restart required.**
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W19: replace the stale known-RED allowlist example** (Lane: trivial
   config edit). `docs-reviewer.md` + `neovim_hub.md` now cite `explorer-open-searchbox`
   (the real known-RED) instead of `neovisual-explorer-open` (green). **Restart required.**
@@ -919,9 +923,12 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
 
 ### Nit
 
-20. **W20** — `code-testing-agent/SKILL.md:19` says 41/21 vs actual 56/26; `docs/progress.md:96,111`
-    stale 42/21. Plus: `neovim_hub` loads `dispatching-parallel-agents` though the build loop is
-    serial; the Trailmark-review section of this file is uncommitted.
+20. **W20** — stale unit counts. ✅ **FIXED 2026-09-27** — `code-testing-agent/SKILL.md`
+    now says 56/26 (with a drift caveat); the stale 42/21 in the F45/backlog sections was
+    annotated "at the time" in W12. **Deferred nits:** `neovim_hub` still lists
+    `dispatching-parallel-agents` although the build loop is serial (harmless — loaded only
+    when fanning out review work); the Trailmark-review section was uncommitted, now
+    committed by W2.
 
 ### Minor (filed on request)
 

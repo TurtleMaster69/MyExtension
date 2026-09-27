@@ -16,7 +16,7 @@ Write meaningful .NET unit tests. Adapted from official `microsoft/testfx` `code
 - **Behavior, not implementation** — assert what the code does, not how; tests that test the implementation pass even when behavior is broken.
 - **Edge cases** — empty, boundaries, special characters, null; the boundary/error path is where bugs live.
 - **Testability first** — if a unit test needs VS/MEF/window context, the seam is wrong; extract the decision into a dependency-free class and test that.
-- **Run the suite** — `dotnet run --project tests/Telescope.Tests` (41) and `tests/NeoVisual.Tests` (21); substring filter as first arg; `--list`.
+- **Run the suite** — `dotnet run --project tests/Telescope.Tests` (56) and `tests/NeoVisual.Tests` (26); substring filter as first arg; `--list`. (Counts drift upward as tests are added; compare against `--list` output or AGENTS.md, not a remembered number.)
 - Keep the assertion aligned with the `[NeoVisual]`/`[Telescope]` diagnostic contract the e2e harness also asserts.
 
 ## Source

@@ -226,6 +226,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W9: pass the missing handoff inputs** (Lane: trivial config edit).
+  `neovim_hub.md`: step 3 passes the affected unit project(s); steps 5/6/8/8a pass the
+  affected unit project(s) + the final-gate flag; step 4 passes the known-RED allowlist —
+  matching the inputs `build-agent`/`debug-agent`/`verification-agent`/`implementation-planner`
+  declare they need. **Restart required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W8: encode the user feature-triage gate as a LOOP step** (Lane: trivial
   config edit). Added LOOP step **1f FEATURE-TRIAGE GATE** to `neovim_hub.md` (research
   LazyVim → check native VS reuse → ask the user build vs extend/reuse vs skip via the
@@ -805,10 +810,11 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
    added LOOP step **1f FEATURE-TRIAGE GATE** (research LazyVim → check native VS reuse →
    ask the user build vs extend/reuse vs skip via `question` → wait for the decision) and
    added it to the Delegation contract's allowed-prompt list.
-9. **W9 — incomplete delegation inputs.** Steps 3/5/6/8 (`:139-141,161-162,168-171,200-211`)
-   omit the affected unit project(s), final-gate flag, and (step 4) the known-RED allowlist that
-   `build-agent.md:72-75`, `debug-agent.md:60-62`, `verification-agent.md:69-78`, and
-   `implementation-planner.md:46-48` require. Fix: pass them on every handoff.
+9. **W9 — incomplete delegation inputs.** ✅ **FIXED 2026-09-27** — step 3 now passes the
+   affected unit project(s); steps 5/6/8/8a pass the affected unit project(s) + the
+   final-gate flag; step 4 passes the known-RED allowlist — matching what
+   `build-agent`, `debug-agent`, `verification-agent`, and `implementation-planner`
+   require.
 10. **W10 — deviation adjudication unreachable on the verify path.** 6b (`:173-189`) sits only
     between build-time DEBUG and RE-PLAN; 8a→8b (`:238-243`) has no 6b. `debug-agent.md:68-80`
     has no `DEVIATIONS` field and `verification-agent.md:101-113` has no DEVIATION slot, though

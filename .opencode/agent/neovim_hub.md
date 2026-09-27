@@ -182,8 +182,9 @@ the per-gate 3-round cap are independent counters.
 2a. **PLAN REVIEW (point 1) — delegate to `docs-reviewer`** with focus
    `initial-plan`. Apply the **REVIEW-GATE POLICY** (above). Do not start writing tests
    until the initial plan is APPROVED (or the policy escalates).
-3. **RED — delegate to `e2e-test-builder`.** Pass: `docs/implementation_plan.md` path
-   and the affected scenario names — the harness conventions live in AGENTS.md
+3. **RED — delegate to `e2e-test-builder`.** Pass: `docs/implementation_plan.md` path,
+   the affected scenario names, and the **affected unit project name(s)**
+   (`Telescope.Tests` / `NeoVisual.Tests`) — the harness conventions live in AGENTS.md
    (already in its context) and its own instructions, so do NOT re-send them.
    Feature lane: it writes the scenarios (+ unit tests) and proves they FAIL (e2e
    RED, boots VS). Bugfix/trivial lanes: unit tests only — RED at the unit level,
@@ -197,7 +198,9 @@ the per-gate 3-round cap are independent counters.
    plan's expected failure before proceeding to PLAN. A RED caused by a typo in the
    test itself, or by a harness breakage, is NOT a valid RED — send it back.
 4. **PLAN — delegate to `implementation-planner`.** Pass: `docs/implementation_plan.md`
-   path + the RED failure evidence (capped: failing assertions + log lines only). The
+   path + the RED failure evidence (capped: failing assertions + log lines only) + the
+   item's **known-RED allowlist** (from `docs/progress.md`'s known-bug backlog) so it is
+   carried into the Build Plan + Verification Trace. The
    planner reads AGENTS.md/SKILL.md itself — do NOT re-send their content. It appends
    a verbatim-executable **## Build Plan** with numbered `BP-n` steps — each with
    **Verify-with** (exact diagnostic format, unit test name, e2e scenario + assertion)
@@ -210,7 +213,9 @@ the per-gate 3-round cap are independent counters.
    `## "Iteration" — defined once`). Proceed to BUILD only when APPROVED (or the
    policy escalates).
 5. **BUILD — delegate to `build-agent` (GATED: build only).** Pass:
-   `docs/implementation_plan.md` path. It executes the Build Plan top-to-bottom, runs
+   `docs/implementation_plan.md` path + the **affected unit project name(s)** +
+   the **final-gate flag** (both projects only at the item's final gate, else the
+   affected project only). It executes the Build Plan top-to-bottom, runs
    `dotnet build` and the affected unit test project(s), and reports per-step
    `BP-n: done/failed` status. It may self-check only that it introduced no syntax
    error and that the program builds. It must NOT debug, NOT fix beyond the plan, and
@@ -218,7 +223,8 @@ the per-gate 3-round cap are independent counters.
    stops.
 6. **DEBUG — delegate to `debug-agent` (only if build/tests failed).** Pass: the
    build-agent's failure output (capped: failing step + error excerpt) +
-   `docs/implementation_plan.md` path. It root-causes the failing build/unit test,
+   `docs/implementation_plan.md` path + the **affected unit project name(s)** +
+   the **final-gate flag**. It root-causes the failing build/unit test,
    applies the MINIMAL fix, and re-runs `dotnet build` + the affected unit suite. If
    it cannot fix it, it reports the blocker — do not loop it; escalate.
  6b. **ADJUDICATE DEVIATIONS (M-M3) — hub-only, before ANY RE-PLAN.** If the
@@ -251,7 +257,8 @@ the per-gate 3-round cap are independent counters.
 8. **VERIFY — delegate to `verification-agent` (owns the recheck of all bells and
    whistles).** Pass: affected scenario names + the lane + the item's known-RED
    allowlist + the **cumulative per-scenario flaky counts** for this item (read from the
-   Execution Log, e.g. `<scenario>: flaky x2`) so the agent reports count N+1, not N + **two flags**: whether `tools/` changed since the last verified run
+   Execution Log, e.g. `<scenario>: flaky x2`) so the agent reports count N+1, not N + the
+   **affected unit project name(s)** + **two flags**: whether `tools/` changed since the last verified run
    (compute by diffing a fresh `tools/` file-hash against `log/tools-hash.txt`
    recorded at the last GREEN — a non-empty diff triggers the harness-health
    self-checks) and whether this is the item's final
@@ -285,7 +292,8 @@ the per-gate 3-round cap are independent counters.
      known-RED (on the item's allowlist), flaky (passes on retry), or regression
      (real). Only regressions feed the re-plan loop.
 8a. **DEBUG (verify-time) — delegate to `debug-agent` (only if VERIFY is RED).** Pass:
-   the verification-agent's verdict + `docs/implementation_plan.md` path. It reproduces
+   the verification-agent's verdict + `docs/implementation_plan.md` path + the
+   **affected unit project name(s)** + the **final-gate flag**. It reproduces
    the failing e2e scenario / unit test, isolates WHICH layer failed (overlay / hook /
    controller / VsVim mode / harness), reads the `[Telescope]`/`[NeoVisual]` log to find
    WHERE and WHAT caused it, applies the minimal fix, and re-runs the affected subset.

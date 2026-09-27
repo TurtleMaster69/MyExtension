@@ -38,6 +38,7 @@
 #   neovisual-editor-insert  insert-mode typing reaches the editor (hook must not swallow text)
 #   neovisual-textinput-motions  Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret
 #   seed-reset    filesystem-only: scratch seeding always resets (stale edits removed) + uniform EOL
+#   seed-leak     filesystem-only: NO seeded file was written into during the run (write-leak guard)
 #
 # Exit code: 0 = all selected scenarios passed, 1 = any failed.
 #
@@ -56,6 +57,8 @@
 # Side effects (M-N5 — this is NOT a read-only run):
 #   - Writes per-run logs to log/<index>-neovisual-{exp,main}.log.
 #   - Reseeds the scratch solution at %TEMP%\telescope_scratch (delete + recreate).
+#   - Records a bootstrap SHA-256 snapshot of every seeded file (log/seed-baseline.json) so the
+#     seed-leak scenario can prove no seeded file was written into during the run.
 #   - Sets NEOVISUAL_TEST_SOLUTION / NEOVISUAL_LOG_DIR / NEOVISUAL_LOG_INDEX in PROCESS scope only
 #     (the spawned main VS inherits them; they do NOT persist past this run).
 #   - May kill devenv instances this run spawned (or harness-spawned 'MyExtension'/'Experimental'
@@ -536,6 +539,63 @@ function Reset-ScratchSolution([string]$scratchDir) {
     # Solution + project entry (ALWAYS, not gated on Test-Path).
     dotnet new sln -n TelescopeTest -o $scratchDir --format sln 2>&1 | Out-Null
     dotnet sln (Join-Path $scratchDir 'TelescopeTest.sln') add (Join-Path $probeDir 'Probe.csproj') 2>&1 | Out-Null
+}
+
+# ---------------------------------------------------------------------------
+# Seed-leak guard (filesystem-only): snapshot every seeded file at bootstrap and
+# prove the suite did not WRITE into any of them. Codespace scenarios (grep/references)
+# only READ, and no scenario saves an opened file, so any change is an unintended leak
+# (an editor mutation, a format-on-edit, a stray command). Excludes the harness's own
+# logs/scratch — the diff is scoped to the seeded solution dir.
+# ---------------------------------------------------------------------------
+function Get-SeedFiles([string]$scratchDir) {
+    # Every seeded source file (mirrors Assert-SeedConsistent's gather): *.cs + *.sln/*.csproj.
+    # Sorted by name so the snapshot/diff are deterministic.
+    Get-ChildItem -Path $scratchDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in '.cs', '.sln', '.csproj' } |
+        Sort-Object FullName
+}
+
+function Write-SeedSnapshot([string]$scratchDir, [string]$outPath) {
+    # SHA-256 per seeded file -> JSON map { relPath -> hash }. Materialized at bootstrap (after the
+    # reseed) so seed-leak can diff against a known-clean baseline.
+    $map = [ordered]@{}
+    foreach ($f in Get-SeedFiles $scratchDir) {
+        $rel = $f.FullName.Substring((Resolve-Path $scratchDir).Path.Length + 1)
+        $map[$rel] = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path $outPath) | Out-Null
+    ($map | ConvertTo-Json) | Set-Content -Path $outPath -Encoding utf8
+}
+
+function Assert-NoSeedLeak([string]$scratchDir, [string]$snapshotPath) {
+    # Compare current content against the bootstrap snapshot. Reports added/removed/modified
+    # seeded files as a leak. Skips gracefully (never false-fails) when the snapshot or
+    # scratch dir is absent — e.g. under -NoBootstrap reuse where bootstrap did not reseed.
+    if (-not (Test-Path $snapshotPath)) {
+        Write-Pass "seed-leak: no bootstrap snapshot (reuse mode?) - skipped"
+        return
+    }
+    if (-not (Test-Path $scratchDir)) {
+        Write-Pass "seed-leak: scratch dir absent - skipped"
+        return
+    }
+    $baseline = Get-Content $snapshotPath -Raw | ConvertFrom-Json
+    $changes = @()
+    foreach ($f in Get-SeedFiles $scratchDir) {
+        $rel = $f.FullName.Substring((Resolve-Path $scratchDir).Path.Length + 1)
+        $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+        $before = $baseline.$rel
+        if ($null -eq $before) { $changes += "added: $rel" }
+        elseif ($before -ne $hash) { $changes += "modified: $rel" }
+    }
+    foreach ($rel in $baseline.PSObject.Properties.Name) {
+        if (-not (Test-Path (Join-Path $scratchDir $rel))) { $changes += "removed: $rel" }
+    }
+    if ($changes.Count -gt 0) {
+        throw "a seeded file was written into during the run (no scenario may modify the seed): $($changes -join '; ')"
+    }
+    Write-Pass 'seed-leak: no seeded file was modified during the run'
 }
 
 # --- telescope-open -------------------------------------------------------
@@ -1546,6 +1606,31 @@ Register-Scenario 'seed-reset' {
     }
 }
 
+# --- seed-leak ------------------------------------------------------------
+# Filesystem-only leak guard: NO scenario may WRITE into a seeded file. The bootstrap records a
+# SHA-256 snapshot of every seeded file (log/seed-baseline.json) right after the reseed; this
+# scenario re-hashes them and fails on any added / removed / modified seeded file. Put it LAST so
+# the whole run's writes are checked. Legitimately WRITTEN seeds (an intentional edit) must be
+# allowlisted here by name. Skips gracefully under -NoBootstrap (no snapshot).
+Register-Scenario 'seed-leak' {
+    param($vs, $logPath)
+    $snapshot = Join-Path $logDir 'seed-baseline.json'
+    $scratch = if ($env:NEOVISUAL_TEST_SOLUTION) { Split-Path $env:NEOVISUAL_TEST_SOLUTION } else { Join-Path $env:TEMP 'telescope_scratch' }
+    # $AllowLeak: seeded files a scenario may INTENTIONALLY modify (bare filenames, empty by
+    # default). When a planned scenario is SUPPOSED to edit that seed, add its name here so the
+    # expected write is not reported as a leak — e.g. @('Beta.cs') if a rename test edits it.
+    $AllowLeak = @()
+    if ($AllowLeak.Count -gt 0 -and (Test-Path $snapshot) -and (Test-Path $scratch)) {
+        $baseline = Get-Content $snapshot -Raw | ConvertFrom-Json
+        foreach ($f in Get-SeedFiles $scratch) {
+            $rel = $f.FullName.Substring((Resolve-Path $scratch).Path.Length + 1)
+            if ($AllowLeak -contains (Split-Path $rel -Leaf)) { $baseline.PSObject.Properties.Remove($rel) }
+        }
+        ($baseline | ConvertTo-Json) | Set-Content -Path $snapshot -Encoding utf8
+    }
+    Assert-NoSeedLeak $scratch $snapshot
+}
+
 # ---------------------------------------------------------------------------
 # Runner: list, filter, boot, run
 # ---------------------------------------------------------------------------
@@ -1614,6 +1699,10 @@ if ($NoBootstrap) {
     if (-not $logPath) { Write-Fail 'No existing exp log found to reuse'; exit 1 }
     $runIndex = if ($logPath -match '(\d+)-neovisual') { [int]$Matches[1] } else { 1 }
     $debugLogPath = Join-Path $logDir "$runIndex-neovisual-main.log"
+    # Reuse mode: no reseed happened, so seed-leak has no clean baseline in this process. Snapshot
+    # the current scratch (best-effort) so seed-leak still guards against writes from THIS run.
+    $reuseScratch = Join-Path $env:TEMP 'telescope_scratch'
+    if (Test-Path $reuseScratch) { Write-SeedSnapshot $reuseScratch (Join-Path $logDir 'seed-baseline.json') }
     Write-Pass "reusing Experimental instance (PID $($vsProc.Id)), log: $(Split-Path $logPath -Leaf)"
 } else {
 # HARD ORDERING REQUIREMENT: stop ANY prior harness VS BEFORE the scratch reset below, so the
@@ -1627,6 +1716,10 @@ $slnPath = Join-Path $scratch 'TelescopeTest.sln'
 Reset-ScratchSolution $scratch
 # Bootstrap self-check: must pass once the seed is uniform + canonical. Throws -> exit 1.
 Assert-SeedConsistent $scratch
+# Seed-leak baseline: snapshot every seeded file NOW (post-reseed, pre-run) so the seed-leak
+# scenario can prove no scenario wrote into a seed during the run.
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+Write-SeedSnapshot $scratch (Join-Path $logDir 'seed-baseline.json')
 Write-Pass "solution ready: $slnPath"
 
 # Run index: auto-incrementing integer from existing logs.

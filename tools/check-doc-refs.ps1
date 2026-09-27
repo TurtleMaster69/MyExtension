@@ -96,7 +96,12 @@ $intentionallyAbsent = @(
 # Hub-created runtime artifacts (not in the repo until the loop creates them).
 # NOTE: log/tools-hash.txt is NOT allowlisted — it must exist (test-e2e.ps1's Write-ToolsHash
 # materializes it every run), so a missing hash is a lint failure (M-C1).
-$runtimeArtifacts = @()
+# log/seed-baseline.json IS allowlisted: it is written by test-e2e.ps1 only during a real
+# bootstrap (Write-SeedSnapshot) and consumed by the seed-leak end-of-run guard — it is a
+# per-run artifact, absent on a fresh clone, and its absence is NOT drift.
+$runtimeArtifacts = @(
+    'log/seed-baseline.json'
+)
 
 # Bare filenames that legitimately have no repo counterpart: user-config file and
 # scratch-solution seed files (seeded at runtime into %TEMP%\telescope_scratch).

@@ -98,13 +98,13 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 33 scenarios
+pwsh tools/test-e2e.ps1                              # all 34 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (33 total; 32 passing, 1 known-RED — `explorer-open-searchbox`,
+Scenarios (34 total; 33 passing, 1 known-RED — `explorer-open-searchbox`,
 root cause tracked in docs/progress.md):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
@@ -139,6 +139,7 @@ root cause tracked in docs/progress.md):
 - `neovisual-editor-insert` — insert-mode typing reaches the editor (hook must not swallow text)
 - `neovisual-textinput-motions` — Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret in normal mode
 - `seed-reset` — seeding always resets the scratch solution (a stale edit is removed) and every seeded file has uniform EOL (no "normalize line endings?" focus-steal)
+- `seed-leak` — filesystem-only leak guard: the bootstrap snapshots every seeded file's SHA-256 and this last scenario proves NO seeded file was added/removed/modified during the run (no scenario may write into the seed)
 
 Exit code 0 = all selected passed.
 

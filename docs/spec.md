@@ -207,12 +207,12 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 33 scenarios
+pwsh tools/test-e2e.ps1                              # all 34 scenarios
 pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **33 scenarios** (32 passing; 1 known-RED — `explorer-open-searchbox`,
+The **34 scenarios** (33 passing; 1 known-RED — `explorer-open-searchbox`,
 tracked in docs/progress.md) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
@@ -225,7 +225,7 @@ tracked in docs/progress.md) are: `telescope-open`,
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
 `neovisual-explorer-add`, `neovisual-explorer-move`,
 `neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
-`explorer-open-navigation`, `explorer-open-searchbox` (known-RED).
+`seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox` (known-RED).
 
 ### 5.3 E2E harness gotchas
 
@@ -237,6 +237,13 @@ tracked in docs/progress.md) are: `telescope-open`,
   assertions). A bootstrap `Assert-SeedConsistent` self-check fails fast if a seed
   file has mixed EOL or drifted content — this prevents VS's "normalize line
   endings?" modal from stealing focus mid-test.
+- **Seed-leak guard (end-of-run):** the bootstrap snapshots every seeded file's
+  SHA-256 (`log/seed-baseline.json`) right after the fresh reseed, and the LAST
+  scenario (`seed-leak`) re-hashes the seeds at the end of the run and fails on any
+  seeded file that was **added / removed / modified** during the run — proving no
+  scenario wrote into the seed. Expected writes (a scenario that legitimately edits a
+  seed) are excluded via an explicit `$AllowLeak` filename list in the scenario (empty
+  by default). Skips gracefully under `-NoBootstrap` reuse mode.
 - The overlay **closes on focus loss** (`Deactivated` → `CloseOverlay`), so a
   stale open overlay never swallows the next leader sequence.
 - The harness verifies the foreground window before every key sequence and

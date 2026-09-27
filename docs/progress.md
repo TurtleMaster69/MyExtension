@@ -11,8 +11,8 @@ reads at the start of every loop iteration.
 
 - Offline units: `tests/Telescope.Tests` **56 passed**; `tests/NeoVisual.Tests`
   **26 passed**.
-- Live E2E: `tools/test-e2e.ps1` lists **33 scenarios** (incl. `seed-reset`).
-  **32 passing**; **1 known-RED**: `explorer-open-searchbox` (search-box
+- Live E2E: `tools/test-e2e.ps1` lists **34 scenarios** (incl. `seed-reset`,
+  `seed-leak`). **33 passing**; **1 known-RED**: `explorer-open-searchbox` (search-box
   focus-exit gap — queued as the next bugfix item; root cause in the queue
   below). `explorer-open-navigation` is **GREEN** (tree-select capability, `g`).
   The `neovisual-editor-insert` flake remains on record (retry-pass).
@@ -227,6 +227,19 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W22 (user-requested): `seed-leak` end-of-run leak guard** (Lane:
+  bugfix/harness-only). `tools/test-e2e.ps1` now takes a SHA-256 snapshot of every seeded
+  file at bootstrap (right after the fresh reseed → `log/seed-baseline.json`) and runs a
+  new LAST scenario `seed-leak` that re-hashes the seeds at the END of the run and FAILS
+  on any seeded file that was **added / removed / modified** during the run. Purpose: prove
+  no e2e test wrote into a seeded file, so a real leak (a test that mutated a seed, or a
+  future in-flight item that intends to) is caught rather than silently corrupting later
+  runs. Expected/correct writes are excluded via an explicit `$AllowLeak` filename list
+  (empty by default); the guard skips gracefully in `-NoBootstrap` reuse mode. Filesystem
+  only — no keystrokes, no diagnostics (M-M7 N/A). Helpers `Get-SeedFiles` /
+  `Write-SeedSnapshot` / `Assert-NoSeedLeak`; verified by a no-VS self-check (clean→pass,
+  modify→fail, remove→fail). Scenario count 33→34 (32→33 passing) synced across
+  spec.md / AGENTS.md / SKILL.md; `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W21: add docs/architecture-review.md to the doc-ref lint** (Lane: trivial
   config edit). `tools/check-doc-refs.ps1`: added `docs/architecture-review.md` to the
   default `$Docs` set + the header list; taught `Test-PathRef` to strip `:N-M` line-range

@@ -226,6 +226,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W7: reconcile the M-M4 model-pinning record** (Lane: trivial config
+  edit). Marked M-M4 ❌ REVERTED/SUPERSEDED citing `4a2ec0b` (model pins removed; agents
+  inherit the session default model) and narrowed the nested `trailmark-recon` spawn
+  criterion to context isolation — the "cheaper model" rationale is void.
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W6: make the flaky-budget enforceable** (Lane: trivial config edit).
   `neovim_hub.md` step 8 now passes the cumulative per-scenario flaky counts to the
   verification-agent; the flaky-budget rule makes the HUB apply the 3rd-strike →
@@ -558,9 +563,17 @@ picks each fix or ignores; the hub implements + verifies, one item at a time).
    New hub step 6b (ADJUDICATE DEVIATIONS) before any RE-PLAN: ACCEPT → update plan
    + doc sync; REJECT → debug-agent reverts. Planner returns `DEVIATIONS RESOLVED:`.
    Recorded as `DEVIATION: <id> -> ACCEPT/REJECT` in the Execution Log.
-4. **M-M4 — Models not pinned on 5 of 9 agents.** ✅ DONE
-   `model:` pinned on all 9: pro on e2e-test-builder + docs-reviewer (judgment), flash
-   on build-agent + debug-agent + arch-auditor. All frontmatter valid UTF-8.
+4. **M-M4 — Models not pinned on 5 of 9 agents.** ❌ **REVERTED / SUPERSEDED
+   (2026-09-27, W7).** The `model:` pins were deliberately removed in commit
+   `4a2ec0b` ("Remove model pins from all agents (inherit session default model)") —
+   `rg "model:" .opencode/agent` = 0. The decision reversed: agents inherit the session
+   default model rather than pinning per-agent (pro/flash) models. **Consequence:** the
+   "cheaper model" rationale once cited for the nested `trailmark-recon` spawn
+   (`docs/progress.md`'s task-permission review `:673,683`) is **void** — nested spawning
+   now adds an LLM turn with no model saving, so `arch-auditor → trailmark-recon` is
+   justified only by context isolation, not cost. (Original claim — "pinned on all 9:
+   pro on e2e-test-builder + docs-reviewer, flash on build-agent + debug-agent +
+   arch-auditor" — no longer reflects the repo.)
 5. **M-M5 — Every e2e run kills ALL devenv + full reboot per run.** ✅ DONE
    `tools/test-e2e.ps1`: added `$script:SpawnedVsPids` + `Stop-SpawnedVs` + `Stop-HarnessVs`;
    all `Get-Process devenv | Stop-Process` blanket kills removed; exit kills now
@@ -707,9 +720,11 @@ depth ≥2) — depth 2 covers both.
 
 Reviewed all 9 subagents. Verdict: **no other subagent benefits** — the only `task` rule
 that earns its place is `arch-auditor` → `trailmark-recon`. Criterion: grant `task` only
-when the child yields a standardized artifact several consumers share, or needs a
-different/cheaper model or isolated context — NOT to run a CLI query the caller can run
-itself. Every build/verify/plan agent already runs Trailmark inline via bash (parse
+when the child yields a standardized artifact several consumers share, or needs isolated
+context — NOT to run a CLI query the caller can run itself. (Per W7 the "different/cheaper
+model" clause is **void**: commit `4a2ec0b` removed all `model:` pins, so every spawn
+inherits the session default model — a nested spawn never saves on model cost, only
+context.) Every build/verify/plan agent already runs Trailmark inline via bash (parse
 ~0.2s), so spawning a recon subagent would add an LLM turn for no new information.
 - build-agent, debug-agent, docs-reviewer, e2e-test-builder, implementation-planner:
   inline Trailmark queries suffice (each has a Trailmark section).
@@ -718,8 +733,9 @@ itself. Every build/verify/plan agent already runs Trailmark inline via bash (pa
 - code-slice-worker, trailmark-recon: leaves by design (recon is the leaf of the chain).
 All are L1 (spawned by a hub), so at `subagent_depth: 2` any of them COULD spawn L2 — the
 constraint is value, not depth. Revisit only if context cost becomes the bottleneck: then
-wire `code-slice-worker` (slicing-code-context) to offload bulky reads to a cheaper model,
-which is a context-reduction move rather than a Trailmark need.
+wire `code-slice-worker` (slicing-code-context) to offload bulky reads into an isolated
+context, which is a context-reduction move rather than a Trailmark need (no model saving —
+models are no longer pinned; see W7).
 
 **New agent — `trailmark-recon` (added, per user request).** Read-only subagent that
 builds the C# graph + `preanalysis()` and returns one compact `RECON:` digest (counts,
@@ -777,10 +793,9 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
    cumulative per-scenario flaky counts into `verification-agent`; the HUB (not the fresh
    agent) performs the 3rd-strike → REGRESSION upgrade; the agent reports count N+1.
    `verification-agent.md` input list + flaky policy updated.
-7. **W7 — M-M4 record is false.** `docs/progress.md:524` says model pins on all 9 agents;
-   commit `4a2ec0b` removed them and `rg "model:" .opencode/agent` = 0. The "cheaper model"
-   rationale for nested recon (`:673,683`) is void. Fix: mark M-M4 REVERTED citing `4a2ec0b`;
-   narrow the nested-spawn criterion to context isolation.
+7. **W7 — M-M4 record is false.** ✅ **FIXED 2026-09-27** — M-M4 marked
+   ❌ REVERTED/SUPERSEDED citing `4a2ec0b` (agents inherit the session default model);
+   the "cheaper model" rationale for nested recon narrowed to context isolation only.
 8. **W8 — the user feature-triage gate is not a hub step.** docs/progress.md lines 132-144 requires
    LazyVim research + ask-user before ANY feature; `neovim_hub.md:91,333,347` lets step 1 run a
    queued feature without it. Fix: encode the gate as a LOOP step + allowed-prompt.

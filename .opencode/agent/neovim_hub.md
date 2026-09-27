@@ -299,8 +299,8 @@ the per-gate 3-round cap are independent counters.
    controller / VsVim mode / harness), reads the `[Telescope]`/`[NeoVisual]` log to find
    WHERE and WHAT caused it, applies the minimal fix, and re-runs the affected subset.
    This is the missing step: debug AFTER the e2e test, not just after build.
-8b. **ADJUDICATE DEVIATIONS (verify-time) — hub-only, BEFORE 8b's re-plan.** Same rule
-    as 6b, but on the verify path: if the verification-agent flagged a `DEVIATION` (or
+8b. **ADJUDICATE DEVIATIONS (verify-time) — hub-only, BEFORE the verify-time RE-PLAN.**
+    Same rule as 6b, but on the verify path: if the verification-agent flagged a `DEVIATION` (or
     the verify-time debug-agent returned a `DEVIATIONS FROM PLAN:` entry) — a renamed /
     removed symbol, a changed `[Telescope]`/`[NeoVisual]` diagnostic format, or any
     Verify-with drift — adjudicate it BEFORE passing anything to the planner:

@@ -81,4 +81,7 @@ BUILD: pass/fail
 UNIT TESTS: Telescope=<pass/fail> NeoVisual=<pass/fail>
 E2E (affected): <pass/fail | not run>
 REMAINING FAILURES: <none | list>
+DEVIATIONS FROM PLAN: <none | list (e.g. renamed/removed symbol, changed
+  `[Telescope]`/`[NeoVisual]` diagnostic format, Verify-with drift — the hub must
+  adjudicate ACCEPT/REJECT before any re-plan)>
 ```

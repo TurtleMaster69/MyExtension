@@ -298,7 +298,18 @@ the per-gate 3-round cap are independent counters.
    controller / VsVim mode / harness), reads the `[Telescope]`/`[NeoVisual]` log to find
    WHERE and WHAT caused it, applies the minimal fix, and re-runs the affected subset.
    This is the missing step: debug AFTER the e2e test, not just after build.
-8b. **RE-PLAN — delegate to `implementation-planner` (after a verify-time debug fix).**
+8b. **ADJUDICATE DEVIATIONS (verify-time) — hub-only, BEFORE 8b's re-plan.** Same rule
+    as 6b, but on the verify path: if the verification-agent flagged a `DEVIATION` (or
+    the verify-time debug-agent returned a `DEVIATIONS FROM PLAN:` entry) — a renamed /
+    removed symbol, a changed `[Telescope]`/`[NeoVisual]` diagnostic format, or any
+    Verify-with drift — adjudicate it BEFORE passing anything to the planner:
+    `ACCEPT` → update the **## Build Plan** + **## Verification Trace** to the new
+    contract and record the doc-sync (new diagnostic/symbol reflected in AGENTS.md /
+    SKILL.md / spec.md / progress.md); `REJECT` → dispatch `debug-agent` to REVERT to the
+    plan's contract. Record `DEVIATION: <id> -> ACCEPT/REJECT (reason)` in the Execution
+    Log. RE-PLAN is never entered with an unadjudicated DEVIATION pending. A verify-time
+    fix that silently renamed a symbol or changed a diagnostic must NOT become GREEN.
+8c. **RE-PLAN — delegate to `implementation-planner` (after a verify-time debug fix).**
     Pass the debug-agent's fix + the new test output (latest delta only, never the
     accumulated loop history). It updates the **## Build Plan** and
     **## Verification Trace** to target any remaining failure. Re-run PLAN REVIEW (4a)

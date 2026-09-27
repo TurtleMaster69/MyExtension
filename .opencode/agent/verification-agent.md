@@ -114,6 +114,10 @@ FAILURES:
     root cause: <one-liner>
     classification: <known-RED | flaky | regression>
   - ...
+DEVIATIONS: <none | list (a harness assertion / diagnostic format that differs from the
+  plan's Verify-with — a renamed symbol, a changed `[Telescope]`/`[NeoVisual]` format.
+  The hub adjudicates ACCEPT/REJECT before any re-plan; a pass with an unadjudicated
+  DEVIATION is suspect)>
 ```
 Concise, structured, machine-consumable. Every failure MUST carry a
 `classification`. If the verdict is FAIL with any `regression`-classified failure,

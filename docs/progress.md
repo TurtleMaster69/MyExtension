@@ -226,6 +226,11 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W10: deviation adjudication on the verify path + DEVIATION return fields**
+  (Lane: trivial config edit). `neovim_hub.md` gained a verify-time ADJUDICATE DEVIATIONS
+  step (new 8b, before the re-plan which is now 8c); `debug-agent.md` returns a
+  `DEVIATIONS FROM PLAN:` field; `verification-agent.md` returns a `DEVIATIONS:` slot.
+  **Restart required.** `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W9: pass the missing handoff inputs** (Lane: trivial config edit).
   `neovim_hub.md`: step 3 passes the affected unit project(s); steps 5/6/8/8a pass the
   affected unit project(s) + the final-gate flag; step 4 passes the known-RED allowlist —
@@ -815,10 +820,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
    final-gate flag; step 4 passes the known-RED allowlist — matching what
    `build-agent`, `debug-agent`, `verification-agent`, and `implementation-planner`
    require.
-10. **W10 — deviation adjudication unreachable on the verify path.** 6b (`:173-189`) sits only
-    between build-time DEBUG and RE-PLAN; 8a→8b (`:238-243`) has no 6b. `debug-agent.md:68-80`
-    has no `DEVIATIONS` field and `verification-agent.md:101-113` has no DEVIATION slot, though
-    `:85-87` can flag one on a pass. Fix: add 6b-before-8b + the fields.
+10. **W10 — deviation adjudication unreachable on the verify path.** ✅ **FIXED 2026-09-27** —
+    added a verify-time ADJUDICATE DEVIATIONS step (8b) before the verify-time re-plan
+    (8c), and added a `DEVIATIONS FROM PLAN:` field to `debug-agent.md`'s return format and
+    a `DEVIATIONS:` slot to `verification-agent.md`'s return format.
 11. **W11 — concurrent final-gate unit suites.** `verification-agent.md:71-77` mandates
     concurrency; docs/progress.md lines 82-86 records a shared-`obj/` CS2012 lock and says prefer
     sequential/staggered. Fix: stagger the two projects.

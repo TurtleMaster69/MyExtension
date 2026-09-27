@@ -118,7 +118,7 @@ def summarize_subgraph(name: str, limit: int = 25) -> dict[str, object]:
         summary["edge_count"] = len(engine.subgraph_edges(name))
     return summary
 
-graph = json.loads(engine.to_json())
+graph = json.loads(engine.to_json())   # to_json() -> str; nodes = id-keyed dict, edges = list
 nodes = graph.get("nodes", {})
 proxy_nodes = [
     node_id for node_id, node in nodes.items()

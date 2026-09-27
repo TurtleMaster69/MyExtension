@@ -177,7 +177,7 @@ engine.paths_between("entry_func", "db_query")
 engine.complexity_hotspots(threshold=10)
 engine.attack_surface()
 engine.summary()
-engine.to_json()
+engine.to_json()   # -> str (JSON text); see "Graph export shapes" below
 
 # Transitive slices and entrypoint path queries (v0.2-safe)
 engine.ancestors_of("sensitive_sink")
@@ -223,6 +223,35 @@ if hasattr(engine, "type_references"):
     engine.type_references("function_name")
 if hasattr(engine, "augment_binary"):
     engine.augment_binary("binary_graph.json")
+```
+
+### Graph export shapes (`to_json()`)
+
+`engine.to_json(indent=2) -> str` returns a **JSON string**, not a dict — indexing it
+directly (`engine.to_json()["nodes"]`) raises the recurring
+`TypeError: string indices must be integers, not 'str'`. Parse it first:
+
+```python
+import json
+j = json.loads(engine.to_json())
+
+ids  = list(j["nodes"])          # node ids
+iter = j["nodes"].items()        # (id, node_dict)
+```
+
+The parsed shapes differ per key:
+- `j["nodes"]` is a **dict keyed by node id** (`{node_id: node_dict}`) — NOT a list, so
+  `j["nodes"][0]` is a `KeyError`.
+- `j["edges"]` IS a **list** (as are the other collections: `subgraphs`, etc.).
+
+**Proxy-addressed callers (do this instead of enumerating nodes).** Cross-class calls
+resolve to `proxy.unresolved:<Type>.<Member>` nodes, so a simple-name `callers_of` can
+return 0 for a heavily-called member. Address the proxy id **directly** — no node
+enumeration needed:
+
+```python
+engine.callers_of("proxy.unresolved:controller.TryMove")        # -> ['HandleKey']
+engine.callers_of("proxy.unresolved:controller.ExitInputMode")  # -> ['ExitToolWindowInputMode']
 ```
 
 ## Pre-Analysis Passes

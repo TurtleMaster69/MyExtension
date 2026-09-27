@@ -70,6 +70,20 @@ cite the query + result — do NOT hand-trace call graphs with `grep`. Reserve
 graph adds nothing. Never silently fall back to manual reading (the `trailmark` skill's
 "Rationalizations to Reject" table forbids it).
 
+**Callers of a cross-class member: query the proxy id — never enumerate `to_json()`
+nodes.** Cross-class calls land on `proxy.unresolved:<Type>.<Member>`, so a simple-name
+`callers_of` can return 0 for a heavily-called member. Address the proxy id directly:
+
+```python
+engine.callers_of("proxy.unresolved:controller.TryMove")        # -> ['HandleKey']
+engine.callers_of("proxy.unresolved:controller.ExitInputMode")  # -> ['ExitToolWindowInputMode']
+```
+
+`engine.to_json()` returns a JSON **string** (parse with `json.loads` first — indexing it
+directly raises `TypeError: string indices must be integers, not 'str'`); after parsing,
+`nodes` is an **id-keyed dict** (not a list) while `edges` is a list. Do not enumerate
+nodes to answer a caller question.
+
 ## Hard rules
 
 - **Read-only.** You may use `read`, `grep`, `glob`, and read-only bash. You must NOT

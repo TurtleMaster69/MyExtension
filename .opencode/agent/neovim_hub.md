@@ -277,6 +277,19 @@ the per-gate 3-round cap are independent counters.
       bookkeeping is needed). If a VERIFY failure root-causes to the
       harness layer itself, treat it as a NEW harness-bug queue item — do not burn
       the item's iteration cap on it.
+   - **Failure-log triage (append to the same harness-health gate — every run):**
+     read `.opencode/AGENT-FAILURES.md` and process **every** entry with an empty or
+     `unknown` FIX:
+     - `agent-syntax` → fix the **prompt/skill/agent file** so no future agent can
+       repeat the mistake (this is the only systematic fix — the tool was used wrong),
+       then record the fix in the entry.
+     - `tool-bug` → file a `docs/progress.md` queue item (it does not consume the
+       item's iteration cap) and note the workaround in the entry.
+     - `environment` → note the workaround in the entry; escalate only if it recurs.
+     Entries are **append-only** — never delete one; annotate it with the resolution and
+     the date. (Rationale: tools are only useful if used correctly — an unread failure
+     log turns a systematic agent-side error into a per-run mystery, and the same
+     TypeError/flag is rediscovered every run.)
    - **Flaky-retry policy:** on a scenario failure, retry that scenario ONCE (a
      single `-Tests <failing-scenario>` re-run); pass-on-retry = FLAKY (recorded in
      the Execution Log, NOT a regression); fail-twice = real RED. The 5-iteration
@@ -394,6 +407,16 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
     **Batch independent trivial/bugfix VERIFYs**: 2-3 independent trivial/bugfix
     items may share ONE VS boot — run their affected scenarios in a single
     `-Tests a,b,c` invocation instead of one boot per item.
+11. **POST-RUN FAILURE-LOG SWEEP (mandatory at every item's final gate).** After the
+    final VERIFY (full e2e suite + both unit projects) and before declaring the item
+    done, run the failure-log triage from the harness-health gate over
+    `.opencode/AGENT-FAILURES.md`. Prune-by-fix, not by deletion: every `agent-syntax`
+    entry closed by fixing a prompt/skill/agent file, every `tool-bug` filed as a
+    `docs/progress.md` queue item, every `environment` annotated with its workaround.
+    Record the sweep result in the item's Execution Log as
+    `failure-log sweep: N entries read, M fixed, K queued, J annotated`. If a `tool-bug`
+    is found, it becomes a queue item — the item under test may still go GREEN, but the
+    sweep result must be recorded before the GREEN commit.
 
 ## Spec review gate (hard gate — applies on INIT and after every GREEN spec update)
 

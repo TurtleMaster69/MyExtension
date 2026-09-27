@@ -49,6 +49,21 @@ further agents — never attempt to.
   (For example, KeyInjection.Press has 6 callers, but `callers_of("KeyInjection.Press")`
   returns 0; `callers_of("proxy.unresolved:KeyInjection.Press")` returns 6.)
 
+### Querying callers (proxy-addressed — do NOT enumerate `to_json()` nodes)
+
+Address the proxy id DIRECTLY; no node enumeration is needed:
+
+```python
+engine.callers_of("proxy.unresolved:controller.TryMove")        # -> ['HandleKey']
+engine.callers_of("proxy.unresolved:controller.ExitInputMode")  # -> ['ExitToolWindowInputMode']
+```
+
+`engine.to_json(indent=2) -> str` returns a JSON **string** — indexing it directly raises
+`TypeError: string indices must be integers, not 'str'`, so `json.loads` it first. After
+parsing, **`nodes` is an id-keyed dict** (`{node_id: node_dict}`, so `['nodes'][0]` is a
+`KeyError`) while **`edges` is a list**. Never enumerate `to_json()` nodes to answer a
+caller question — use `callers_of`/`callees_of` on the proxy id.
+
 ## Return format (final message, target <= ~6KB)
 
 ```

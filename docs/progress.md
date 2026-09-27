@@ -227,6 +227,48 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W24 (user-requested): make the failure log a per-run step** (Lane:
+  trivial config edit; agent docs only — no source/tests/tools). Closes the gap that
+  `.opencode/AGENT-FAILURES.md` (W23) had no consumer: a failure log nobody reads is
+  just a diary. **`neovim_hub.md`** now has (a) a **Failure-log triage** bullet inside
+  the existing harness-health gate (runs at every VERIFY, so it rides the existing
+  checkpoint), and (b) a new **LOOP step 11 POST-RUN FAILURE-LOG SWEEP** mandatory at
+  every item's final gate, before the GREEN commit — every `agent-syntax` entry closed
+  by fixing a prompt/skill/agent file, every `tool-bug` filed as a queue item, every
+  `environment` annotated with its workaround; the sweep result is recorded in the
+  Execution Log as `failure-log sweep: N entries read, M fixed, K queued, J annotated`.
+  **`.opencode/AGENT-FAILURES.md`** gained a "Rules for the hub (the sweep)" block
+  (append-only, annotate-in-place, prune-by-fix-not-deletion) and its first entry was
+  annotated `FIXED 2026-09-27` (the W23 doc fix). **Restart required** (agent files load
+  at opencode startup). Commit: (recorded below)
+- **2026-09-27 — W23 (user-requested): fix the recurring Trailmark `to_json()` shape
+  errors + add an agent failure-log** (Lane: trivial config edit; docs/agent files only —
+  no source/tests/tools). Root cause of the recurring
+  `TypeError: string indices must be integers, not 'str'` in arch-auditors: (1)
+  `QueryEngine.to_json()` returns a JSON **str**, so `to_json()['nodes']` indexes a string;
+  (2) after parsing, `nodes` is an **id-keyed dict** (`{node_id: node_dict}`), not a list
+  (`['nodes'][0]` → KeyError); `edges` IS a list. The correct idiom is
+  `j = json.loads(e.to_json())` and — for caller questions — address the
+  `proxy.unresolved:<Type>.<Member>` id DIRECTLY with `callers_of` (no node enumeration).
+  **Files changed:** `.opencode/skills/trailmark/SKILL.md` (+ "Graph export shapes" note),
+  `.opencode/skills/trailmark/references/query-patterns.md` (+ section + §9 export fix),
+  `.opencode/skills/trailmark/references/preanalysis-passes.md` (one-liner),
+  `.opencode/skills/trailmark-structural/SKILL.md` (one-liner),
+  `.opencode/agent/arch-auditor.md` (+ verbatim snippet + rule),
+  `.opencode/agent/trailmark-recon.md` (+ snippet + rule near the proxy trap),
+  and NEW `.opencode/AGENT-FAILURES.md` (append-only log so agents record unintended
+  command failures + triage category `agent-syntax` / `tool-bug` / `environment`).
+  **Verified 2026-09-27** (no TypeError): `nodes` dict=True (557), `edges` list=True,
+  `callers_of('proxy.unresolved:controller.TryMove')` → `['HandleKey']`,
+  `callers_of('proxy.unresolved:controller.ExitInputMode')` → `['ExitToolWindowInputMode']`.
+   Deliberately NOT changed (verified correct): `build_slice_packet.py`,
+  `genotoxic/references/graph-analysis.md`. **Restart required** (agent/skill files load at
+  opencode startup). **Follow-up (2026-09-27):** W23 introduced a blocking
+  `check-doc-refs.ps1` failure — the backticked ``KeyError`` in `trailmark-recon.md` was
+  unresolvable; added `TypeError`/`KeyError` to the lint's external allowlist (Python
+  builtin exceptions, not C# symbols). Lint now
+  `[PASS] 17 docs, 4252 refs, 0 unresolved`. Commit: (recorded below)
+
 - **2026-09-27 — W22 (user-requested): `seed-leak` end-of-run leak guard** (Lane:
   bugfix/harness-only). `tools/test-e2e.ps1` now takes a SHA-256 snapshot of every seeded
   file at bootstrap (right after the fresh reseed → `log/seed-baseline.json`) and runs a

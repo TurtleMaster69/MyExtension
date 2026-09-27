@@ -66,7 +66,7 @@ engine.preanalysis()
 
 # Nodes NOT reachable from any entrypoint (potential dead code)
 reachable_ids = {n["id"] for n in engine.subgraph("entrypoint_reachable")}
-graph = json.loads(engine.to_json())
+graph = json.loads(engine.to_json())   # to_json() -> str; nodes = id-keyed dict (not a list)
 all_ids = set(graph["nodes"])
 dead_ids = sorted(all_ids - reachable_ids)
 ```

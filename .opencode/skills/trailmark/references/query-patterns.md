@@ -2,6 +2,36 @@
 
 Common patterns for using Trailmark in security reviews.
 
+## Graph export shapes (`to_json`)
+
+Three facts that trip up ad-hoc one-liners (`e.to_json()['nodes']`,
+`json.loads(e.to_json())['nodes'][0]`):
+
+1. **`engine.to_json(indent=2) -> str`** returns a JSON **string**. Index it directly
+   and you get `TypeError: string indices must be integers, not 'str'` — parse first.
+2. **`nodes` is a dict keyed by node id** (`{node_id: node_dict}`), NOT a list, so
+   `['nodes'][0]` is a `KeyError`. Iterate `j["nodes"].items()` for `(id, node_dict)`.
+3. **`edges` IS a list** (as are the other collections such as `subgraphs`).
+
+```python
+import json
+j = json.loads(engine.to_json())   # to_json() -> str, parse first
+ids  = list(j["nodes"])            # node ids
+iter = j["nodes"].items()          # (id, node_dict)
+```
+
+**Proxy-addressed callers (preferred over node enumeration).** Cross-class calls land on
+`proxy.unresolved:<Type>.<Member>`; a simple-name `callers_of` can return 0 for a
+heavily-called member. Query the proxy id **directly**:
+
+```python
+engine.callers_of("proxy.unresolved:controller.TryMove")        # -> ['HandleKey']
+engine.callers_of("proxy.unresolved:controller.ExitInputMode")  # -> ['ExitToolWindowInputMode']
+```
+
+Do NOT enumerate `to_json()` nodes just to find callers — use `callers_of`/`callees_of`
+on the proxy id.
+
 ## Version-Gated Queries
 
 Use v0.2-safe APIs unless the installed build is Trailmark 0.4.0 or newer, or
@@ -145,11 +175,12 @@ Export for use with other tools:
 ```python
 import json
 
-json_str = engine.to_json()
+json_str = engine.to_json()          # -> str
+j = json.loads(json_str)             # nodes = id-keyed dict; edges = list
 with open("graph.json", "w") as f:
     f.write(json_str)
 
-# Current export includes: summary, nodes, edges, subgraphs.
+# Current export includes: summary, nodes (id-keyed dict), edges (list), subgraphs.
 # Query attack_surface() and annotations_of() directly for entrypoint
 # metadata and per-node annotations.
 ```

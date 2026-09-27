@@ -85,7 +85,10 @@ $externalAllowlist = @(
     # a proposed extraction (F18/F21: RectCoordinate.Right/Bottom/IsEmpty/Intersects),
     # and the net472-compliance check lists FORBIDDEN .NET 5+ APIs to prove their
     # absence (F46 verified-clean) — none of these are expected to exist in the source.
-    'IsCompletionActive', 'IsEmpty', 'Intersects', 'HashCode', 'MaxBy', 'MinBy'
+    'IsCompletionActive', 'IsEmpty', 'Intersects', 'HashCode', 'MaxBy', 'MinBy',
+    # Trailmark graph-export docs (W23) cite the Python builtin exceptions raised by
+    # the wrong to_json() usage — external runtime names, not C# symbols.
+    'TypeError', 'KeyError'
 )
 
 # File paths the docs mention that are intentionally absent (documented-absent).

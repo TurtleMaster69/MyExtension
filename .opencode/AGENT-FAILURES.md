@@ -1,0 +1,65 @@
+# Agent command failures (append-only log)
+
+Purpose: when an agent runs a command that fails, record it here so we can tell
+whether the failure is an **agent-side mistake** (wrong syntax / wrong API shape /
+hallucinated flag — fix the prompt/skill) or a **tool-side bug** (the tool is
+genuinely broken — fix or work around the tool). Tools are only useful if used
+correctly; a recurring agent-side error is a prompt/skill defect, not a tool defect.
+
+**Rules for agents (all hubs and subagents):**
+- On a command that fails (non-zero exit, exception, unexpected empty result), append
+  ONE entry in the format below — do not fix it silently and do not repeat the same
+  broken command.
+- Keep it terse: the exact command, the exact error line, and your one-line guess at
+  the category.
+- **Do NOT** log expected/negative results that are part of a test (e.g. a RED test
+  that is supposed to fail, a `-Tests` scenario that is intentionally red). Log only
+  UNINTENDED failures.
+- Read the existing entries first — if your exact failure is already listed with a
+  fix, apply the fix instead of appending a duplicate.
+
+**Rules for the hub (the sweep — `neovim_hub.md` LOOP step 11):**
+- At every item's **final gate** (after the last VERIFY, before the GREEN commit), read
+  this file and process EVERY entry whose FIX is empty or `unknown`.
+- `agent-syntax` → fix the prompt/skill/agent file so the mistake cannot recur, then
+  annotate the entry with the fix + date (`FIXED <date>: <file/change>`).
+- `tool-bug` → file a `docs/progress.md` queue item and annotate the entry.
+- `environment` → annotate with the workaround; escalate only if it recurs.
+- This log is **append-only**: never delete an entry. Annotate it in place.
+- Record the sweep in the item's Execution Log:
+  `failure-log sweep: N entries read, M fixed, K queued, J annotated`.
+- A sweep that finds nothing new is a valid result — record it and move on.
+
+## Entry format
+
+```
+## YYYY-MM-DD | <agent> | category
+COMMAND: <the exact command run>
+ERROR: <the exact error line / exception>
+FIX: <what actually worked, or "unknown — needs triage">
+```
+
+`category` is one of:
+- `agent-syntax` — wrong call syntax / wrong API shape / hallucinated flag → fix the
+  prompt, skill, or agent file so no future agent repeats it.
+- `tool-bug` — the tool is genuinely broken at this version → track it and work around.
+- `environment` — transient (lock, missing dependency, VS not booted) → note the workaround.
+- `unknown` — not yet triaged.
+
+## Log
+
+## 2026-09-27 | arch-auditor (+ other subagents) | agent-syntax
+COMMAND: `engine.to_json()['nodes']` and `json.loads(engine.to_json())['nodes'][0]`
+ERROR: `TypeError: string indices must be integers, not 'str'` (indexing the JSON
+string returned by `to_json()`), and after parsing, `KeyError: 0` because `nodes` is
+an id-keyed dict, not a list.
+FIX: `import json; j = json.loads(engine.to_json())` — `to_json()` returns a **str**;
+`j['nodes']` is an **id-keyed dict** (`{node_id: node_dict}`), `j['edges']` is a **list**.
+For caller questions, do NOT enumerate nodes — address the proxy id directly:
+`engine.callers_of('proxy.unresolved:controller.TryMove')` -> `['HandleKey']`.
+Documented in `.opencode/skills/trailmark/SKILL.md` ("Graph export shapes"),
+`references/query-patterns.md` ("Graph export shapes"),
+`references/preanalysis-passes.md`, `.opencode/skills/trailmark-structural/SKILL.md`,
+and `.opencode/agent/{arch-auditor,trailmark-recon}.md`. Verified 2026-09-27.
+FIXED 2026-09-27: documentation fix landed in the six files listed above (the sweep's
+first pass) — this entry stays as the record of the recurring agent-syntax defect.

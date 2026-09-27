@@ -229,7 +229,7 @@ Top of the queue, in priority order:
 - **2026-09-19 — Explorer tree-select capability** (Lane: feature, attempt 1 GREEN
   after 1 VERIFY round): gave `SolutionExplorerController` a deterministic
   programmatic tree-selection action — `g` walks the Solution Explorer's DTE
-  `UIHierarchy` (solution node → first project → first physical `.cs`), selects it
+  `UIHierarchy` (solution node → first project → first physical C# file), selects it
   via `UIHierarchyItem.Select` (no key injection → escapes the injected-key
   csproj-open trap), opens it directly (`ItemOperations.OpenFile`) and re-asserts
   the selection + tree focus for ~1.5s (defeats VS's SelectionPreview hover-timer

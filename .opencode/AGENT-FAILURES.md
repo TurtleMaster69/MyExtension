@@ -81,3 +81,20 @@ end-of-run aggregate/guard scenarios — such a failure is a real harness findin
 regardless of an isolated retry. The guard defect itself was fixed in
 `tools/test-e2e.ps1` (exclude `obj/`+`bin/`; `Assert-NoSeedLeak` takes the allowlist
 and skips allowlisted files instead of mutating the snapshot). FIXED 2026-09-27.
+
+## 2026-09-27 | hub (meta) | agent-syntax
+COMMAND: repeated `pwsh tools/test-e2e.ps1` runs over several sessions; two scenarios
+carried on the `known-RED allowlist` as "pre-existing flake" (`neovascular-editor-insert`,
+`telescope-implementation`).
+RESULT: both were REAL, deterministically-fixable defects the allowlist masked:
+  1. `neovascular-editor-insert` - 2/2 RED, not intermittent. The scenario pressed `i` at
+     document position 0 (code context), so C# IntelliSense popped and the injected Space
+     committed `HandleInheritability`, corrupting the marker. A TEST ARTIFACT (fix: move the
+     caret into the `// Beta.cs` comment first). Commit fd18315.
+  2. `telescope-implementation` - 3/3 RED standalone, not intermittent. `Assert-OverlayFocused`
+     was PID-only, so Enter was injected before the overlay became the OS foreground window.
+     A HARNESS RACE (fix: require the overlay window, PID + title `Telescope`). Commit 7c6569b.
+FIX: treat a scenario that fails CONSISTENTLY across runs as a defect, not a flake. The
+allowlist is for documented, understood, OUT-OF-SCOPE pre-existing failures - never for an
+unexamined "flake" (an unexamined flake is just a bug with a nicer name). Both allowlist
+entries are now closed; the full 35-scenario suite is GREEN. FIXED 2026-09-27.

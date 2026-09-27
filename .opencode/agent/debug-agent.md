@@ -14,7 +14,7 @@ reported. You are NOT the build agent and NOT the verification agent.
 ## Skills to use (load BEFORE you start)
 
 Invoke the `skill` tool to load the skills relevant to the failure, then apply them:
-- `trailmark` / `trailmark-finding-triage` — **mandatory for structural isolation** (AGENTS.md): use call paths/reach (`paths_between`, `ancestors_of`, `callers_of`) and taint evidence to isolate WHICH layer/flow is implicated instead of hand-grepping call relationships.
+- `trailmark` — **mandatory for structural isolation** (AGENTS.md): use call paths (`paths_between`, `callers_of`, `callees_of`, `reachable_from`) to isolate WHICH layer/flow is implicated instead of hand-grepping call relationships. Do NOT load `trailmark-finding-triage` / taint passes — this VSIX has no entrypoints, so they carry no signal.
 - `systematic-debugging` — reproduce → isolate → root-cause → fix → regression (always).
 - `debugging-and-error-recovery` — isolate WHICH layer failed (overlay/hook/controller/VsVim mode/harness) + WHERE and WHAT caused it (use for e2e failures).
 - `dotnet-build-test-diag` — build/test failure diagnosis.
@@ -26,8 +26,12 @@ Load the ones that fit the failure type; read the full body, not just the descri
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when the failure hinges on
 call structure — which callers reach the broken path, what a change breaks downstream,
-reachability from an entrypoint. Run `trailmark --version` (snippets via
-`uv run --with trailmark python -`); do not hand-trace call graphs with `grep`.
+what it transitively reaches. Run `trailmark --version` (install `uv tool install
+trailmark` if missing; snippets via `uv run --with trailmark python -`); do not
+hand-trace call graphs with `grep`. Parse with `language="c_sharp"` and remember
+cross-class calls land on `proxy` nodes (a bare `callers_of` 0 is not proof of no
+callers). Do NOT use entrypoint reach / taint / privilege-boundary passes — this repo
+has no detected entrypoints, so they return empty and carry no signal.
 
 ## Hard rules
 

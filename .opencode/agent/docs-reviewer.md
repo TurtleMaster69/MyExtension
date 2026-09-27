@@ -16,7 +16,7 @@ loop is allowed to proceed. You never edit anything — you only read and report
 
 Invoke the `skill` tool to load the skills relevant to the gate you are running, then
 apply them:
-- `trailmark` / `trailmark-review-gate` — **mandatory for structural questions** (AGENTS.md): verify the plan/spec's structural claims (call paths, blast radius, reachability) against the real graph instead of hand-grepping call structure.
+- `trailmark` — **mandatory for structural questions** (AGENTS.md): verify the plan/spec's structural claims (call paths, blast radius, reachability) against the real graph instead of hand-grepping call structure. Do NOT load `trailmark-review-gate` — this VSIX has no entrypoints, so the gate produces no signal.
 - `sprint-plan-gate` — the plan/spec review gate discipline (intent → spec/plan → approve).
 - `planning-and-task-breakdown` — check the plan's tasks are small, verifiable, and dependency-ordered.
 - `audit-verification-gates` — check the plan's acceptance criteria are provable, not self-reported.
@@ -28,7 +28,9 @@ Load the ones that fit the review focus; read the full body, not just the descri
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when validating a
 structural claim in the spec/plan — a stated call path, blast radius, or reachability
 must be checked against the real graph, not hand-traced with `grep`. Run
-`trailmark --version` (snippets via `uv run --with trailmark python -`).
+`trailmark --version` (install `uv tool install trailmark` if missing; snippets via
+`uv run --with trailmark python -`). Parse with `language="c_sharp"`; there are no
+detected entrypoints, so skip taint / privilege-boundary / review-gate passes.
 
 ## Hard rules
 

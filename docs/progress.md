@@ -226,6 +226,14 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W3: drop no-signal Trailmark skills/passes from agent lists** (Lane:
+  trivial config edit). Edited `.opencode/agent/{debug-agent,docs-reviewer,verification-agent,
+  e2e-test-builder,implementation-planner,prompt-rule}.md`: removed `trailmark-finding-triage`,
+  `trailmark-review-gate`, `graph-evolution` from the "Skills to use" lists (all no-signal —
+  this VSIX has no entrypoints), replaced entrypoint-reach/taint guidance with
+  `callers_of`/`callees_of`/`paths_between`/`reachable_from`, fixed the verification-agent
+  self-contradiction, and scoped `prompt-rule.md` to this repo. **Restart required.**
+  `check-doc-refs.ps1` PASS. Commit: (recorded below)
 - **2026-09-27 — W2: commit the orchestration layer** (Lane: trivial config edit). The
   vendored Trailmark skill dirs, `.opencode/agent/code-slice-worker.md`,
   `.opencode/agent/trailmark-recon.md`, and the agent/skill/command/docs edits
@@ -737,14 +745,14 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
 
 ### Major
 
-3. **W3 — vacuous Trailmark skills prescribed + a self-contradiction.** `AGENTS.md:27-29,54-57`
-   says no entrypoints → taint / privilege-boundary / attack-surface / finding-triage /
-   review-gate carry no signal. Yet `debug-agent.md:17,29` prescribes `trailmark-finding-triage`
-   + taint + entrypoint reach; `docs-reviewer.md:19` and `verification-agent.md:17` prescribe
-   `trailmark-review-gate` (and `verification-agent.md:35-38` says the same gate must NOT be
-   run — direct self-contradiction); `e2e-test-builder.md:16,26` / `implementation-planner.md:28`
-   use entrypoint reach; `prompt-rule.md:21` lists taint/privilege as required. Fix: single-source
-   the per-repo Trailmark guidance; drop no-signal skills; fix the contradiction.
+3. **W3 — vacuous Trailmark skills prescribed + a self-contradiction.** ✅ **FIXED
+   2026-09-27** — dropped `trailmark-finding-triage` (debug-agent), `trailmark-review-gate`
+   (docs-reviewer, verification-agent), `graph-evolution` (verification-agent); replaced
+   entrypoint-reach guidance with `callers_of`/`callees_of`/`paths_between`/`reachable_from`
+   (e2e-test-builder, implementation-planner); fixed the verification-agent
+   self-contradiction (skills list no longer loads the gate it later forbids); scoped
+   `prompt-rule.md` away from taint/privilege and to this repo. Each edited Terrailmark
+   section now also carries the `uv tool install trailmark` fallback.
 4. **W4 — three gates, three post-REVISE policies.** spec `:86-87,327-328` ("until APPROVE");
    initial-plan 2a `:137-138` ("then proceed" but also "until APPROVED") → livelock; build-plan
    4a `:159-160` (APPROVED-only, no exit). Fix: one policy + explicit escalation on exhaustion.

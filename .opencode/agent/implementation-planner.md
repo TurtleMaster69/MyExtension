@@ -24,9 +24,11 @@ Load both; read the full body, not just the description.
 ## Trailmark (mandatory for structural questions)
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) for any structural claim in
-the plan — which callers a BP step affects, what a change breaks downstream, reachability
-from an entrypoint. Run `trailmark --version` (snippets via
-`uv run --with trailmark python -`); do not hand-trace call graphs with `grep`.
+the plan — which callers a BP step affects, what a change breaks downstream, what it
+transitively reaches. Run `trailmark --version` (install `uv tool install trailmark` if
+missing; snippets via `uv run --with trailmark python -`); do not hand-trace call graphs
+with `grep`. Parse with `language="c_sharp"`; this repo has no detected entrypoints, so
+skip entrypoint-reach passes.
 
 ## Hard rules
 

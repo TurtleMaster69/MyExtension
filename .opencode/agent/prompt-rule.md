@@ -18,8 +18,10 @@ and update the one-line reference in each hub.
   them.
 - **Trailmark is mandatory for structural questions.** Hubs and subagents must use
   the vendored Trailmark skills (`.opencode/skills/trailmark`) for call paths,
-  callers/callees, reachability, blast radius, taint, privilege boundaries, and
-  complexity — instead of `grep`/`glob`/manual reading. `grep` is only for literal
-  text and non-source files. Never silently fall back to manual code reading when
-  Trailmark can answer (see AGENTS.md and the `trailmark` skill's "Rationalizations
-  to Reject" table).
+  callers/callees, reachability, blast radius, and complexity — instead of
+  `grep`/`glob`/manual reading. `grep` is only for literal text and non-source files.
+  Never silently fall back to manual code reading when Trailmark can answer (see
+  AGENTS.md and the `trailmark` skill's "Rationalizations to Reject" table).
+  **Scope to this repo:** this VSIX has no detected entrypoints, so the security
+  passes — taint, privilege boundaries, attack surface, `trailmark-finding-triage`,
+  and `trailmark-review-gate` — carry no signal here; do not load or run them.

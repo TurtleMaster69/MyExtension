@@ -13,7 +13,7 @@ the implementation is driven red->green. You never implement the feature itself.
 ## Skills to use (load before you write tests)
 
 Invoke the `skill` tool to load the skills relevant to writing the tests, then apply them:
-- `trailmark` — **mandatory for structural questions** (AGENTS.md): use call paths/entrypoint reach to find the code paths a scenario must cover, instead of hand-grepping call structure.
+- `trailmark` — **mandatory for structural questions** (AGENTS.md): use `callers_of`/`callees_of`/`paths_between`/`reachable_from` to find the code paths a scenario must cover, instead of hand-grepping call structure. Do NOT use entrypoint reach — this VSIX has no detected entrypoints.
 - `test-driven-development` — red-green-refactor; write the failing test first.
 - `verify-tests-fail-without-fix` — prove the test actually catches the bug (fails without fix, passes with it).
 - `code-testing-agent` — write meaningful .NET unit tests (behavior, not implementation; edge cases).
@@ -23,9 +23,11 @@ Load all three for test-writing; read the full body, not just the description.
 ## Trailmark (mandatory for structural questions)
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when a test plan depends on
-code structure — which entrypoints/paths reach the feature, what callers a change
-affects. Run `trailmark --version` (snippets via `uv run --with trailmark python -`); do
-not hand-trace call graphs with `grep`.
+code structure — the call paths that reach the feature and the callers a change
+affects. Run `trailmark --version` (install `uv tool install trailmark` if missing;
+snippets via `uv run --with trailmark python -`); do not hand-trace call graphs with
+`grep`. Parse with `language="c_sharp"`; there are no detected entrypoints, so skip
+entrypoint-reach/taint passes.
 
 ## Hard rules
 

@@ -14,7 +14,7 @@ never fix anything — you only run tests and report precisely what failed and w
 ## Skills to use (load before you verify)
 
 Invoke the `skill` tool to load the skills relevant to verification, then apply them:
-- `trailmark` / `trailmark-review-gate` / `graph-evolution` — **mandatory for structural checks** (AGENTS.md): use the review gate over the branch/fix diff, and graph queries (callers/reach/blast radius) instead of hand-grepping call structure when judging what a change touched.
+- `trailmark` — **mandatory for structural checks** (AGENTS.md): use graph queries (`callers_of`/`callees_of`/`paths_between`/`reachable_from`, blast radius) instead of hand-grepping call structure when judging what a change touched. Do NOT load `trailmark-review-gate` / `graph-evolution` — this VSIX has no entrypoints, so the review gate (`trailmark diff`) produces no signal (see the repo-traps note below).
 - `audit-verification-gates` — can the agent's "done" be trusted? Flag self-report gates / gameable verdicts.
 - `verify-tests-fail-without-fix` — confirm the test genuinely proves the behavior (fail-without-fix).
 - `dotnet-build-test-diag` — build/test failure diagnosis when interpreting the suite results.
@@ -25,8 +25,9 @@ Load the ones that fit the verdict; read the full body, not just the description
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) for structural checks —
 whether a diff added new reachability, changed blast radius, or touched callers that the
-plan did not account for. Run `trailmark --version` (snippets via
-`uv run --with trailmark python -`); do not hand-trace call graphs with `grep`.
+plan did not account for. Run `trailmark --version` (install `uv tool install trailmark`
+if missing; snippets via `uv run --with trailmark python -`); do not hand-trace call
+graphs with `grep`.
 
 **Repo traps (see AGENTS.md "Repo-specific traps"):** parse with
 `language="c_sharp"` — `trailmark diff` defaults `--language` to `python` and silently

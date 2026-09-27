@@ -227,6 +227,13 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-27 — W21: add docs/architecture-review.md to the doc-ref lint** (Lane: trivial
+  config edit). `tools/check-doc-refs.ps1`: added `docs/architecture-review.md` to the
+  default `$Docs` set + the header list; taught `Test-PathRef` to strip `:N-M` line-range
+  suffixes; added the "code smells / recently removed (F14) / proposed (F18) / forbidden
+  (F46)" symbols to the external allowlist. `neovim_hub.md` step 9's doc-sync set now
+  includes the report. Lint: `[PASS] 17 docs scanned, 4110 refs, 0 unresolved`.
+  Commit: (recorded below)
 - **2026-09-27 — W20: update the stale unit counts** (Lane: trivial config edit).
   `code-testing-agent/SKILL.md` now says 56/26 (+ a drift caveat); the stale 42/21 in
   progress.md was annotated "at the time" (W12). **Restart required.**
@@ -933,7 +940,10 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
 ### Minor (filed on request)
 
 21. **W21 - `docs/architecture-review.md` is not covered by the doc-ref lint.**
-    `tools/check-doc-refs.ps1` (lines 44-52) scopes the lint to AGENTS.md, the vs-extension-dev SKILL,
-    `docs/spec.md`, `docs/progress.md`, and the agent files, so the "single live report" can
-    drift (W12) with no mechanical gate catching it. Fix: add `docs/architecture-review.md` to
-    the lint's doc set (or record an explicit exclusion). Filed on request 2026-09-27.
+    ✅ **FIXED 2026-09-27** — added `docs/architecture-review.md` to
+    `tools/check-doc-refs.ps1`'s default `$Docs` set (17 docs scanned, 4110 refs,
+    0 unresolved). Two lint gaps surfaced by the widened scope were handled: range refs
+    (`file.cs:102-115`) now strip their `:N-M` suffix, and "code smells / recently
+    removed / forbidden API" symbols (`IsCompletionActive`, `IsEmpty`, `Intersects`,
+    `HashCode`, `MaxBy`, `MinBy`) are on the external allowlist. Every hub GREEN now
+    re-scans the report, so W12-style drift is mechanically gated.

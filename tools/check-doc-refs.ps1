@@ -8,10 +8,12 @@ file that the docs reference is reported here instead of silently desyncing
 (the `PreviewNavigator` phantom-name incident was exactly this failure mode).
 
 Scoped to durable docs only (auto-includes every agent file):
-  - .opencode/agent/*.md
-  - .opencode/skills/vs-extension-dev/SKILL.md
-  - AGENTS.md
-  - docs/spec.md, docs/progress.md
+   - .opencode/agent/*.md
+   - .opencode/skills/vs-extension-dev/SKILL.md
+   - AGENTS.md
+   - docs/spec.md, docs/progress.md
+   - docs/architecture-review.md (holds the live code + workflow reports, incl. the
+     F1-F46 code findings and the W1-W21 workflow findings)
 Excluded by design:
   - docs/implementation_plan.md — transient per-item file; its verbatim code
     snippets contain snippet-local identifiers (false positives), and its
@@ -46,7 +48,8 @@ if (-not $Docs) {
         'AGENTS.md',
         '.opencode/skills/vs-extension-dev/SKILL.md',
         'docs/spec.md',
-        'docs/progress.md'
+        'docs/progress.md',
+        'docs/architecture-review.md'
     ) + (Get-ChildItem (Join-Path $repoRoot '.opencode/agent') -Filter '*.md' |
         ForEach-Object { '.opencode/agent/' + $_.Name })
 }
@@ -76,7 +79,13 @@ $externalAllowlist = @(
     'ISymbol', 'SymbolFinder', 'FindImplementationsAsync', 'DeclaringSyntaxReferences', 'Location',
     # Key names used in binding notation
     'Space', 'Return', 'Escape', 'Enter', 'Ctrl', 'Shift', 'Alt', 'Tab',
-    'PageUp', 'PageDown', 'Home', 'End'
+    'PageUp', 'PageDown', 'Home', 'End',
+    # Symbols named in a "code smells / recently removed" context: the reports cite
+    # the OLD gating (F14: the removed ICompletionBroker.IsCompletionActive check) and
+    # a proposed extraction (F18/F21: RectCoordinate.Right/Bottom/IsEmpty/Intersects),
+    # and the net472-compliance check lists FORBIDDEN .NET 5+ APIs to prove their
+    # absence (F46 verified-clean) — none of these are expected to exist in the source.
+    'IsCompletionActive', 'IsEmpty', 'Intersects', 'HashCode', 'MaxBy', 'MinBy'
 )
 
 # File paths the docs mention that are intentionally absent (documented-absent).
@@ -136,6 +145,7 @@ function Test-ToolFunctionExists([string]$token) {
 
 function Test-PathRef([string]$token) {
     $p = $token -replace ':[\d,]+$', ''       # strip "file.cs:123" / "file.cs:806,910" line refs
+    $p = $p -replace ':\d+-\d+$', ''          # strip "file.cs:102-115" line RANGE refs
     $p = $p.TrimEnd('/') -replace '\\', '/'
     if ($intentionallyAbsent -contains $p) { return $true }
     if ($runtimeArtifacts -contains $p) { return $true }

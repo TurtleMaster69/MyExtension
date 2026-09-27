@@ -359,11 +359,13 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
          if something breaks later, the summary says exactly where to look and what
          was changed. Keep it terse — not a prose re-report of the verdict.
       3. Record the commit hash in the `## Done` entry so the change is git-addressable.
-      If any build/debug `DEVIATION` reported a renamed or removed symbol that the
-      docs reference (AGENTS.md, SKILL.md, spec.md, progress.md, .opencode/agent/*),
-      update those references in this same sync pass (grep the docs for the old
-      name). Then run `pwsh tools/check-doc-refs.ps1` — it must PASS; an unresolved
-      backticked reference means the item is NOT GREEN until the docs resolve.
+       If any build/debug `DEVIATION` reported a renamed or removed symbol that the
+       docs reference (AGENTS.md, SKILL.md, spec.md, progress.md,
+       docs/architecture-review.md, .opencode/agent/*), update those references in this
+       same sync pass (grep the docs for the old name). Then run
+       `pwsh tools/check-doc-refs.ps1` — it must PASS; it now scans
+       `docs/architecture-review.md` too, so an unresolved backticked reference means
+       the item is NOT GREEN until the docs resolve.
       If counts/features/scenarios changed, **sync ALL three source-of-truth docs in
       one pass**: `docs/spec.md`, `AGENTS.md`, and
      `.opencode/skills/vs-extension-dev/SKILL.md` (the spec reviewer checks

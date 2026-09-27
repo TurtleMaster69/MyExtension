@@ -10,12 +10,12 @@ reads at the start of every loop iteration.
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **56 passed**; `tests/NeoVisual.Tests`
-  **25 passed**.
+  **26 passed**.
 - Live E2E: `tools/test-e2e.ps1` lists **33 scenarios** (incl. `seed-reset`).
-  **31 passing**; **2 known-RED** (new follow-up items, root causes documented in
-  the queue below): `explorer-open-navigation` (tree-state not normalized after
-  auto-open) and `explorer-open-searchbox` (search-box focus-exit gap). The
-  `neovisual-editor-insert` flake remains on record (retry-pass).
+  **32 passing**; **1 known-RED**: `explorer-open-searchbox` (search-box
+  focus-exit gap — queued as the next bugfix item; root cause in the queue
+  below). `explorer-open-navigation` is **GREEN** (tree-select capability, `g`).
+  The `neovisual-editor-insert` flake remains on record (retry-pass).
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -87,22 +87,8 @@ reads at the start of every loop iteration.
 
 ## In-progress
 
-- **Telescope tree-select capability (greens `explorer-open-navigation`) —
-  IN FLIGHT, mid-item.** BUILD done (BP-1..4, NeoVisual 26/26, Telescope 56/56);
-  VERIFY round 1 RED (`select none` — collapsed project node's
-  `UIHierarchyItems` not enumerated until expanded); DEBUG (verify-time) **PASS**
-  — the fix in `MyExtension/ToolWindows/SolutionExplorerController.cs:154`
-  (`SelectFirstSourceFile`) sets `projectNode.UIHierarchyItems.Expanded = true`,
-  opens the first `.cs` directly via `ItemOperations.OpenFile` (so
-  `editor-view-opened` == `select file`), and runs a 1.5s re-select +
-  `View.SolutionExplorer` refocus keeper to defeat VS's SelectionPreview
-  hover-timer hijack. **4 consecutive `explorer-open-navigation` runs PASS**
-  (`select file=C:\...\Probe\Alpha.cs`); neighbors + both unit suites green.
-  **RESUME POINT: the DEBUG fix is APPLIED but UNCOMMITTED (working tree). NEXT:
-  RE-PLAN (the debug agent changed BP-3's approach beyond the trace) → VERIFY
-  (full recheck: `explorer-open-navigation` + the 7 explorer neighbors + both
-  unit suites) → GREEN (commit + doc sync + spec gate).** The 4 DEVIATIONS were
-  adjudicated ACCEPT (mechanism-only).
+- (none — the tree-select capability item reached GREEN 2026-09-19; see the Done
+  section. Next up: `explorer-open-searchbox`, the remaining known-RED bugfix.)
 
 ## F45 status (Item 1 — log-prefix centralization)
 
@@ -135,10 +121,10 @@ Top of the queue, in priority order:
 4. ~~Add the 4 new planned E2E scenarios~~ — **PARTIAL**: `telescope-open-file-searchbox`
    + `telescope-open-file-navigation` **DONE** (see Done section); the other 2
    exposed real gaps → now the next queue items:
-   - **`explorer-open-navigation`** — **IN PROGRESS** (tree-select capability
-     item; debug fix applied, awaiting RE-PLAN → VERIFY → GREEN — see In-progress).
+   - ~~**`explorer-open-navigation`**~~ — ✅ **DONE** (tree-select capability,
+     GREEN 2026-09-19; see Done section).
    - **`explorer-open-searchbox`** — fix the search-box focus-exit gap
-     (KNOWN-RED scenario registered).
+     (KNOWN-RED scenario registered). **← next item.**
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
 
 ## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
@@ -215,8 +201,9 @@ Top of the queue, in priority order:
      `Refactor.Rename` / editor F2.)
    - **LazyVim rename/move FILE** (`<leader>cR` = `Snacks.rename.rename_file`):
      the **LSP file-rename flow** that fixes references: (1) send
-     `workspace/willRenameFiles` → (2) server returns a `WorkspaceEdit` of all
-     import/reference updates → (3) apply+persist the edit → (4) rename on disk →
+`workspace/willRenameFiles` → (2) server returns a WorkspaceEdit (an LSP
+    edit batch) of all import/reference updates → (3) apply+persist the edit →
+    (4) rename on disk →
      (5) send `workspace/didRenameFiles`. **Known gotcha:** the edits may only be
      applied to *loaded buffers*, not persisted to disk before the filesystem
      rename — unloaded files must get their edits applied directly to disk
@@ -239,6 +226,31 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-19 — Explorer tree-select capability** (Lane: feature, attempt 1 GREEN
+  after 1 VERIFY round): gave `SolutionExplorerController` a deterministic
+  programmatic tree-selection action — `g` walks the Solution Explorer's DTE
+  `UIHierarchy` (solution node → first project → first physical `.cs`), selects it
+  via `UIHierarchyItem.Select` (no key injection → escapes the injected-key
+  csproj-open trap), opens it directly (`ItemOperations.OpenFile`) and re-asserts
+  the selection + tree focus for ~1.5s (defeats VS's SelectionPreview hover-timer
+  focus steal). New diagnostic `[NeoVisual] solution-explorer select file=<full
+  path>` (+ `select none`). New pure, unit-tested seam `HierarchyResolver`
+  (`HierarchyNode` + `FirstSourceFilePath`, Kind-GUID classification). This greens
+  the last-but-one known-RED e2e scenario `explorer-open-navigation`.
+  **Change summary:** created `MyExtension/ToolWindows/HierarchyResolver.cs`; edited
+  `MyExtension/ToolWindows/SolutionExplorerController.cs` (`Keys.G` action key +
+  `SelectFirstSourceFile`/`BuildForest`/`FindFirstProjectNode`),
+  `tests/NeoVisual.Tests/Program.cs` (`Run_HierarchyResolver_FirstSourceFile` +
+  `Contains(Keys.G)` assertion), `tools/test-e2e.ps1` (`explorer-open-navigation`
+  scenario now presses `g`); docs synced (spec/AGENTS/SKILL/progress).
+  **If this regresses, look first at `SolutionExplorerController.SelectFirstSourceFile`
+  (the `Expanded = true` pre-walk + direct `OpenFile` + the 1.5s keeper) and the
+  `solution-explorer select file=` diagnostic** — a `select none` means the project
+  node was collapsed at walk time; no `editor-view-opened` matching the `select
+  file=` path means the direct-open/keeper path broke.
+  Doc sync: scenarios 31→32 passing / 2→1 known-RED, NeoVisual 25→26 across
+  spec.md / AGENTS.md / SKILL.md; SPEC REVIEW gate APPROVED.
+  Commit: `<pending>`
 - **2026-09-19 — 2 planned E2E coverage scenarios** (Lane: trivial, GREEN —
   partial item): added `telescope-open-file-searchbox` (insert-mode query →
   wait for settle → Enter opens the filtered single match, `Program.cs`) and

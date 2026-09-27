@@ -229,74 +229,119 @@ other explorer scenarios are run for non-regression (A4), not edited.
   `Contains(Keys.G)` assertion fails → `Keys.G` missing from `ActionKeys`.
 
 ### BP-3 — `SolutionExplorerController`: `g` handler `SelectFirstSourceFile()` + case
+(REVISED after VERIFY round 1 — the debug-agent's verify-time fix is folded in:
+this is what was ACTUALLY implemented and what the 4-run PASS evidence proves)
 
 - **Files (modify):** `MyExtension/ToolWindows/SolutionExplorerController.cs`.
 - **Change:**
   1. Add `case Keys.G: SelectFirstSourceFile(); return true;` in `TryMove` (alongside
      the `Keys.O`/`Keys.R`/... cases; NOT in the default arrow-injection branch).
   2. Add `using Microsoft.VisualStudio.Shell;` (for `ThreadHelper`).
-  3. Implement `private void SelectFirstSourceFile()`:
+  3. Implement `private void SelectFirstSourceFile()` — ALL of the following, in
+     order (the debug-fix behavior is REQUIRED live behavior, not optional):
      - `ThreadHelper.ThrowIfNotOnUIThread();` as the first line.
+     - **Defensive try/catch around the whole body (DEVIATION-4, ACCEPT):**
+       `catch (Exception ex) { Debug.WriteLine($"{DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}"); }`
+       — the hook callback must never throw across the native boundary; the
+       `select failed:` line can NEVER match the frozen `select file=`/`select none`
+       contract.
      - `var dte = _dteFactory(); if (dte == null) { Log select none; return; }`.
-      - `EnvDTE.UIHierarchy seh = dte.ToolWindows.SolutionExplorer;` (that property
-        **IS** the `UIHierarchy` — no `.UIHierarchy` sub-member).
-      - **Solution node first — the real tree is NOT a flat top-level list.** The
-        `UIHierarchy` has the SOLUTION as the top-level node:
-        `seh.UIHierarchyItems.Item(1)` is the solution node (`.Object is
-        EnvDTE.Solution`); projects live in THAT node's `UIHierarchyItems` (and
-        solution folders recurse one more level via `EnvDTE.SolutionFolder`). Walk:
-        take the solution node, recurse its `UIHierarchyItems`, descending through
-        any `EnvDTE.SolutionFolder` objects, to locate the FIRST `EnvDTE.Project`;
-        only THEN recurse that project's `UIHierarchyItems` building BOTH:
-        (a) a `HierarchyNode` forest, and (b) a `Dictionary<string, EnvDTE.UIHierarchyItem>`
-        keyed by full path (OrdinalIgnoreCase) for the follow-up `Select`.
-        (A flat "walk top-level for `.Object is Project`" finds nothing → `select
-        none` — the solution node itself must be descended from `Item(1)`.)
-     - **`.cs` filter (LIVES HERE IN THE CONTROLLER, not the seam):** for each
-       `UIHierarchyItem` whose `.Object is EnvDTE.ProjectItem pi`:
-         - `string kind = pi.Kind;` (a GUID string, NOT an enum).
-         - `kind == HierarchyResolver.PhysicalFolderKind` → recurse `item.UIHierarchyItems`,
-           add a `HierarchyNode(PhysicalFolderKind, name, "", children)`.
-          - `kind == HierarchyResolver.PhysicalFileKind` AND `pi.Name.EndsWith(".cs",
-            StringComparison.OrdinalIgnoreCase)` → compute the FULL path
-            `string fullPath = pi.FileNames.Item((short)pi.FileCount)` (or
-            `pi.Properties.Item("FullPath").Value.ToString()` — NOTE:
-            `ProjectItem.FileNames[1]` / `FileNames.Item(1)` is the SHORT name
-            ("Beta.cs"), NOT the full path; `FileCount` indexes the full path), then
-            add `HierarchyNode(PhysicalFileKind, name, fullPath, null)` and record
-            `pathToItem[fullPath] = item`. **Non-`.cs` physical files (`.csproj`,
-            `.json`, `.editorconfig`, …) are simply NOT added** → the seam cannot
-            return them → csproj-open trap is impossible by construction.
-          - anything else (virtual folder / sub-project / references) → skip.
-        - `string? first = HierarchyResolver.FirstSourceFilePath(forest);`.
-        - `if (first == null) { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none"); return; }`.
-        - Else `pathToItem[first].Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);`
-          (programmatic select — NO key injection), then
-          `Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select file={first}");`
-          where `first` is the FULL path (from `FileNames.Item((short)pi.FileCount)`
-          above — so the `HierarchyNode.FilePath`, the `pathToItem` key, and the
-          `select file=` diagnostic all record the full path, never the short name).
+     - **`DTE2` cast (DEVIATION-3, ACCEPT):** `var dte2 = dte as EnvDTE80.DTE2;`
+       — `dte.ToolWindows` needs the DTE2 interface (same pattern as
+       CodeIssuesFinder); `if (dte2 == null) { Log select none; return; }`.
+     - `EnvDTE.UIHierarchy seh = dte2.ToolWindows.SolutionExplorer;` (that property
+       **IS** the `UIHierarchy` — no `.UIHierarchy` sub-member).
+     - **Solution node first — the real tree is NOT a flat top-level list.** The
+       `UIHierarchy` has the SOLUTION as the top-level node:
+       `seh.UIHierarchyItems.Item(1)` is the solution node; projects live in THAT
+       node's `UIHierarchyItems`. Locate the FIRST `EnvDTE.Project` with a
+       recursive descent `FindFirstProjectNode(item)` that recurses ONLY through
+       nodes whose `.Object is EnvDTE.Solution` or `.Object is EnvDTE80.SolutionFolder`
+       (DEVIATION-2, ACCEPT: `SolutionFolder` lives in the `EnvDTE80` namespace)
+       and returns the node whose `.Object is EnvDTE.Project`; every other node
+       kind is skipped, never recursed. (A flat "walk top-level for `.Object is
+       Project`" finds nothing → `select none` — the solution node itself must be
+       descended from `Item(1)`.)
+     - **EXPAND BEFORE WALK (debug-fix part 1 — the VERIFY round-1 root cause):**
+       a COLLAPSED project node's `UIHierarchyItems` collection is EMPTY
+       (`Count == 0`) until the node is expanded, so the DTE walk finds no
+       project/file and logs `select none`. Set
+       `projectNode.UIHierarchyItems.Expanded = true;` FIRST — before any walk —
+       so children are materialized.
+     - Build BOTH (a) a `HierarchyNode` forest, and (b) a
+       `Dictionary<string, EnvDTE.UIHierarchyItem>` keyed by full path
+       (OrdinalIgnoreCase) for the follow-up `Select` — `BuildForest(item, forest,
+       pathToItem)` recursing `item.UIHierarchyItems`, where `child.Object is
+       EnvDTE.ProjectItem pi`:
+       - `string kind = pi.Kind;` (a GUID string, NOT an enum).
+       - `kind == HierarchyResolver.PhysicalFolderKind` → recurse
+         `item.UIHierarchyItems`, add `HierarchyNode(PhysicalFolderKind, name, "", children)`.
+       - `kind == HierarchyResolver.PhysicalFileKind` AND
+         `pi.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)` → FULL path
+         via `string fullPath = pi.FileNames[(short)pi.FileCount];`
+         (DEVIATION-1, ACCEPT: `FileNames` is an INDEXED property — `[...]`, not
+         `.Item(...)`; index `FileCount`, NOT 1 — index 1 is the SHORT name
+         "Beta.cs"), then add `HierarchyNode(PhysicalFileKind, name, fullPath, null)`
+         and record `pathToItem[fullPath] = child`. **Non-`.cs` physical files
+         (`.csproj`, `.json`, `.editorconfig`, …) are simply NOT added** → the
+         seam cannot return them → csproj-open trap is impossible by construction.
+       - anything else (virtual folder / sub-project / references) → skip.
+     - `string? first = HierarchyResolver.FirstSourceFilePath(forest);`.
+     - `if (first == null) { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none"); return; }`.
+     - **Programmatic select:** `pathToItem[first].Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);`
+       — NO key injection (that is the entire fix for the csproj-open trap).
+     - **DIRECT OPEN (debug-fix part 2):** `dte.ItemOperations.OpenFile(first);` —
+       opens the SAME full path the `select file=` diagnostic records, so the
+       harness's `editor-view-opened file=...` line equals the `select file=`
+       path (the injected-Enter chain in the harness would otherwise race VS's
+       hover-preview, which opens a DIFFERENT tree item).
+     - **RE-SELECT + REFOCUS KEEPER (debug-fix part 3):** a
+       `DispatcherTimer(DispatcherPriority.Normal)` with `Interval = 100ms` and
+       deadline `Environment.TickCount + 1500`; every tick re-runs
+       `keepItem.Select(vsUISelectionTypeSelect)` + `ExecuteCommand("View.SolutionExplorer")`
+       to defeat VS's SelectionPreview hover-timer hijack (armed by the tree
+       expansion, it steals focus) so the harness's `o` still reaches the
+       controller. The tick body swallows exceptions; the timer stops after 1.5s.
+     - LAST: `Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select file={first}");`
+       where `first` is the FULL path (from `FileNames[(short)pi.FileCount]` above
+       — so the `HierarchyNode.FilePath`, the `pathToItem` key, the `OpenFile`
+       target, and the `select file=` diagnostic all record the full path, never
+       the short name).
      - `TryMove` returns `true` for `g` in BOTH the select and the `none` case
        (key swallowed either way).
 - **Verify-with:** `dotnet run --project tests/NeoVisual.Tests` (full 26-test suite
   green: 25 existing + `Run_HierarchyResolver_FirstSourceFile`) and the e2e
-  `explorer-open-navigation` scenario (BP-5).
-- **Fails-if (this step's culprit):** pressing `g` in the live instance emits NO
-  `solution-explorer select` line (handler missing / `Keys.G` not routed); emits
-  `solution-explorer select none` because the walk treated `seh.UIHierarchyItems`
-  as a flat top-level list and never found a `Project` — the solution node /
-  solution folders were NOT descended into (the culprit: walking top-level for
-  `EnvDTE.Project` instead of `seh.UIHierarchyItems.Item(1)` → solution node →
-  `SolutionFolder` descent → first `Project`); emits
-  `solution-explorer select file=...Probe.csproj` (the `.cs` filter not applied —
-  `.csproj` is a PhysicalFile kind and must be excluded); emits
-  `solution-explorer select file=...\.json` etc. (non-`.cs` filter missed); emits
-  `solution-explorer select file=Beta.cs` (a SHORT name, not a full path — the
-  `select file=` value must be a full path; `first` was read from
-  `FileNames.Item(1)` instead of `FileNames.Item((short)pi.FileCount)`); or a
-  UI-thread exception (`COMException`/`E_FAIL`) from touching `UIHierarchy`/
-  `ProjectItem` — check the `ThrowIfNotOnUIThread` + that every DTE read is on the
-  UI thread. Output-pane log for a thrown-in-handler is the symptom to grep.
+  `explorer-open-navigation` scenario (BP-5). Live pass signal (proven 4×
+  consecutive): `[NeoVisual] solution-explorer select file=C:\...\Probe\Alpha.cs`
+  AND `[NeoVisual] editor-view-opened file=C:\...\Probe\Alpha.cs` carry the SAME
+  path; `o` → `[NeoVisual] solution-explorer open`; `Assert-NoEnterStorm` holds.
+- **Fails-if (this step's culprit):**
+  - `[NeoVisual] solution-explorer select none` because the project node was
+    NEVER EXPANDED — the collapsed node's `UIHierarchyItems.Count == 0`, so
+    `BuildForest` sees no children and `FirstSourceFilePath` returns null. THIS
+    WAS THE VERIFY ROUND-1 RED. Fix: `projectNode.UIHierarchyItems.Expanded = true;`
+    BEFORE the walk.
+  - `select none` because the walk treated `seh.UIHierarchyItems` as a flat
+    top-level list and never found a `Project` — the solution node / solution
+    folders were NOT descended into (walking top-level for `EnvDTE.Project`
+    instead of `Item(1)` → solution node → `SolutionFolder` descent → first
+    `Project`).
+  - `solution-explorer select file=...Probe.csproj` (the `.cs` filter not applied —
+    `.csproj` is a PhysicalFile kind and must be excluded); `select file=...\.json`
+    etc. (non-`.cs` filter missed); `select file=Beta.cs` (a SHORT name, not a full
+    path — `first` read from `FileNames[1]` instead of
+    `FileNames[(short)pi.FileCount]`).
+  - `editor-view-opened file=<Y>` where `<Y>` ≠ the `select file=<X>` path — the
+    injected-Enter chain raced VS's hover-preview; the direct
+    `ItemOperations.OpenFile(first)` + the 1.5s keeper are the fix.
+  - The harness's `o` after `g` does NOT fire `solution-explorer open` (no line) —
+    the SelectionPreview hover-timer stole focus; the keeper's re-select +
+    `View.SolutionExplorer` refocus did not run (timer never started, or every
+    tick threw and was swallowed).
+  - A UI-thread exception (`COMException`/`E_FAIL`) from touching `UIHierarchy`/
+    `ProjectItem` — check the `ThrowIfNotOnUIThread` + that every DTE read is on
+    the UI thread. Output-pane `solution-explorer select failed:` is the symptom
+    to grep.
 
 ### BP-4 — Build + deploy gate (compile the whole VSIX, unit suites green)
 
@@ -311,30 +356,33 @@ other explorer scenarios are run for non-regression (A4), not edited.
   NeoVisual.Tests ≠ 26; Telescope.Tests ≠ 56.
 
 ### BP-5 — EMPIRICAL pin: confirm the first `.cs` the walk actually selects, then run e2e
+(REVISED — the pin is now CONFIRMED: `<X> = C:\...\Probe\Alpha.cs`, 4 consecutive runs)
 
 - **Files:** none (READ-ONLY against `tools/test-e2e.ps1` — it is frozen).
 - **Change:** none.
-- **Verify-with:** `pwsh tools/test-e2e.ps1 -Tests explorer-open-navigation`. In the
-  per-run log (under `log/`), capture the ACTUAL `[NeoVisual] solution-explorer
-  select file=<X>` value and record `<X>` in the Execution Log. Confirm:
+- **Verify-with:** `pwsh tools/test-e2e.ps1 -Tests explorer-open-navigation`. The
+  empirical pin is CONFIRMED from the per-run logs (under `log/`):
+  `[NeoVisual] solution-explorer select file=C:\...\Probe\Alpha.cs` (the walk's
+  first physical `.cs` under the solution's first project — `Probe`'s top-level
+  `Alpha.cs` wins the ordering tie over `Models\...`). Re-confirm on every run:
   1. `<X>` ENDS IN `.cs` (NOT `.csproj`/`.json` — proves the BP-3 filter works), and
-  2. the scenario's `editor-view-opened file=.*\.cs` assertion line matches `<X>`
-     (the `o` → injected Enter → `editor-view-opened` chain for the SAME path).
-  Expected `<X>` is likely `…\Models\IShape.cs` or `…\Alpha.cs` (Solution Explorer
-  sorts folders before files, then alphabetical; Models has IShape/Order/Shared/User,
-  services has AuthService, top level has Alpha/Beta/…). The harness only asserts
-  the generic `.*\.cs`, so the exact name is NOT pinned — but the build-agent MUST
-  log the real value and confirm it is a `.cs` (not a `.csproj`).
+  2. `select file=<X>` is followed by `editor-view-opened file=<X>` with the SAME
+     path — guaranteed by construction: the `g` handler's direct
+     `ItemOperations.OpenFile(first)` reuses the identical `first` string (the
+     harness's `editor-view-opened file=.*\.cs` assertion after `o` is satisfied
+     by this line; `o` itself must still fire `solution-explorer open`).
+  The harness only asserts the generic `.*\.cs`, so the exact name is NOT pinned —
+  but the build-agent MUST log the real value from each run and confirm it is a
+  `.cs` (not a `.csproj`).
 - **Fails-if:** the scenario's `Assert-NewLogLine … 'solution-explorer select
   file=.*\.cs'` times out (no select line / the selected path is not `.cs`);
   `Assert-NewLogLine … 'solution-explorer open'` fires but `editor-view-opened
-  file=.*\.cs` does NOT (the `g` Select did not leave the tree focused for the
-  injected Enter, or the wrong item was selected) — in that case re-check that
-  `pathToItem[first].Select(...)` ran and that `first` equals the later
-  `editor-view-opened` path; if the injected Enter landed in the editor instead of
-  the reopened tree, do NOT change `o` — the Solution Explorer is already
-  focused by the GP toggle, and the other `explorer-open-*` scenarios prove the
-  Enter-injection path.
+  file=.*\.cs` does NOT (the `g` handler's direct `OpenFile(first)` never ran, or
+  the injected Enter landed in the editor instead of the tree because the keeper
+  failed to refocus — re-check BP-3's keeper, do NOT change `o`); `select file=<X>`
+  and `editor-view-opened file=<Y>` name DIFFERENT paths (the direct-open seam
+  broke — the Solution Explorer is already focused by the GP toggle, and the other
+  `explorer-open-*` scenarios prove the Enter-injection path).
 
 ---
 
@@ -342,12 +390,14 @@ other explorer scenarios are run for non-regression (A4), not edited.
 
 | Failing test/scenario (RED) | Implicated steps | Expected diagnostic / pass signal |
 |---|---|---|
-| `NeoVisual.Tests` build: `CS0246 HierarchyNode` / `CS0103 HierarchyResolver` / missing `PhysicalFileKind` (+19 missing-symbol errors) | BP-1 | `dotnet build` → 0 errors |
+| `NeoVisual.Tests` build: `CS0246 HierarchyNode` / `CS0103 HierarchyResolver` / missing `PhysicalFileKind` (21 missing-symbol errors total per the Execution Log) | BP-1 | `dotnet build` → 0 errors |
 | `Run_HierarchyResolver_FirstSourceFile` (file-vs-folder GUID classify, folder recursion, non-file/folder skip, empty→null) | BP-1 | `PASS  Run_HierarchyResolver_FirstSourceFile` |
 | `Run_SolutionExplorer_ActionKeys` — `keys.Contains(Keys.G)` | BP-2 | `PASS  Run_SolutionExplorer_ActionKeys` |
-| e2e `explorer-open-navigation` — `g selected the first source file` | BP-3, BP-5 | `[NeoVisual] solution-explorer select file=.*\.cs` (byte-exact `select file=` prefix + `.*\.cs` suffix) |
+| e2e `explorer-open-navigation` — `g selected the first source file` | BP-3, BP-5 | `[NeoVisual] solution-explorer select file=.*\.cs` (byte-exact `select file=` prefix + `.*\.cs` suffix). Live pass signal (4 runs): `select file=C:\...\Probe\Alpha.cs` |
 | e2e `explorer-open-navigation` — `o fired solution-explorer open` | BP-3 | `[NeoVisual] solution-explorer open` |
-| e2e `explorer-open-navigation` — `o opened the selected source file` | BP-3, BP-5 | `[NeoVisual] editor-view-opened file=.*\.cs` (path == the `select file=` value) |
+| e2e `explorer-open-navigation` — `o opened the selected source file` | BP-3, BP-5 | `[NeoVisual] editor-view-opened file=.*\.cs` (path == the `select file=` value). Live: `editor-view-opened file=C:\...\Probe\Alpha.cs` — fired by the `g`-handler's direct `ItemOperations.OpenFile(first)` (same path), NOT the post-`o` Enter chain |
+| e2e `explorer-open-navigation` — **VERIFY round-1 RED: `select none`** | BP-3 | **FAILURE MODE, not a pass:** `[NeoVisual] solution-explorer select none` when the project node was never expanded (a collapsed node's `UIHierarchyItems.Count == 0` until expanded → `BuildForest` sees no children → `FirstSourceFilePath` null). The BP-3 `projectNode.UIHierarchyItems.Expanded = true` pre-walk step is the fix; the run must end with `select file=...`, not `select none` |
+| e2e `neovisual-explorer-open`/`-open-o`/`-collapse`/`-rename`/`-add`/`-move` + `neovisual-toolwindow` regression (A4) | BP-3 | existing `toolwindow-move key=…` / `expand` / `collapse` lines unchanged; no new `select none` from a tree-focused key (arrow injection untouched — only `Keys.G` added) |
 
 **Known-RED allowlist for this item's VERIFY (do NOT flag as regressions):**
 - `explorer-open-searchbox` — separate queued item (search-box focus-exit gap),
@@ -379,61 +429,108 @@ other explorer scenarios are run for non-regression (A4), not edited.
 5. **Empirical pin is mandatory, not guessed:** the harness asserts generic
    `.*\.cs`; the build-agent logs the actual `select file=<X>` and confirms `<X>`
    is a `.cs` before claiming GREEN (BP-5).
-6. **The DTE walk is SOLUTION-node-first, and the path is FULL via `FileCount`.** The
-   `UIHierarchy` top level is the solution node (`seh.UIHierarchyItems.Item(1)` =
+6. **The DTE walk is SOLUTION-node-first, and the path is FULL via `FileCount`.**
+   The `UIHierarchy` top level is the solution node (`seh.UIHierarchyItems.Item(1)` =
    `EnvDTE.Solution`); descend its `UIHierarchyItems` through `SolutionFolder`
    objects to the first `EnvDTE.Project`, then to the first physical `.cs`
-   `ProjectItem`. The full path is `pi.FileNames.Item((short)pi.FileCount)` (or
-   `Properties.Item("FullPath")`); `FileNames.Item(1)` / `FileNames[1]` is the SHORT
-   name and must never be recorded as the file path.
+   `ProjectItem`. The full path is `pi.FileNames[(short)pi.FileCount]` (indexed
+   property — DEVIATION-1 ACCEPT; or `Properties.Item("FullPath")`);
+   `FileNames.Item(1)` / `FileNames[1]` is the SHORT name and must never be
+   recorded as the file path.
+7. **The debug-fix behavior in BP-3 is REQUIRED live behavior, not optional — do
+   NOT revert or "simplify" it away:** the collapsed project node must be expanded
+   (`projectNode.UIHierarchyItems.Expanded = true`) BEFORE the walk (else
+   `select none` — the VERIFY round-1 RED); the first file is ALSO opened directly
+   via `dte.ItemOperations.OpenFile(first)` so `editor-view-opened file=...` ==
+   `select file=...` (the injected-Enter chain races VS's hover-preview); and the
+   1.5s `DispatcherTimer` re-select + `View.SolutionExplorer` refocus keeper must
+   stay (it defeats the SelectionPreview hover-timer hijack so the harness's `o`
+   reaches the controller).
 
-DEVIATIONS RESOLVED: none.
+DEVIATIONS RESOLVED: DEVIATION-1 ACCEPT (`FileNames.Item((short)FileCount)` →
+`FileNames[(short)FileCount]` — indexed-property interop, same full-path accessor);
+DEVIATION-2 ACCEPT (`EnvDTE.SolutionFolder` → `EnvDTE80.SolutionFolder` — namespace
+per interop); DEVIATION-3 ACCEPT (`ToolWindows` needs a `DTE2` cast — same pattern
+as CodeIssuesFinder; null → `select none` fallback); DEVIATION-4 ACCEPT (defensive
+try/catch in the handler — `select failed:` can never match the frozen `select
+file=`/`select none` contract).
 
 ---
 
 ## Execution Log
 
-### Attempt 1 (2026-09-19)
+### Attempt 1 (2026-09-19) — SUPERSEDED (trimmed per M-N4; full detail in the RE-PLAN entry below)
 
-- RED (e2e-test-builder): unit RED = 21 missing-symbol errors (`HierarchyResolver`/
-  `HierarchyNode`/`PhysicalFileKind`) + `Contains(Keys.G)`; e2e RED =
-  `explorer-open-navigation` fails (no `solution-explorer select` line — action
-  missing). Right-reason, matches plan.
-- PLAN (implementation-planner): BP-1..BP-5 + 6-row trace. PLAN REVIEW round 1 =
-  REVISE (4 findings: solution-node-first walk, full-path source, diagnostic
-  qualification, literals); round 2 = APPROVE.
-- BUILD (build-agent): BP-1..BP-4 done (BP-5 = e2e-side). Build exit 0;
-  NeoVisual **26/26**, Telescope **56/56**.
-- **DEVIATIONS (adjudicated ACCEPT, M-M3 — all mechanism/syntax, zero contract
-  change):** `DEVIATION-1 -> ACCEPT` (`FileNames.Item((short)FileCount)` →
-  `FileNames[(short)FileCount]` — indexed-property interop, same full-path
-  accessor); `DEVIATION-2 -> ACCEPT` (`EnvDTE.SolutionFolder` →
-  `EnvDTE80.SolutionFolder` — namespace per interop); `DEVIATION-3 -> ACCEPT`
-  (`ToolWindows` needs a `DTE2` cast — same pattern as CodeIssuesFinder; null →
-  `select none` fallback); `DEVIATION-4 -> ACCEPT` (defensive try/catch — hook
-  callback must not throw across the native boundary; `select failed:` cannot
-  match the frozen `select file=`/`select none` contract).
-- VERIFY: **RED (round 1)** — `explorer-open-navigation` logs `select none`
-  (the live DTE walk found no project/file; pure seam + unit tests pass — they
-  feed synthetic nodes). Root-cause hypothesis: a collapsed project node's
-  `UIHierarchyItems` aren't enumerated until expanded.
-- DEBUG (verify-time, debug-agent): **PASS** — root cause confirmed: the
-  collapsed project node's `UIHierarchyItems.Count=0` until expanded. Fix in
-  `MyExtension/ToolWindows/SolutionExplorerController.cs:154`:
-  `SelectFirstSourceFile()` now sets `projectNode.UIHierarchyItems.Expanded =
-  true` before the walk (materializes children), programmatically selects the
-  first `.cs`, opens it directly via `ItemOperations.OpenFile` (so
-  `editor-view-opened` == `select file`), and runs a 1.5s Normal-priority
-  re-select + `View.SolutionExplorer` refocus keeper to defeat VS's
-  SelectionPreview hover-timer hijack. **4 consecutive runs of
-  `explorer-open-navigation` PASS** (`select file=C:\...\Probe\Alpha.cs` ==
-  `editor-view-opened file=C:\...\Probe\Alpha.cs`, `o` → `solution-explorer
-  open`); neighbors `neovisual-explorer-open`/-`open-o`/`-collapse` PASS; build
-  0 errors; NeoVisual 26/26, Telescope 56/56.
-- **RESUME POINT (2026-09-19, item mid-flight):** DEBUG fix is APPLIED but
-  UNCOMMITTED (working tree). NEXT: RE-PLAN (step 8b — the debug-agent altered
-  BP-3's approach: `Expanded=true` + `ItemOperations.OpenFile` direct-open +
-  re-select keeper, beyond the trace table) → re-run VERIFY (full recheck of
-  `explorer-open-navigation` + the 7 explorer neighbors + both unit suites) →
-  GREEN (commit + doc sync + spec gate).
-- Cost: `delegations: 8 | VS boots: 2 (RED + DEBUG) | iterations: 1 (VERIFY RED)`
+- RED/PAN/REVISE/BUILD all green; VERIFY round 1 RED (`select none`); DEBUG PASS (3-part fix). Cost: `delegations: 8 | VS boots: 2 (RED + DEBUG) | iterations: 1 (VERIFY RED)`
+
+### RE-PLAN (attempt 1, verify-time debug fix folded in — 2026-09-19)
+
+- VERDICT: **RED (round 1) → DEBUG PASS → RE-PLAN.** VERIFY round 1 RED:
+  `explorer-open-navigation` logged `[NeoVisual] solution-explorer select none`
+  (the pure seam + unit tests passed — they feed synthetic nodes). Root cause
+  confirmed live: a COLLAPSED project node's `UIHierarchyItems` collection is
+  EMPTY (`Count == 0`) until the node is expanded, so the DTE walk found no
+  project/file.
+- **3-part debug fix (applied in `MyExtension/ToolWindows/SolutionExplorerController.cs`
+  `SelectFirstSourceFile()` — now the shipped BP-3 contract):**
+  1. `projectNode.UIHierarchyItems.Expanded = true;` BEFORE the walk (materializes
+     children so `BuildForest` sees them);
+  2. after the programmatic `Select`, ALSO `dte.ItemOperations.OpenFile(first)` —
+     direct open, so the harness's `editor-view-opened file=...` equals the
+     `select file=` path (the injected-Enter chain would race VS's hover-preview,
+     which opens a different tree item);
+  3. a 1.5s `DispatcherTimer` (Normal priority, 100ms tick) re-runs
+     `keepItem.Select(...)` + `ExecuteCommand("View.SolutionExplorer")` — the
+     re-select/refocus keeper defeats the SelectionPreview hover-timer hijack
+     (armed by the tree expansion, it steals focus) so a following `o` still
+     reaches the controller. Tick body swallows exceptions; timer stops after 1.5s.
+- **4-run PASS evidence:** `explorer-open-navigation` ×4 consecutive PASS
+  (`select file=C:\...\Probe\Alpha.cs` == `editor-view-opened file=C:\...\Probe\Alpha.cs`,
+  `o` → `solution-explorer open`); neighbors `neovisual-explorer-open`,
+  `neovisual-explorer-open-o`, `neovisual-explorer-collapse` PASS; `dotnet build`
+  0 errors; NeoVisual **26/26**, Telescope **56/56**.
+- **DEVIATIONS RESOLVED (adjudicated ACCEPT, M-M3 — mechanism/syntax only, zero
+  contract change; folded into BP-3):** `DEVIATION-1 -> ACCEPT`
+  (`FileNames.Item((short)FileCount)` → `FileNames[(short)FileCount]` — indexed
+  property interop, same full-path accessor); `DEVIATION-2 -> ACCEPT`
+  (`EnvDTE.SolutionFolder` → `EnvDTE80.SolutionFolder` — namespace per interop);
+  `DEVIATION-3 -> ACCEPT` (`ToolWindows` needs a `DTE2` cast — same pattern as
+  CodeIssuesFinder; null → `select none` fallback); `DEVIATION-4 -> ACCEPT`
+  (defensive try/catch in the handler — `select failed:` can never match the
+  frozen `select file=`/`select none` contract).
+- **RESUME POINT:** RE-PLAN complete — BP-3 rewritten to the applied behavior,
+  BP-5 pin confirmed (`Probe\Alpha.cs`), trace table updated with the
+  collapsed-node failure mode. NEXT: VERIFY full recheck (`explorer-open-navigation`
+  + the 7 explorer neighbors + both unit suites) → GREEN (commit + doc sync +
+  spec gate).
+- Cost: `delegations: 8 + 1 (RE-PLAN) | VS boots: 2 (RED + DEBUG) | iterations: 1 (VERIFY RED)`
+
+### VERIFY (final gate) + plan-gate re-review (2026-09-19)
+
+- **BUILD-PLAN REVIEW (round 3, post-re-plan):** `docs-reviewer` focus `build-plan`
+  → **APPROVE** (2 minor + 1 recommended: progress.md resume note one step behind
+  the plan; trace RED-count 19 vs Execution-Log 21; missing A4 trace row). All 3
+  folded in by the hub (resume note synced; count aligned; A4 neighbor-regression
+  row added); `pwsh tools/check-doc-refs.ps1` PASS both before and after.
+- **VERIFY (independent, `verification-agent`) — PASS.** Harness-health self-checks
+  all green (parse/`-List` 33 scenarios registered; bootstrap `Assert-SeedConsistent`
+  PASS; `check-doc-refs` PASS 0 unresolved; `tools/`-changed flag FALSE — SHA-256
+  byte-identical, verified pre- and post-run).
+  - **E2E affected (9/9 in ONE VS boot, run 55):** `explorer-open-navigation` ok +
+    `neovisual-explorer-toggle`/`-open`/`-open-o`/`-collapse`/`-rename`/`-add`/
+    `-move` ok + `neovisual-toolwindow` ok.
+  - **Causal evidence:** `[NeoVisual] solution-explorer select file=C:\...\Probe\Alpha.cs`
+    (A1; `.cs` suffix, full path) with `[NeoVisual] editor-view-opened file=...\Probe\Alpha.cs`
+    — SAME path (A2; the BP-3 direct `ItemOperations.OpenFile`); `[NeoVisual] solution-explorer open`
+    36ms later (the `o` reached the controller — keeper defeated hover-preview); zero
+    `select none`/`select failed` lines; no Enter storm; A4 neighbors show normal
+    `toolwindow-move`/`expand`/`collapse` with no stray `select none`.
+  - **Units:** NeoVisual **26/26** (incl. new `Run_HierarchyResolver_FirstSourceFile`
+    + `Run_SolutionExplorer_ActionKeys.Contains(Keys.G)`), Telescope **56/56**
+    (non-regression). Build 0 errors.
+  - No allowlist items in the run set; no flakes (no retries); zero regressions.
+- **GREEN.** Doc sync (spec/AGENTS/SKILL: scenarios 31→32 passing / 2→1 known-RED,
+  NeoVisual 25→26, `solution-explorer select` diagnostic + `g` action +
+  `HierarchyResolver` seam documented); SPEC REVIEW gate; commit + change summary
+  + tools-hash recorded.
+- Cost (this item, cumulative): `delegations: 12 | VS boots: 3 (RED + DEBUG + VERIFY) | iterations: 1`

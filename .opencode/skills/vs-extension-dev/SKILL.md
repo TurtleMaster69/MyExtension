@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 33 live E2E scenarios (31 passing + 2 known-RED), feature
+> test commands, the 33 live E2E scenarios (32 passing + 1 known-RED), feature
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -43,7 +43,8 @@ GlobalKeyboardHook (Win32 LL hook)
 | `ToolWindows/GeneralToolWindowController.cs` | Default controller: hjkl→arrow injection; `IsTextInputType` decides initial mode. |
 | `ToolWindows/TextInputToolWindowController.cs` | Text-input windows (CommandWindow/FindReplace/...): normal-mode h/l/w/b/e caret motions + a/A/I insert placements over the focused text box (WPF TextBox, editor `IWpfTextView`, or WinForms). |
 | `ToolWindows/TextMotionHelper.cs` | Shared vim-caret helper for WPF TextBox surfaces in tool windows (Solution Explorer search box + text-input windows): find the focused box, apply a motion via `TextMotionNavigator`, toggle the white block/line caret. |
-| `ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions via `TextMotionHelper`). |
+| `ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g programmatically select the first source file (expand → walk → DTE `UIHierarchyItem.Select`, direct `ItemOperations.OpenFile`, ~1.5s re-select/refocus keeper to defeat the hover-preview focus steal), h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions via `TextMotionHelper`). |
+| `ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam (`HierarchyNode` + `FirstSourceFilePath`) behind the `g` selection action: Kind-GUID physical-file/physical-folder classification + in-order folder recursion; unit-tested without DTE. |
 | `BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode (predefined "Caret" adornment layer — do NOT export a custom `AdornmentLayerDefinition`, it breaks the editor's MEF composition). |
 | `WindowManager.cs` | Tracks the focused window frame; classifies `ToolWindowType`; dispatches to controllers. |
 | `CardinalMovment/WindowMatrix.cs` | Core navigation algorithm: filters windows by direction, alignment, adjacency, and closest distance. |
@@ -194,7 +195,7 @@ of any of these only when the task needs it.
 
 See **AGENTS.md** for the full picture. Summary:
 - Offline unit tests: `dotnet run --project tests/Telescope.Tests` (56) and
-  `dotnet run --project tests/NeoVisual.Tests` (25), with substring filter +
+  `dotnet run --project tests/NeoVisual.Tests` (26), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/test-e2e.ps1` (33 scenarios against the experimental
   instance), `-Tests <name>` to run a subset.

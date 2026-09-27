@@ -58,7 +58,8 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/ToolWindows/GeneralToolWindowController.cs` | Default controller: hjkl→arrow injection; `IsTextInputType` decides initial mode. |
 | `MyExtension/ToolWindows/TextInputToolWindowController.cs` | Text-input windows: normal-mode h/l/w/b/e caret motions + a/A/I insert placements. |
 | `MyExtension/ToolWindows/TextMotionHelper.cs` | Shared vim-caret helper for WPF TextBox surfaces (Solution Explorer search box + text-input windows). |
-| `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, h/l fold expand/collapse, j/k navigate, i focuses the search box. |
+| `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g select-first-source-file, h/l fold expand/collapse, j/k navigate, i focuses the search box. |
+| `MyExtension/ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam: `HierarchyNode` + `FirstSourceFilePath` (physical-file/folder Kind-GUID classification, folder recursion) used by `SolutionExplorerController`'s `g` action. |
 | `MyExtension/BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode. |
 | `MyExtension/CardinalMovment/WindowMatrix.cs` | Core navigation algorithm. |
 | `MyExtension/CardinalMovment/WindowControlAdapter.cs` | Bridges `IVsWindowFrame` (IVs shell) to `EnvDTE.Window` (DTE). |
@@ -156,6 +157,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[NeoVisual] toolwindow-enter-input` / `toolwindow-exit-input`
 - `[NeoVisual] solution-explorer toggled open/closed`
 - `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`
+- `[NeoVisual] solution-explorer select file=...` / `select none` (programmatic first-source-file selection via DTE `UIHierarchyItem.Select`)
 - `[NeoVisual] editor-view-opened file=...` (from `VimModeTracker.TextViewCreated`)
 - `[NeoVisual] vim-mode=Insert|Normal|Replace` (from `VimModeTracker.UpdateTypingFromMode`)
 - `[NeoVisual] text-motion key=... caret=...` / `[NeoVisual] textinput-enter-input start|end|after caret=...`
@@ -186,11 +188,12 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`SyntaxHighlighter`), prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
   implementation finder (`ImplementationFinder`/`ImplementationHit`).
-- `dotnet run --project tests/NeoVisual.Tests` — **25 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **26 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
-  re-entry guard (`InjectedKeyGuard`), `DistinctBy`, `RectCoordinate`.
+  re-entry guard (`InjectedKeyGuard`), the pure Explorer tree-walk seam
+  (`HierarchyResolver`), `DistinctBy`, `RectCoordinate`.
 
 `InternalsVisibleTo` is set for these assemblies. Extract pure logic into
 dependency-free classes (the `OverlayKeyHandler` / `TextMotionNavigator` pattern) so
@@ -209,8 +212,8 @@ pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **33 scenarios** (31 passing; 2 known-RED — `explorer-open-navigation` +
-`explorer-open-searchbox`, tracked in docs/progress.md) are: `telescope-open`,
+The **33 scenarios** (32 passing; 1 known-RED — `explorer-open-searchbox`,
+tracked in docs/progress.md) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
 `telescope-grep`, `telescope-implementation`, `telescope-open-file-searchbox`,
@@ -222,7 +225,7 @@ The **33 scenarios** (31 passing; 2 known-RED — `explorer-open-navigation` +
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
 `neovisual-explorer-add`, `neovisual-explorer-move`,
 `neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
-`explorer-open-navigation` (known-RED), `explorer-open-searchbox` (known-RED).
+`explorer-open-navigation`, `explorer-open-searchbox` (known-RED).
 
 ### 5.3 E2E harness gotchas
 
@@ -276,7 +279,11 @@ The **33 scenarios** (31 passing; 2 known-RED — `explorer-open-navigation` +
 - Telescope overlay: open, search, navigate, insert/normal mode, open-file, wrap,
   preview pane.
 - Solution Explorer controller: `o`/`Enter` open, `r` rename, `m` move, `a` add,
-  `h`/`l` collapse/expand folds, j/k navigate, i/Esc input mode.
+  `g` programmatically select the first source file (`solution-explorer select
+  file=...` via DTE `UIHierarchyItem.Select`, escaping the injected-key csproj-open
+  trap; tree expanded first, file opened + selection re-asserted ~1.5s to defeat
+  VS's hover-preview focus steal), `h`/`l` collapse/expand folds, j/k navigate,
+  i/Esc input mode.
 - `Space+E` toggles Solution Explorer open/close.
 - Telescope preview pane: `TextMotionNavigator` (shared pure vim motions +
   a/A/I insert placements), Ctrl+H/L focus switch between List/Preview, read-only,
@@ -309,6 +316,6 @@ The **33 scenarios** (31 passing; 2 known-RED — `explorer-open-navigation` +
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (56) and
-  `dotnet run --project tests/NeoVisual.Tests` (25).
-- Live E2E: `pwsh tools/test-e2e.ps1` (33 scenarios; 31 passing + 2 known-RED);
+  `dotnet run --project tests/NeoVisual.Tests` (26).
+- Live E2E: `pwsh tools/test-e2e.ps1` (33 scenarios; 32 passing + 1 known-RED);
   subset with `-Tests a,b,c`; list with `-List`.

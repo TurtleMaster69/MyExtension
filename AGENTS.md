@@ -38,7 +38,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
   the injected-key re-entry guard (`InjectedKeyGuard`), helpers.
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`, etc.
-  run subsets. Currently **25 tests, all passing**.
+  run subsets. Currently **26 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -60,8 +60,8 @@ pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (33 total; 31 passing, 2 known-RED — `explorer-open-navigation` +
-`explorer-open-searchbox`, root causes tracked in docs/progress.md):
+Scenarios (33 total; 32 passing, 1 known-RED — `explorer-open-searchbox`,
+root cause tracked in docs/progress.md):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search
@@ -74,7 +74,7 @@ Scenarios (33 total; 31 passing, 2 known-RED — `explorer-open-navigation` +
 - `telescope-implementation` — Space F I: implementations/overrides of the symbol at the caret, previews, opens at line
 - `telescope-open-file-searchbox` — insert-mode query, wait for the filtered result, Enter opens it
 - `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
-- `explorer-open-navigation` — (KNOWN-RED) l/j/k tree walk to a file, o opens; blocked on tree-state normalization
+- `explorer-open-navigation` — `g` programmatically selects the first source file (`solution-explorer select file=...`) then `o` opens it
 - `explorer-open-searchbox` — (KNOWN-RED) i focuses the search box, query filters the tree, o opens; blocked on the focus-exit gap
 - `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 - `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
@@ -126,6 +126,8 @@ Key facts that make this reliable:
   `[NeoVisual] toolwindow-move key=... -> arrow vk=...`, `[NeoVisual] toolwindow-enter-input` /
   `toolwindow-exit-input`, `[NeoVisual] solution-explorer toggled open/closed`,
   `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`,
+  `[NeoVisual] solution-explorer select file=...` (programmatic first-source-file
+  selection via DTE `UIHierarchyItem.Select`; `select none` when none reachable),
   `[NeoVisual] editor-view-opened file=...` (logged from `VimModeTracker.TextViewCreated`),
   `[NeoVisual] vim-mode=Insert|Normal|Replace` (logged from `VimModeTracker.UpdateTypingFromMode`),
   `[NeoVisual] text-motion key=... caret=...` / `[NeoVisual] textinput-enter-input start|end|after caret=...`
@@ -150,7 +152,7 @@ Done and tested (live + unit):
 - Leader-key binding system; user-configurable `keybindings.json`.
 - Cardinal window navigation (Ctrl+H/J/K/L).
 - Telescope overlay: open, search, navigate, insert/normal mode, open-file, wrap, preview pane.
-- Solution Explorer controller: `o`/`Enter` open, `r` rename, `m` move, `a` add, `h`/`l` collapse/expand folds, j/k navigate, i/Esc input mode.
+- Solution Explorer controller: `o`/`Enter` open, `r` rename, `m` move, `a` add, `h`/`l` collapse/expand folds, j/k navigate, i/Esc input mode, `g` programmatically selects the first source file (`solution-explorer select file=...`, DTE `UIHierarchyItem.Select` — escapes the injected-key csproj-open trap; the tree is expanded first, and the file is opened + the selection re-asserted for ~1.5s to defeat VS's hover-preview focus steal).
 - `Space+E` toggles Solution Explorer open/close (action `toggle-solution-explorer`).
 - Telescope preview pane: `TextMotionNavigator` (shared pure vim motions h/l/j/k/w/b/e/0/$/gg/G
   + a/A/I insert placements), Ctrl+H/L focus switch between List/Preview, read-only (no insert),
@@ -262,7 +264,8 @@ Pending (user-requested, NOT yet implemented):
 - **Tool-window controllers**: `WindowManager.GetController(type)` returns a registered
   controller or a per-type `GeneralToolWindowController`. `SolutionExplorerController` is
   registered in `MyExtensionPackage` for `ToolWindowType.SolutionExplorer` and adds action keys
-  (`o`/Enter open, `r` rename, `m` move, `a` add) plus `h`/`l` fold expand/collapse. The
+  (`o`/Enter open, `r` rename, `m` move, `a` add, `g` select-first-source-file) plus
+  `h`/`l` fold expand/collapse. The
   controller interface exposes `ActionKeys` (`IReadOnlyCollection<Keys>`, net472 has no
   `IReadOnlySet<T>`): `InputHandler` routes hjkl + `controller.ActionKeys` to `TryMove`, and the
   hook's `IsInteresting` pre-filter returns true for any key while a tool window with action keys

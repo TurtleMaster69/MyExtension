@@ -1460,5 +1460,54 @@ namespace Telescope.Tests
             Assert.True(ReferenceEquals(a, items[1].Payload), "A.cs maps to its payload");
             Assert.True(ReferenceEquals(b, items[2].Payload), "B.cs maps to its payload");
         }
+
+        // ================================================================
+        // ProjectFileCache — per-session cache of the DTE project-file
+        // enumeration (F15: Telescope/ProjectFileCache.cs does not exist yet
+        // -> this is RED: compile error)
+        // ================================================================
+
+        public static void Run_ProjectFileCache_ReturnsCached()
+        {
+            var cache = new ProjectFileCache();
+            var list = new List<string> { @"C:\p\A.cs", @"C:\p\B.cs" };
+            int count = 0;
+
+            var first = cache.Get(() => { count++; return list; });
+            var second = cache.Get(() => { count++; return list; });
+
+            // The enumerator must run ONCE for two Gets — the second Get is served from the cache.
+            Assert.Equal(1, count);
+            Assert.True(ReferenceEquals(list, first), "first Get returns the enumerated list");
+            Assert.True(ReferenceEquals(list, second), "second Get returns the SAME cached list (no re-enumeration)");
+        }
+
+        public static void Run_ProjectFileCache_InvalidateReenumerates()
+        {
+            var cache = new ProjectFileCache();
+            var list = new List<string> { @"C:\p\A.cs" };
+            int count = 0;
+
+            cache.Get(() => { count++; return list; });
+            cache.Invalidate();
+            cache.Get(() => { count++; return list; });
+
+            // Invalidate() must drop the cached result so the next Get re-enumerates.
+            Assert.Equal(2, count);
+        }
+
+        public static void Run_ProjectFileCache_EmptyResultCached()
+        {
+            var cache = new ProjectFileCache();
+            int count = 0;
+
+            var first = cache.Get(() => { count++; return new List<string>(); });
+            var second = cache.Get(() => { count++; return new List<string>(); });
+
+            // An empty result is still a valid cached value: the second Get must NOT re-enumerate.
+            Assert.Equal(0, first.Count);
+            Assert.Equal(0, second.Count);
+            Assert.Equal(1, count);
+        }
     }
 }

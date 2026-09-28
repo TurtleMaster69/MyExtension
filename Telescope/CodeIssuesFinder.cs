@@ -31,6 +31,9 @@ namespace Telescope
         private readonly Func<IReadOnlyList<string>>? _testFileSource;
         private readonly Action<CodeIssue>? _testOpener;
 
+        private readonly ProjectFileCache _fileCache = new ProjectFileCache();
+        private string? _cachedSolutionName;
+
         public override string Name => "Issues";
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
@@ -64,7 +67,13 @@ namespace Telescope
             DTE dte = _dteFactory();
             if (dte?.Solution != null)
             {
-                foreach (string path in ProjectFiles.Enumerate(dte))
+                string? solutionName = dte?.Solution?.FullName;
+                if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _fileCache.Invalidate();
+                    _cachedSolutionName = solutionName;
+                }
+                foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
                 {
                     CollectTodos(path, issues);
                 }

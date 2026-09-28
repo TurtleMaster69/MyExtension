@@ -314,6 +314,16 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-28 — F15 CodeIssuesFinder per-open DTE re-enumeration** (Lane: `bugfix`;
+  3 delegations, 0 VS boots, 0 iterations). `CodeIssuesFinder.GatherHits` re-enumerated
+  the whole solution's project files on EVERY open. Extracted a pure `ProjectFileCache`
+  (Get + Invalidate) and wired it into `GatherHits` with solution-change detection
+  (invalidate when `dte.Solution.FullName` changes). Telescope 81→84, NeoVisual 81,
+  all passing. (The "lazy/async TODO scan" half of the finding is deferred.)
+  **Change summary:** created `Telescope/ProjectFileCache.cs` (pure cache); rewired
+  `CodeIssuesFinder.GatherHits` (solution-change detection + `_fileCache.Get`); added 3
+  `Run_ProjectFileCache_*` tests. **If this regresses, look first at
+  `ProjectFileCache.Get` (the `_dirty` flag) and the `GatherHits` solution-change check.**
 - **2026-09-28 — F12 Display-keyed payload lookup loses same-named duplicates** (Lane:
   `bugfix`; 3 delegations, 0 VS boots, 0 iterations). The overlay mapped fzf-matched
   display lines back to payloads by display text (`GroupBy(...).ToDictionary(g => g.Key,
@@ -804,8 +814,8 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 > **2026-09-28 — COVERED-BY the Architecture consolidation plan** (see the Pending
 > queue first item + `docs/implementation_plan.md`): **F2, F3, F4, F6, F7, F11, F36,
 > F37, F38, F39, F40, F41, F44, F46** — do NOT double-execute these; the consolidation
-> plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F13, F14, F15, F43
-> (F22 + F12 were FIXED 2026-09-28 — see the Done section).
+> plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F13, F14, F43
+> (F22 + F12 + F15 were FIXED 2026-09-28 — see the Done section).
 
 ### Critical
 
@@ -865,8 +875,10 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 14. **F14 — Ctrl+N/P hijacked in every editor.** `PopupNavigation.cs:49` injects arrows
     with no popup-active check. Fix: re-add `ICompletionBroker.IsCompletionActive` gate.
 15. **F15 — CodeIssuesFinder per-open DTE re-enumeration + full-file scans.**
-    `CodeIssuesFinder.cs:71`. Fix: cache `ProjectFiles.Enumerate` per session in
-    `TelescopeController` (invalidate on solution change); lazy/async TODO scan.
+     `CodeIssuesFinder.cs:71`. Fix: cache `ProjectFiles.Enumerate` per session in
+     `TelescopeController` (invalidate on solution change); lazy/async TODO scan.
+     ✅ **FIXED 2026-09-28** — `ProjectFileCache` + solution-change detection (see Done
+     section; the lazy/async TODO scan half is deferred).
 16. **F16 — Harness assertions for known-bugs 1-3 still wrong; no Enter-storm fail-fast.** ✅ FIXED 2026-09-19
     (backlog-fixes item; see Done section). Applied: `key=E caret=4` + extra `w` tap,
     `key=Return mode=normal handled=True`, `results count=\d+`, `Assert-NoEnterStorm`

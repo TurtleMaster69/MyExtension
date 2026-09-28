@@ -314,6 +314,18 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-28 — F22 Leader state machine not extracted** (Lane: `bugfix`, lighter —
+  behavior-preserving refactor; 3 delegations, 0 VS boots, 0 iterations). Extracted the
+  leader-key sequence routing from `InputHandler` into a pure, dependency-free
+  `LeaderSequenceMatcher` (the `OverlayKeyHandler` pattern): leader-key start, sequence
+  building, binding match, prefix detection, abort. `InputHandler` delegates; the
+  `leader-binding executed: {sequence}` diagnostic is byte-identical. NeoVisual 74→81,
+  Telescope 77, all passing.
+  **Change summary:** created `MyExtension/LeaderSequenceMatcher.cs` (pure state machine +
+  `LeaderResult`/`LeaderResultKind`); rewired `InputHandler` (leader block → matcher
+  delegation, `IsLeaderActive`/`ResetSequence` delegate); added 7 `Run_LeaderMatcher_*`
+  tests. **If this regresses, look first at `LeaderSequenceMatcher.HandleKey` (the
+  Consume/Execute/Abort transitions) and the `leader-binding executed:` log site.**
 - **2026-09-28 — Architecture consolidation (5 lanes)** (Lane: `refactor`, unit-only,
   e2e deferred; ~20 delegations, 0 VS boots, 0 iterations). ~30 under-factored seams
   collapsed into target APIs across 5 lanes: L1 mechanical dedup (NativeMethods,
@@ -782,7 +794,7 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 > queue first item + `docs/implementation_plan.md`): **F2, F3, F4, F6, F7, F11, F36,
 > F37, F38, F39, F40, F41, F44, F46** — do NOT double-execute these; the consolidation
 > plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F12, F13, F14, F15,
-> F22, F43.
+> F43 (F22 was FIXED 2026-09-28 — see the Done section).
 
 ### Critical
 
@@ -854,6 +866,7 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 17. **F22 — Leader state machine not extracted.** `InputHandler.cs:210` — routing logic
      needs AsyncPackage + MEF + WindowManager to construct. Fix: pure
      (proposed) `LeaderSequenceMatcher`/`SimpleKeyBuilder` (the `OverlayKeyHandler` pattern).
+     ✅ **FIXED 2026-09-28** — `LeaderSequenceMatcher` extracted (see Done section).
 18. **F36 — Test runner copy-paste between the two unit suites.**
     `tests/Telescope.Tests/Program.cs:26`, `tests/NeoVisual.Tests/Program.cs:29`. Fix:
     one shared `<Compile Include>` source file.

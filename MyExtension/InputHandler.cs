@@ -21,9 +21,9 @@ namespace MyExtension
     ///     They are distinguished from leader sequences by the <c>+</c> in their key string.
     ///
     /// <para/>
-    /// <b>Leader state machine:</b> pressing the leader key sets <see cref="_leaderActive"/> and CPU
-    /// records subsequent keys until they match a sequence (or become an invalid prefix, which
-    /// resets). This is the classic "leader + prefix" input model reused from Vim/LazyVim.
+    /// <b>Leader state machine:</b> pressing the leader key sets <see cref="LeaderSequenceMatcher"/>
+    /// active and records subsequent keys until they match a sequence (or become an invalid prefix,
+    /// which resets). This is the classic "leader + prefix" input model reused from Vim/LazyVim.
     ///
     /// <para/>
     /// <b>Threading:</b> every branch ultimately touches VS state, so <see cref="HandleKey"/> must
@@ -47,18 +47,16 @@ namespace MyExtension
         private readonly TelescopeController _telescope;
         private readonly TelescopeLauncher _launcher;
 
-        // Leader-sequence state: the keys typed since the leader key, and whether a sequence is
-        // currently in progress. _leaderActive is volatile because the hook thread's cheap
-        // pre-filter reads it (GetIsLeaderActive) while HandleKey mutates it on the UI thread.
-        private readonly List<Keys> _currentSequence = new();
-        private volatile bool _leaderActive = false;
+        // Leader-sequence state machine (pure, unit-tested): owns the leader key start, sequence
+        // building, binding match, prefix detection, and abort.
+        private readonly LeaderSequenceMatcher _leaderMatcher;
 
         /// <summary>
-        /// Thread-safe snapshot of whether a leader sequence is in progress. Read only by the
-        /// hook thread's pre-filter: while true, every key must marshal to the UI thread so the
-        /// sequence can be continued or broken there.
+        /// Snapshot of whether a leader sequence is in progress. Read only by the hook thread's
+        /// cheap pre-filter: while true, every key must marshal to the UI thread so the sequence
+        /// can be continued or broken there.
         /// </summary>
-        public bool IsLeaderActive => _leaderActive;
+        public bool IsLeaderActive => _leaderMatcher.IsActive;
 
         /// <summary>
         /// True when the current tool window (in normal mode) has action keys beyond hjkl (e.g.
@@ -120,6 +118,7 @@ namespace MyExtension
             var config = KeybindingConfig.Load();
             _leaderKey = config.LeaderKey;
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
+            _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
         }
 
         /// <summary>
@@ -315,7 +314,7 @@ namespace MyExtension
                             return true;
                         }
 
-                        if (!_leaderActive &&
+                        if (!_leaderMatcher.IsActive &&
                             (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L ||
                              controller.ActionKeys.Contains(key)) &&
                             controller.TryMove(key))
@@ -326,47 +325,21 @@ namespace MyExtension
                 }
             }
 
-            // 1. Leader key pressed: begin a sequence, unless the user is typing — then Space
-            //    types a literal space. "Typing" means a tool window in input mode, or the VsVim
-            //    editor in insert/replace mode.
-            if (key == _leaderKey && !ctrl && !shift && !alt)
+            // 1. Leader key pressed / sequence building: delegate to the pure leader state machine.
+            //    "Typing" means a tool window in input mode, or the VsVim editor in insert/replace
+            //    mode — then the leader key types a literal space instead of starting a sequence.
+            var result = _leaderMatcher.HandleKey(key, ctrl, shift, alt, IsTyping());
+            switch (result.Kind)
             {
-                if (IsTyping())
-                {
-                    return false;
-                }
-
-                _leaderActive = true;
-                _currentSequence.Clear();
-                return true; // consume the leader key itself
-            }
-
-            // 2. Building a leader sequence: append the key and match against leader bindings,
-            //    using prefix detection to keep waiting for multi-key sequences like "f f".
-            if (_leaderActive)
-            {
-                _currentSequence.Add(key);
-
-                string sequence = string.Join(",", _currentSequence.Select(KeyToString));
-
-                if (_leaderBindings.TryGetValue(sequence, out var action))
-                {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding executed: {sequence}");
-                    action();
-                    ResetSequence();
+                case LeaderResultKind.PassThrough:
+                    break;
+                case LeaderResultKind.Consume:
                     return true;
-                }
-
-                bool isPrefix = _leaderBindings.Keys.Any(k => k.StartsWith(sequence + ",", StringComparison.OrdinalIgnoreCase));
-
-                if (!isPrefix)
-                {
-                    // Typed something that matches no sequence and prefixes none: abort.
-                    ResetSequence();
+                case LeaderResultKind.Execute:
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding executed: {result.Sequence}");
+                    return true;
+                case LeaderResultKind.Abort:
                     return false;
-                }
-
-                return true; // still waiting for more keys in the sequence
             }
 
             // 3. Simple modifier shortcut (e.g. Ctrl+H), matched directly against the key name.
@@ -434,8 +407,7 @@ namespace MyExtension
 
         private void ResetSequence()
         {
-            _leaderActive = false;
-            _currentSequence.Clear();
+            _leaderMatcher.Reset();
         }
 
         /// <summary>

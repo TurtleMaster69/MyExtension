@@ -823,5 +823,133 @@ namespace NeoVisual.Tests
             };
             Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
+
+        // ================================================================
+        // LeaderSequenceMatcher — pure leader state machine (F22)
+        // RED: `LeaderSequenceMatcher`/`LeaderResult`/`LeaderResultKind` don't exist -> compile error
+        // ================================================================
+
+        public static void Run_LeaderMatcher_LeaderKeyStartsSequence()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            var result = matcher.HandleKey(Keys.Space, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.Consume, result.Kind);
+            Assert.True(matcher.IsActive, "leader key starts a sequence");
+        }
+
+        public static void Run_LeaderMatcher_LeaderKeyWhileTypingPassesThrough()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            var result = matcher.HandleKey(Keys.Space, false, false, false, true);
+
+            Assert.Equal(LeaderResultKind.PassThrough, result.Kind);
+            Assert.False(matcher.IsActive, "a typing leader key does not start a sequence");
+        }
+
+        public static void Run_LeaderMatcher_SingleKeyBindingExecutes()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var result = matcher.HandleKey(Keys.F, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.Execute, result.Kind);
+            Assert.Equal<string?>("F", result.Sequence);
+            Assert.Equal(1, executed);
+            Assert.False(matcher.IsActive, "sequence ends after execution");
+        }
+
+        public static void Run_LeaderMatcher_MultiKeySequence()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F,F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var first = matcher.HandleKey(Keys.F, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Consume, first.Kind);
+            Assert.True(matcher.IsActive, "a prefix keeps the sequence alive");
+
+            var second = matcher.HandleKey(Keys.F, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Execute, second.Kind);
+            Assert.Equal<string?>("F,F", second.Sequence);
+            Assert.Equal(1, executed);
+            Assert.False(matcher.IsActive, "sequence ends after execution");
+        }
+
+        public static void Run_LeaderMatcher_UnknownSequenceAborts()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var result = matcher.HandleKey(Keys.X, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.Abort, result.Kind);
+            Assert.False(matcher.IsActive, "an unknown sequence aborts and clears state");
+            Assert.Equal(0, executed);
+        }
+
+        public static void Run_LeaderMatcher_ResetClearsState()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            Assert.True(matcher.IsActive, "sequence started");
+
+            matcher.Reset();
+
+            Assert.False(matcher.IsActive, "Reset clears the active sequence");
+            // After reset, a non-leader key passes through (no stale sequence state).
+            var result = matcher.HandleKey(Keys.F, false, false, false, false);
+            Assert.Equal(LeaderResultKind.PassThrough, result.Kind);
+            Assert.Equal(0, executed);
+        }
+
+        public static void Run_LeaderMatcher_NonLeaderKeyPassesThrough()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            var result = matcher.HandleKey(Keys.F, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.PassThrough, result.Kind);
+            Assert.False(matcher.IsActive, "inactive matcher stays inactive");
+            Assert.Equal(0, executed);
+        }
     }
 }

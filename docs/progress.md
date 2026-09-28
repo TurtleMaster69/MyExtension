@@ -314,6 +314,17 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-28 — F12 Display-keyed payload lookup loses same-named duplicates** (Lane:
+  `bugfix`; 3 delegations, 0 VS boots, 0 iterations). The overlay mapped fzf-matched
+  display lines back to payloads by display text (`GroupBy(...).ToDictionary(g => g.Key,
+  g => g.First())`), so two same-named entries (e.g. two `Program.cs`) collapsed to the
+  first — the second became a null-payload entry that silently did nothing. Extracted a
+  pure `ResultMapper.MapBack` (stable-ordinal consumption, preserves duplicates).
+  Telescope 77→81, NeoVisual 81, all passing.
+  **Change summary:** created `Telescope/ResultMapper.cs` (pure `MapBack`); rewired
+  `TelescopeOverlay.FilterAndUpdateAsync` to use it; added 4 `Run_ResultMapper_*` tests.
+  **If this regresses, look first at `ResultMapper.MapBack` (the consumed-index
+  duplicate handling) and the `FilterAndUpdateAsync` call site.**
 - **2026-09-28 — F22 Leader state machine not extracted** (Lane: `bugfix`, lighter —
   behavior-preserving refactor; 3 delegations, 0 VS boots, 0 iterations). Extracted the
   leader-key sequence routing from `InputHandler` into a pure, dependency-free
@@ -793,8 +804,8 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 > **2026-09-28 — COVERED-BY the Architecture consolidation plan** (see the Pending
 > queue first item + `docs/implementation_plan.md`): **F2, F3, F4, F6, F7, F11, F36,
 > F37, F38, F39, F40, F41, F44, F46** — do NOT double-execute these; the consolidation
-> plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F12, F13, F14, F15,
-> F43 (F22 was FIXED 2026-09-28 — see the Done section).
+> plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F13, F14, F15, F43
+> (F22 + F12 were FIXED 2026-09-28 — see the Done section).
 
 ### Critical
 
@@ -845,8 +856,9 @@ F17-F21, F23-F35, F45 — stayed report-only.)
     `TelescopeOverlay.cs:410-445` (payload-type hardcoded preview/line-jump; sync
     `GetCandidates`). Fix: preview/open seam on IFinder; async/lazy candidate gathering.
 12. **F12 — Display-keyed payload lookup loses same-named duplicates.** `TelescopeOverlay.cs:357`
-    → null-payload entries that silently do nothing. Fix: map filtered lines back by
-    stable ordinal/id, not display text.
+     → null-payload entries that silently do nothing. Fix: map filtered lines back by
+     stable ordinal/id, not display text.
+     ✅ **FIXED 2026-09-28** — `ResultMapper.MapBack` (see Done section).
 13. **F13 — FileFinder re-implements the shared DTE walker.** `FileFinder.cs:116-190` vs
     `ProjectFiles.cs:31-103` near-verbatim. Fix: `GetCandidates` maps
     `ProjectFiles.Enumerate(dte)`.

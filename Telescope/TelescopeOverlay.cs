@@ -384,12 +384,7 @@ namespace Telescope
                     return;
                 }
 
-                var byDisplay = snapshot
-                    .GroupBy(x => x.Display, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-                var items = matched
-                    .Select(m => byDisplay.TryGetValue(m, out var entry) ? entry : new FinderEntry(m))
-                    .ToList();
+                var items = ResultMapper.MapBack(matched, snapshot);
 
                 _results = items;
                 _keyHandler.SetResults(items.Count);

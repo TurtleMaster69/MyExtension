@@ -1,55 +1,45 @@
-# F22 — Leader state machine not extracted (Architecture review backlog)
+# F12 — Display-keyed payload lookup loses same-named duplicates (Architecture review backlog)
 
-> **Lane: bugfix (lighter — behavior-preserving refactor, unit-level RED, no VS boot).**
-> F22 from `docs/progress.md` (Architecture review backlog, minor): the leader-key
-> sequence routing in `InputHandler` (`InputHandler.cs:329-370`) needs AsyncPackage +
-> MEF + WindowManager to construct, so it is not unit-testable. Fix: extract a pure,
-> dependency-free `LeaderSequenceMatcher` (the `OverlayKeyHandler` pattern) that owns
-> the leader state machine (leader-key start, sequence building, binding match, prefix
-> detection, abort). Behavior-preserving: NO `[Telescope]`/`[NeoVisual]`/`[Hook]`
-> structured-log literal change (M-M7 NOT triggered — no diagnostic added/changed).
+> **Lane: bugfix (unit-level RED, no VS boot).** F12 from `docs/progress.md`
+> (Architecture review backlog, major): `TelescopeOverlay.cs` maps the fzf-matched
+> display lines back to the original `FinderEntry` payloads by display text
+> (`GroupBy(x => x.Display).ToDictionary(g => g.Key, g => g.First())`), so two entries
+> with the SAME display text (e.g. two `Program.cs` files in different folders) collapse
+> to the FIRST entry — the second becomes a null-payload `new FinderEntry(m)` that
+> silently does nothing when selected. Fix: map filtered lines back by stable ordinal
+> (each matched display string consumes the next unconsumed entry with that display),
+> extracted into a pure, dependency-free `ResultMapper` (the `OverlayKeyHandler`
+> pattern). NO `[Telescope]`/`[NeoVisual]`/`[Hook]` structured-log literal change
+> (M-M7 NOT triggered).
 
 ## Goal
 
-Make the leader-key sequence routing unit-testable by extracting it into a pure
-state machine, without changing any observable behavior or diagnostic.
+Preserve same-named duplicate entries when mapping fzf-matched display lines back to
+their payloads, by extracting the mapping into a pure, unit-testable `ResultMapper`.
 
 ## Approach
 
-1. **CREATE `MyExtension/LeaderSequenceMatcher.cs`** — a pure, dependency-free state
-   machine (namespace `MyExtension`):
-   - `internal sealed class LeaderSequenceMatcher`
-   - Fields: `private readonly Keys _leaderKey; private readonly IReadOnlyDictionary<string, Action> _bindings; private bool _active; private readonly List<Keys> _sequence = new List<Keys>();`
-   - `public bool IsActive => _active;`
-   - `public LeaderResult HandleKey(Keys key, bool ctrl, bool shift, bool alt, bool isTyping)`:
-     1. `if (key == _leaderKey && !ctrl && !shift && !alt)`: `if (isTyping) return LeaderResult.PassThrough;` else `_active = true; _sequence.Clear(); return LeaderResult.Consume;`
-     2. `if (_active)`: `_sequence.Add(key); string sequence = string.Join(",", _sequence.Select(KeyToString));` — if `_bindings.TryGetValue(sequence, out var action)` → `_active = false; _sequence.Clear(); return LeaderResult.Execute(action, sequence);` — else `bool isPrefix = _bindings.Keys.Any(k => k.StartsWith(sequence + ",", StringComparison.OrdinalIgnoreCase));` — if `!isPrefix` → `_active = false; _sequence.Clear(); return LeaderResult.Abort;` — else `return LeaderResult.Consume;`
-     3. else `return LeaderResult.PassThrough;`
-   - `public void Reset()` → `_active = false; _sequence.Clear();`
-   - `private static string KeyToString(Keys key)` — the current `InputHandler.KeyToString` logic moved verbatim.
-   - `internal enum LeaderResultKind { PassThrough, Consume, Execute, Abort }` + `internal readonly struct LeaderResult { public LeaderResultKind Kind { get; } public Action? Action { get; } public string? Sequence { get; } ... static factories PassThrough/Consume/Execute(Action, string)/Abort }`.
-2. **MODIFY `MyExtension/InputHandler.cs`**:
-   - Replace `_leaderActive` (bool) + `_currentSequence` (List<Keys>) + the leader routing block (lines 329-370) with a `private readonly LeaderSequenceMatcher _leaderMatcher;` field (constructed with `_leaderKey` + `_leaderBindings`).
-   - `public bool IsLeaderActive => _leaderMatcher.IsActive;` (the hook's pre-filter reads it).
-   - `ResetSequence()` → `_leaderMatcher.Reset();`.
-   - The leader block becomes: `var result = _leaderMatcher.HandleKey(key, ctrl, shift, alt, IsTyping()); switch (result.Kind) { case LeaderResultKind.PassThrough: break; case LeaderResultKind.Consume: return true; case LeaderResultKind.Execute: NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding executed: {result.Sequence}"); result.Action!(); return true; case LeaderResultKind.Abort: return false; }` — then fall through to the simple-shortcut block (step 3) unchanged.
-   - Delete the now-unused `KeyToString` from InputHandler (moved to the matcher).
-   - The `IsTyping()` call is passed into `HandleKey` (the matcher is pure — it does not call `IsTyping` itself).
-3. **Tests** (in `tests/NeoVisual.Tests/Program.cs`, RED: `LeaderSequenceMatcher` doesn't exist → compile error):
-   - `Run_LeaderMatcher_LeaderKeyStartsSequence` — `HandleKey(leader, false,false,false, false)` → Consume, `IsActive` true.
-   - `Run_LeaderMatcher_LeaderKeyWhileTypingPassesThrough` — `HandleKey(leader, false,false,false, true)` → PassThrough, `IsActive` false.
-   - `Run_LeaderMatcher_SingleKeyBindingExecutes` — leader + binding key → Execute with the action + the sequence string.
-   - `Run_LeaderMatcher_MultiKeySequence` — leader + "f" (a prefix) → Consume; + "f" → Execute.
-   - `Run_LeaderMatcher_UnknownSequenceAborts` — leader + unknown key → Abort, `IsActive` false.
-   - `Run_LeaderMatcher_ResetClearsState` — after a started sequence, `Reset()` → `IsActive` false.
-   - `Run_LeaderMatcher_NonLeaderKeyPassesThrough` — non-leader key when inactive → PassThrough.
-   - Use a test-local `Dictionary<string, Action>` with a captured counter to assert the executed action.
+1. **CREATE `Telescope/ResultMapper.cs`** — a pure, dependency-free static class
+   (namespace `Telescope`):
+   - `public static IReadOnlyList<FinderEntry> MapBack(IReadOnlyList<string> matched, IReadOnlyList<FinderEntry> snapshot)`:
+     - Build `var byDisplay = snapshot.Select((entry, index) => (entry, index)).GroupBy(x => x.entry.Display, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);`
+     - `var consumed = new HashSet<int>(); var items = new List<FinderEntry>();`
+     - For each `m` in `matched`: if `byDisplay.TryGetValue(m, out var candidates)`, take the first candidate whose index is NOT in `consumed` (add it to `consumed`), and add its `entry`; if none left, add `new FinderEntry(m)` (the null-payload fallback, matching the current behavior for unknown strings). Else add `new FinderEntry(m)`.
+     - Return `items`.
+   - This preserves duplicates: two matched "Program.cs" strings consume the two distinct entries with that display.
+2. **MODIFY `Telescope/TelescopeOverlay.cs`** (`FilterAndUpdateAsync`, lines 387-392): replace the inline `byDisplay` GroupBy/ToDictionary + Select with `var items = ResultMapper.MapBack(matched, snapshot);`. The rest of the method (token checks, `_results = items`, `_keyHandler.SetResults`, `RenderResults`) unchanged.
+3. **Tests** (in `tests/Telescope.Tests/Program.cs`, RED: `ResultMapper` doesn't exist → compile error):
+   - `Run_ResultMapper_DuplicateDisplayPreserved` — snapshot with two entries sharing a display (e.g. two `Program.cs` with different payloads), matched = ["Program.cs", "Program.cs"] → both entries returned with their distinct payloads (the second is NOT a null-payload `FinderEntry`).
+   - `Run_ResultMapper_UniqueDisplayMapped` — snapshot with distinct displays, matched = the displays → each maps to its entry.
+   - `Run_ResultMapper_UnknownStringNullPayload` — matched contains a string not in the snapshot → a null-payload `FinderEntry` with that display.
+   - `Run_ResultMapper_OrderPreserved` — matched order is preserved in the output.
+   - Use `FinderEntry` with `FileHit` payloads (the Lane 3 hit model) to assert the payload identity.
 
 ## Acceptance criteria
 
-- `Run_LeaderMatcher_*` (7) pass — RED before (compile error: `LeaderSequenceMatcher` doesn't exist), GREEN after.
-- `dotnet run --project tests/NeoVisual.Tests` → **81 pass** (74 + 7); `dotnet run --project tests/Telescope.Tests` → **77 pass** (unchanged).
-- No `[Telescope]`/`[NeoVisual]`/`[Hook]` structured-log literal change (`leader-binding executed: {sequence}` byte-identical).
+- `Run_ResultMapper_*` (4) pass — RED before (compile error: `ResultMapper` doesn't exist), GREEN after.
+- `dotnet run --project tests/Telescope.Tests` → **81 pass** (77 + 4); `dotnet run --project tests/NeoVisual.Tests` → **81 pass** (unchanged).
+- No `[Telescope]`/`[NeoVisual]`/`[Hook]` structured-log literal change.
 - Doc-ref diff gate: no NEW unresolved backticked refs.
 
 ## Known-RED allowlist
@@ -60,9 +50,9 @@ None.
 
 | failing test | implicated steps | expected pass signal |
 |---|---|---|
-| `Run_LeaderMatcher_*` (RED: `LeaderSequenceMatcher` doesn't exist) | BP-1 | GREEN after the merge; `leader-binding executed: {sequence}` unchanged |
-| `tests/NeoVisual.Tests` (81) | BP-1 | all existing `Run_*` pass |
-| `tests/Telescope.Tests` (77) | BP-1 | all existing `Run_*` pass (no Telescope code touched) |
+| `Run_ResultMapper_*` (RED: `ResultMapper` doesn't exist) | BP-1 | GREEN after the merge; duplicate displays preserve both payloads |
+| `tests/Telescope.Tests` (81) | BP-1 | all existing `Run_*` pass |
+| `tests/NeoVisual.Tests` (81) | BP-1 | all existing `Run_*` pass (no NeoVisual code touched) |
 | A3 log-literal check (`git diff`) | BP-1 | no `[Telescope]`/`[NeoVisual]`/`[Hook]` structured-log literal changed |
 
 ## Execution Log

@@ -1376,5 +1376,89 @@ namespace Telescope.Tests
                 try { Directory.Delete(dir, recursive: true); } catch { }
             }
         }
+
+        // ================================================================
+        // ResultMapper — display-keyed payload lookup that preserves
+        // same-named duplicates (F12)
+        // RED: `Telescope.ResultMapper` does not exist yet -> compile error
+        // ================================================================
+
+        public static void Run_ResultMapper_DuplicateDisplayPreserved()
+        {
+            // Two entries share the display "Program.cs" but carry DIFFERENT FileHit payloads
+            // (two Program.cs files in different folders). The mapper must map each matched
+            // "Program.cs" to a DISTINCT entry: the second must NOT collapse to the first
+            // (the current GroupBy/ToDictionary(g => g.First()) bug) nor become a null-payload
+            // FinderEntry.
+            var first = new FileHit(@"C:\p\src\Program.cs", 0);
+            var second = new FileHit(@"C:\p\tests\Program.cs", 0);
+            var snapshot = new List<FinderEntry>
+            {
+                new FinderEntry("Program.cs", first),
+                new FinderEntry("Program.cs", second),
+            };
+
+            var items = ResultMapper.MapBack(new[] { "Program.cs", "Program.cs" }, snapshot);
+
+            Assert.Equal(2, items.Count);
+            Assert.Equal("Program.cs", items[0].Display);
+            Assert.Equal("Program.cs", items[1].Display);
+            Assert.True(ReferenceEquals(first, items[0].Payload), "first matched 'Program.cs' maps to the first entry's payload");
+            Assert.True(ReferenceEquals(second, items[1].Payload), "second matched 'Program.cs' maps to the SECOND entry's payload (not the first, not null)");
+        }
+
+        public static void Run_ResultMapper_UniqueDisplayMapped()
+        {
+            var a = new FileHit(@"C:\p\Alpha.cs", 0);
+            var b = new FileHit(@"C:\p\Beta.cs", 0);
+            var snapshot = new List<FinderEntry>
+            {
+                new FinderEntry("Alpha.cs", a),
+                new FinderEntry("Beta.cs", b),
+            };
+
+            var items = ResultMapper.MapBack(new[] { "Alpha.cs", "Beta.cs" }, snapshot);
+
+            Assert.Equal(2, items.Count);
+            Assert.True(ReferenceEquals(a, items[0].Payload), "Alpha.cs maps to its entry's payload");
+            Assert.True(ReferenceEquals(b, items[1].Payload), "Beta.cs maps to its entry's payload");
+        }
+
+        public static void Run_ResultMapper_UnknownStringNullPayload()
+        {
+            var a = new FileHit(@"C:\p\Alpha.cs", 0);
+            var snapshot = new List<FinderEntry> { new FinderEntry("Alpha.cs", a) };
+
+            var items = ResultMapper.MapBack(new[] { "Ghost.cs" }, snapshot);
+
+            Assert.Equal(1, items.Count);
+            Assert.Equal("Ghost.cs", items[0].Display);
+            Assert.True(items[0].Payload == null, "an unknown matched string yields a null-payload FinderEntry");
+        }
+
+        public static void Run_ResultMapper_OrderPreserved()
+        {
+            var a = new FileHit(@"C:\p\A.cs", 0);
+            var b = new FileHit(@"C:\p\B.cs", 0);
+            var c = new FileHit(@"C:\p\C.cs", 0);
+            var snapshot = new List<FinderEntry>
+            {
+                new FinderEntry("A.cs", a),
+                new FinderEntry("B.cs", b),
+                new FinderEntry("C.cs", c),
+            };
+
+            // fzf returns matches in its own order; the mapper must preserve THAT order, not the
+            // snapshot order.
+            var items = ResultMapper.MapBack(new[] { "C.cs", "A.cs", "B.cs" }, snapshot);
+
+            Assert.Equal(3, items.Count);
+            Assert.Equal("C.cs", items[0].Display);
+            Assert.Equal("A.cs", items[1].Display);
+            Assert.Equal("B.cs", items[2].Display);
+            Assert.True(ReferenceEquals(c, items[0].Payload), "C.cs maps to its payload");
+            Assert.True(ReferenceEquals(a, items[1].Payload), "A.cs maps to its payload");
+            Assert.True(ReferenceEquals(b, items[2].Payload), "B.cs maps to its payload");
+        }
     }
 }

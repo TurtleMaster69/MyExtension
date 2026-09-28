@@ -13,13 +13,18 @@ reads at the start of every loop iteration.
 
 - **In progress:** none — the **Architecture consolidation (5 lanes)** reached GREEN
   2026-09-28 (unit-only lane; the e2e gates are queued in `e2e-queue.md`, E2E-AC-1..5,
-  status QUEUED). No known-RED e2e scenario remains.
-- **Next up:** the still-open Architecture review backlog findings (F5, F8, F9, F12,
-  F13, F14, F15, F22, F43 — the ones NOT subsumed by the consolidation) are the next
-  candidates. Also pending: the Telescope `fzf` finder (DEFERRED, scope TBD) and the
-  user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop
-  starts it). See the Pending queue + User-requested features + Architecture review
-  backlog sections below.
+  status QUEUED). Also GREEN 2026-09-28: the KeyInjection.SimulateOnly bugfix, F22
+  (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache). No known-RED e2e
+  scenario remains.
+- **Next up:** the still-open Architecture review backlog findings (F5, F8, F9, F13,
+  F14, F43 — the ones NOT subsumed by the consolidation and not yet fixed) are the next
+  candidates. **Blockers on this machine (no VS Experimental Instance boot):** F5/F14
+  are no-seam (VS-coupled, no hermetic unit surface), F9 adds a diagnostic (feature
+  lane, needs e2e RED booting VS), F13 is a no-seam dedup (no behavior change), F8 is a
+  perf fix with no observable behavior change, F43 is not RED-provable (fzf present).
+  Also pending: the Telescope `fzf` finder (DEFERRED, scope TBD) and the user-requested
+  features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts it). See the
+  Pending queue + User-requested features + Architecture review backlog sections below.
 
 ## Decisions (append-only; newest on top)
 

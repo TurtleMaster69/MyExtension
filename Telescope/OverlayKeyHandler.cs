@@ -44,6 +44,16 @@ namespace Telescope
     }
 
     /// <summary>
+    /// Where the insert-mode caret should be placed when entering insert mode.
+    /// </summary>
+    internal enum CaretPlacement
+    {
+        Current, // i: keep the caret where it is (clamped to the text)
+        End,     // a: caret at the end of the text
+        Start,   // I: caret at the start of the text
+    }
+
+    /// <summary>
     /// Dependency-free state machine for the Telescope overlay's vim-style key handling:
     /// insert/normal mode, j/k/gg/G selection movement, and which key maps to which action.
     /// Extracted from <see cref="TelescopeOverlay"/> so navigation and mode behavior can be
@@ -162,9 +172,9 @@ namespace Telescope
                     return OverlayAction.MoveToLast;
 
                 case OverlayKey.I:
-                    return EnterInsertMode(0);
+                    return EnterInsertMode(CaretPlacement.Current);
                 case OverlayKey.A:
-                    return EnterInsertMode(1);
+                    return EnterInsertMode(CaretPlacement.End);
 
                 default:
                     // Unrecognized keys cancel a pending gg and fall through.
@@ -173,15 +183,15 @@ namespace Telescope
             }
         }
 
-        private OverlayAction EnterInsertMode(int caretPlacement)
+        internal OverlayAction EnterInsertMode(CaretPlacement placement)
         {
             _isNormalMode = false;
             _gPending = false;
-            switch (caretPlacement)
+            switch (placement)
             {
-                case 1:
+                case CaretPlacement.End:
                     return OverlayAction.EnterInsertAppend;
-                case 2:
+                case CaretPlacement.Start:
                     return OverlayAction.EnterInsertStart;
                 default:
                     return OverlayAction.EnterInsert;

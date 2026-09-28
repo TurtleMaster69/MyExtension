@@ -14,6 +14,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestRunner.cs" Link="TestRunner.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The Telescope project references Microsoft.VisualStudio.SDK with ExcludeAssets="runtime",
          so the DTE/EnvDTE interop assemblies are NOT copied to output. The FileFinder tests touch
          types that derive from EnvDTE (DTE, Project), so pull the interop assembly in here for

@@ -12,7 +12,8 @@ navigation**, a **leader-key (Space) keyboard binding system**, a
 **Telescope-style fuzzy-finder overlay**, and **vim-mode tool-window controllers**
 to Visual Studio. It is a single `AsyncPackage` (`MyExtensionPackage`) that
 installs a Win32 low-level keyboard hook on load and disposes it on package
-dispose. It is opened via `MyExtension.slnx` and consists of three projects:
+dispose. It is opened via `MyExtension.slnx` and consists of two projects (plus
+two separate test projects):
 
 | Project | Role |
 |---------|------|
@@ -20,8 +21,8 @@ dispose. It is opened via `MyExtension.slnx` and consists of three projects:
 | `Telescope/Telescope.csproj` | The Telescope library: WPF modal overlay, pure vim state machines, fzf filter, finders, syntax highlighter, logging. |
 
 Target framework: **net472** (VS Community 17.14+, amd64). `LangVersion` 14,
-`Nullable` enabled. `MyExtension.slnx` declares four projects (the two test
-projects above are separate).
+`Nullable` enabled. `MyExtension.slnx` declares four projects: the two above
+plus `tests/Telescope.Tests` and `tests/NeoVisual.Tests`.
 
 ## 2. Architecture
 
@@ -61,10 +62,10 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g select-first-source-file, h/l fold expand/collapse, j/k navigate, i focuses the search box. |
 | `MyExtension/ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam: `HierarchyNode` + `FirstSourceFilePath` (physical-file/folder Kind-GUID classification, folder recursion) used by `SolutionExplorerController`'s `g` action. |
 | `MyExtension/BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode. |
-| `MyExtension/CardinalMovment/WindowMatrix.cs` | Core navigation algorithm. |
-| `MyExtension/CardinalMovment/WindowControlAdapter.cs` | Bridges `IVsWindowFrame` (IVs shell) to `EnvDTE.Window` (DTE). |
-| `MyExtension/CardinalMovment/IVsFrameView.cs` | Wraps `IVsWindowFrame` (+ `IVsWindowFrame4`) for screen-rect / visibility. |
-| `MyExtension/CardinalMovment/IVsUIWindowFrameExtractor.cs` | Enumerates tool + document window frames from `IVsUIShell`. |
+| `MyExtension/CardinalMovment/WindowMatrix.cs` | Core navigation algorithm (thin COM shell over `WindowNavigationEngine`). |
+| `MyExtension/CardinalMovment/WindowAdapter.cs` | One frame+DTE+rect type: `Rect`, `DteWindow`, `Activate`, `AutoHides`, `IsOnScreen`, static `Enumerate`/`FindActive`/`LinkedTo`. |
+| `MyExtension/CardinalMovment/WindowNavigationEngine.cs` | Pure `SelectTarget(active, candidates, direction, settings)` single-pass pipeline. |
+| `MyExtension/CardinalMovment/NavigationSettings.cs` | DPI divide settings (`FromSystemDpi`/`FromDpi`). |
 | `MyExtension/CardinalMovment/UtilityMethods.cs` | DTE / `IVsUIShell` service access and window comparison/linking helpers. |
 | `MyExtension/CardinalMovment/CardinalNavigationConstants.cs` | Direction chars, DPI/divide tuning constants. |
 | `MyExtension/CardinalMovment/RectCoordinate.cs` | Simple int rect value object. |
@@ -80,28 +81,36 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/CodeIssue.cs` | Issue row model. |
 | `Telescope/SyntaxHighlighter.cs` | Preview syntax tokenizer → colored runs. |
 | `Telescope/ResultsFormatter.cs` | Formats candidate results for the list. |
-| `Telescope/TelescopeFinder.cs` | Finder base/registry abstraction. |
-| `Telescope/NeoVisualLog.cs`, `LogFileWriter.cs`, `NeoVisualTraceListener.cs` | Per-run two-file logs (`*-exp.log`, `*-main.log`). |
+| `Telescope/TelescopeFinder.cs` | `IFinder` abstraction + `FinderEntry` registry. |
+| `Telescope/FinderBase.cs` | `FinderBase<THit>` — shared gather/open pipeline for the finders. |
+| `Telescope/NeoVisualLog.cs`, `LogFileWriter.cs`, `NeoVisualTraceListener.cs`, `DiagnosticLog.cs` | Per-run two-file logs (`*-exp.log`, `*-main.log`) + the `[Telescope]`/`[NeoVisual]`/`[Hook]` prefix constants. |
 
 **Note:** the source folder is spelled `CardinalMovment` (intentional typo); the
 namespace remains `CardinalNavigation`. Never "fix" the folder spelling.
 
+**Project layering (decision 2026-09-28):** the host (`MyExtension`) depends on
+`Telescope` for core infrastructure — `NeoVisualLog` (the extension-wide logger),
+`TelescopeController`, and `DiagnosticLog` — and `Telescope.csproj` is itself
+VS-coupled (VS SDK + WPF overlay). Only `OverlayKeyHandler`/`TextMotionNavigator`/
+`FzfFilter`/`LogFileWriter` are VS-free. This seam is **accepted and documented**:
+new VS-coupled code goes in `MyExtension`; new pure logic may go in `Telescope`.
+Do NOT grow more VS-coupled code inside the "library" project.
+
 ### 2.3 Cardinal navigation algorithm (`WindowMatrix`)
 
-`NavigateInDirection` → `ReduceWindowsAndSelectActive`, in order:
+`NavigateInDirection` → `WindowNavigationEngine.SelectTarget(active, candidates,
+direction, settings)`, which runs a single-pass pipeline over the candidate rects:
 
-1. `RemoveHiddenOrTabbedWindows()` — drop windows at rect `0,0,0,0`.
-2. `RemoveWindowsInWrongDirection(direction)` — keep only windows strictly in the
-   requested direction.
-3. `RemoveWindowsNotAligned(direction)` — axis overlap with the active window.
-4. `RemoveWindowsByClosestAdjacency(direction)` — nearest window within the DPI divide.
-5. `SortByLargestAdjacency(direction)` — tie-break by largest shared edge.
-6. Activate `m_ActiveWindows.First()`.
+1. Drop empty rects (`0,0,0,0`).
+2. Keep only windows strictly in the requested direction.
+3. Keep only windows axis-aligned with the active window.
+4. Among the survivors, pick the max-adjacency window within the DPI divide of the
+   minimum gap (ties broken by last-in-list order).
 
-All four "Remove..." steps are direction-parameterized with a local
-`filterFunction`. Tune DPI-scaled constants in `CardinalNavigationConstants`, not
-raw pixels. The algorithm currently takes only the **closest** window (no
-chained-movement behavior).
+`WindowMatrix` is a thin COM shell: it enumerates/pairs the frames, snapshots the
+rects, calls `SelectTarget`, and activates the winner. Tune DPI-scaled constants in
+`CardinalNavigationConstants`, not raw pixels. The algorithm currently takes only
+the **closest** window (no chained-movement behavior).
 
 ### 2.4 Tool-window controller pattern
 
@@ -181,19 +190,23 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **56 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **77 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
-  (`FzfFilter`), file open (`FileFinder`), results formatting, log writer,
-  preview-pane vim motions (`TextMotionNavigator`), syntax highlighting
-  (`SyntaxHighlighter`), prompt motions, references finder
+  (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
+  writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
+  syntax highlighting (`SyntaxHighlighter`), prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
-  implementation finder (`ImplementationFinder`/`ImplementationHit`).
-- `dotnet run --project tests/NeoVisual.Tests` — **31 tests**. Keybinding parsing
+  implementation finder (`ImplementationFinder`/`ImplementationHit`), the finder
+  base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`).
+- `dotnet run --project tests/NeoVisual.Tests` — **74 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
   re-entry guard (`InjectedKeyGuard`), the pure Explorer tree-walk seam
-  (`HierarchyResolver`), `DistinctBy`, `RectCoordinate`.
+  (`HierarchyResolver`), `DistinctBy`, the shared vim-motion engine
+  (`TextMotionHelper`), the action-table controllers (`ActionKeys`), the focus
+  guard (`FocusGuard`), and the navigation engine (`RectCoordinate`,
+  `NavigationSettings`, `WindowNavigationEngine`).
 
 `InternalsVisibleTo` is set for these assemblies. Extract pure logic into
 dependency-free classes (the `OverlayKeyHandler` / `TextMotionNavigator` pattern) so
@@ -315,7 +328,7 @@ The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
   with read/write access from Roslyn find-references; preview jumps to the
   reference line; Enter opens the file at the line.
 - Grep finder (`Space+F G`): query-driven search of the solution's project
-  files (`IQueryFinder` seam + ~200ms debounce, fzf skipped for query finders);
+  files (`IsQueryDriven` seam + ~200ms debounce, fzf skipped for query finders);
   preview jumps to the hit line; Enter opens the file at the line.
 - Implementation finder (`Space+F I`): implementations/overrides of the symbol
   at the caret via Roslyn `FindImplementationsAsync` (first in-source declaring
@@ -330,7 +343,7 @@ The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (56) and
-  `dotnet run --project tests/NeoVisual.Tests` (31).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (77) and
+  `dotnet run --project tests/NeoVisual.Tests` (74).
 - Live E2E: `pwsh tools/test-e2e.ps1` (35 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

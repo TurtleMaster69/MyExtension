@@ -252,7 +252,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode subscribe failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode subscribe failed: {ex.Message}");
             }
 
             try
@@ -262,7 +262,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim Closed subscribe failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim Closed subscribe failed: {ex.Message}");
             }
 
             UpdateTypingFromMode(GetTextBufferModeKind(textBuffer));
@@ -282,7 +282,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode unsubscribe failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode unsubscribe failed: {ex.Message}");
             }
         }
 
@@ -329,7 +329,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode delegate build failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode delegate build failed: {ex.Message}");
                 return null;
             }
         }
@@ -389,7 +389,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode read failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim SwitchedMode read failed: {ex.Message}");
                 return null;
             }
         }
@@ -418,7 +418,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}TryGetVimBuffer failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}TryGetVimBuffer failed: {ex.Message}");
                 return null;
             }
         }
@@ -438,7 +438,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim VimTextBuffer read failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim VimTextBuffer read failed: {ex.Message}");
                 return null;
             }
         }
@@ -459,7 +459,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim ModeKind read failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim ModeKind read failed: {ex.Message}");
                 return null;
             }
         }
@@ -500,11 +500,11 @@ namespace MyExtension
                     .GetExportedValues<object>(VimContractName)
                     .FirstOrDefault();
 
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim integration: {(_vim != null ? "detected" : "not found")}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim integration: {(_vim != null ? "detected" : "not found")}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}VsVim integration resolve failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}VsVim integration resolve failed: {ex.Message}");
                 _vim = null;
             }
 
@@ -520,7 +520,7 @@ namespace MyExtension
 
             try
             {
-                _componentModel = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
+                _componentModel = VsServices.GlobalComponentModel();
             }
             catch
             {

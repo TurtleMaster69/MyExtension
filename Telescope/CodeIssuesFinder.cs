@@ -22,7 +22,7 @@ namespace Telescope
     /// <b>Threading:</b> <see cref="GetCandidates"/> and <see cref="OnSelected"/> touch DTE and
     /// therefore must run on the UI thread (the controller guarantees this).
     /// </summary>
-    public sealed class CodeIssuesFinder : IFinder
+    public sealed class CodeIssuesFinder : FinderBase<CodeIssue>
     {
 
         private readonly Func<DTE> _dteFactory;
@@ -31,7 +31,7 @@ namespace Telescope
         private readonly Func<IReadOnlyList<string>>? _testFileSource;
         private readonly Action<CodeIssue>? _testOpener;
 
-        public string Name => "Issues";
+        public override string Name => "Issues";
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         public CodeIssuesFinder(Func<DTE> dteFactory)
@@ -47,7 +47,7 @@ namespace Telescope
             _dteFactory = () => null!;
         }
 
-        public IReadOnlyList<FinderEntry> GetCandidates()
+        protected override IReadOnlyList<CodeIssue> GatherHits()
         {
             var issues = new List<CodeIssue>();
 
@@ -58,83 +58,56 @@ namespace Telescope
                 {
                     CollectTodos(path, issues);
                 }
-                return issues.Select(ToEntry).ToList();
+                return issues;
             }
 
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
+            DTE dte = _dteFactory();
+            if (dte?.Solution != null)
             {
-                DTE dte = _dteFactory();
-                if (dte?.Solution != null)
+                foreach (string path in ProjectFiles.Enumerate(dte))
                 {
-                    foreach (string path in ProjectFiles.Enumerate(dte))
-                    {
-                        CollectTodos(path, issues);
-                    }
-                    CollectErrorList(dte, issues);
+                    CollectTodos(path, issues);
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}CodeIssuesFinder failed to enumerate: {ex.Message}");
+                CollectErrorList(dte, issues);
             }
 
-            return issues.Select(ToEntry).ToList();
+            return issues;
         }
 
-        public void OnSelected(FinderEntry entry)
+        protected override FinderEntry ToEntry(CodeIssue issue)
         {
-            if (entry.Payload is not CodeIssue issue)
+            string marker = issue.Kind switch
             {
-                return;
-            }
+                CodeIssueKind.Error => "ERR",
+                CodeIssueKind.Warning => "WARN",
+                CodeIssueKind.Todo => "TODO",
+                _ => "INFO",
+            };
+            string file = Path.GetFileName(issue.FilePath);
+            string display = $"[{marker}] line {issue.LineNumber}: {issue.Text} — {file}";
+            return new FinderEntry(display, issue);
+        }
 
+        protected override void OpenHit(CodeIssue hit)
+        {
             if (_testOpener != null)
             {
                 // Hermetic test path: no VS thread affinity.
-                _testOpener(issue);
+                _testOpener(hit);
                 return;
             }
 
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
+            if (!File.Exists(hit.FilePath))
             {
-                if (!File.Exists(issue.FilePath))
-                {
-                    return;
-                }
+                return;
+            }
 
-                DTE dte = _dteFactory();
-                dte.ItemOperations.OpenFile(issue.FilePath);
-                GotoLine(dte, issue.LineNumber);
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened issue: {issue.FilePath} line={issue.LineNumber}");
-            }
-            catch (Exception ex)
-            {
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open issue failed: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}CodeIssuesFinder failed to open '{entry.Display}': {ex.Message}");
-            }
+            DTE dte = _dteFactory();
+            DteFileOpener.OpenAtLine(dte, hit.FilePath, hit.LineNumber);
+            TelescopeLog.Log($"opened issue: {hit.FilePath} line={hit.LineNumber}");
         }
 
-        /// <summary>Jumps the active document's selection to the given 1-based line.</summary>
-        private static void GotoLine(DTE dte, int line)
-        {
-            try
-            {
-                var doc = dte.ActiveDocument;
-                if (doc?.Selection is TextSelection selection && line > 0)
-                {
-                    selection.GotoLine(line, false);
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}goto line={line}");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}goto line failed: {ex.Message}");
-            }
-        }
+        protected override string OpenErrorNoun => "issue";
 
         private static void CollectTodos(string path, List<CodeIssue> issues)
         {
@@ -197,7 +170,7 @@ namespace Telescope
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}Error List read failed: {ex.Message}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}Error List read failed: {ex.Message}");
             }
         }
 
@@ -213,20 +186,6 @@ namespace Telescope
                 return CodeIssueKind.Warning;
             }
             return CodeIssueKind.Info;
-        }
-
-        private static FinderEntry ToEntry(CodeIssue issue)
-        {
-            string marker = issue.Kind switch
-            {
-                CodeIssueKind.Error => "ERR",
-                CodeIssueKind.Warning => "WARN",
-                CodeIssueKind.Todo => "TODO",
-                _ => "INFO",
-            };
-            string file = Path.GetFileName(issue.FilePath);
-            string display = $"[{marker}] line {issue.LineNumber}: {issue.Text} — {file}";
-            return new FinderEntry(display, issue);
         }
     }
 }

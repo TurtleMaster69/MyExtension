@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
 
 namespace MyExtension
 {
@@ -39,15 +38,23 @@ namespace MyExtension
         // KEYEVENTF_KEYUP flag: emit the release after the press.
         private const uint KEYEVENTF_KEYUP = 0x0002;
 
+        /// <summary>
+        /// When true, <see cref="Press"/> records the VK in <see cref="InjectedKeyGuard"/> but
+        /// skips the real <c>keybd_event</c> — used by the unit-test runner so controller tests
+        /// verify logic without injecting keys into whatever window has OS focus.
+        /// </summary>
+        internal static bool SimulateOnly { get; set; }
+
         /// <summary>Presses and releases the given virtual key into the focused window.</summary>
         public static void Press(int vk)
         {
             InjectedKeyGuard.Instance.Record(vk);
-            keybd_event((byte)vk, 0, 0, UIntPtr.Zero);            // key down
-            keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // key up
+            if (SimulateOnly)
+            {
+                return;
+            }
+            NativeMethods.keybd_event((byte)vk, 0, 0, UIntPtr.Zero);            // key down
+            NativeMethods.keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // key up
         }
-
-        [DllImport("user32.dll")]
-        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     }
 }

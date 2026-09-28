@@ -42,7 +42,7 @@ namespace MyExtension
         private const int WM_SYSKEYDOWN = 0x0104;
 
         // Delegate kept as a field so the GC can't collect it while the unmanaged hook uses it.
-        private readonly LowLevelKeyboardProc _proc;
+        private readonly NativeMethods.LowLevelKeyboardProc _proc;
         private IntPtr _hookId = IntPtr.Zero;
         private bool _disposed;
 
@@ -85,12 +85,12 @@ namespace MyExtension
             // nCode < 0: we must pass the event through untouched, no exceptions.
             if (nCode < 0)
             {
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
             }
 
             if (!IsVisualStudioFocused())
             {
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
             }
 
             // lParam points at a KBDLLHOOKSTRUCT; its first DWORD is the virtual-key code.
@@ -106,14 +106,14 @@ namespace MyExtension
                 // tree/control natively instead of re-triggering the controller action.
                 if (InjectedKeyGuard.Instance.TryConsume(vkCode))
                 {
-                    return CallNextHookEx(_hookId, nCode, wParam, lParam);
+                    return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
                 }
 
                 // GetAsyncKeyState reads the *physical* modifier state (as opposed to the
                 // message stream), so it's authoritative even if we later swallow a key.
-                bool ctrl = (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;
-                bool shift = (GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
-                bool alt = (GetAsyncKeyState((int)Keys.Menu) & 0x8000) != 0;
+                bool ctrl = (NativeMethods.GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;
+                bool shift = (NativeMethods.GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
+                bool alt = (NativeMethods.GetAsyncKeyState((int)Keys.Menu) & 0x8000) != 0;
 
                 // Cheap pre-filter: plain typing keys that InputHandler can't possibly act on
                 // return here immediately, without running the handler at all.
@@ -146,7 +146,7 @@ namespace MyExtension
                 }
             }
 
-            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
         /// <summary>
@@ -155,51 +155,20 @@ namespace MyExtension
         /// the handler's interest, so that handled keys can never be skipped. Reads only Win32
         /// state and the handler's volatile leader flag.
         /// </summary>
-        private bool IsInteresting(Keys key, bool ctrl, bool shift, bool alt)
-        {
-            // Any modifier chord is a candidate simple shortcut (Ctrl+H, ...), and while a
-            // leader sequence is in progress ANY key can extend or break it — both handled.
-            if (_inputHandler.IsLeaderActive || ctrl || shift || alt)
-            {
-                return true;
-            }
-
-            // When the current tool window is in normal mode with action keys (Solution Explorer's
-            // o/r/m/a), those keys must reach the handler instead of being skipped as typing keys.
-            if (_inputHandler.HasToolWindowActionKeys)
-            {
-                return true;
-            }
-
-            switch (key)
-            {
-                case Keys.Space:      // leader key
-                case Keys.Escape:     // sequence cancel / exit tool-window input mode
-                case Keys.H:
-                case Keys.J:
-                case Keys.K:
-                case Keys.L:          // h/j/k/l tool-window navigation
-                case Keys.I:          // i = enter tool-window input mode
-                case Keys.ControlKey:
-                case Keys.LControlKey:
-                case Keys.RControlKey: // Ctrl swallow while a completion popup is open
-                    return true;
-                default:
-                    return false;
-            }
-        }
+        private bool IsInteresting(Keys key, bool ctrl, bool shift, bool alt) =>
+            _inputHandler.IsKeyOfInterest(key, ctrl, shift, alt);
 
         /// <summary>
         /// Installs the low-level hook. <c>dwThreadId = 0</c> makes it global (all threads).
         /// The module handle is required so Windows can locate the callback.
         /// </summary>
-        private static IntPtr SetHook(LowLevelKeyboardProc proc)
+        private static IntPtr SetHook(NativeMethods.LowLevelKeyboardProc proc)
         {
             using (Process curProcess = Process.GetCurrentProcess())
             using (ProcessModule curModule = curProcess.MainModule)
             {
-                return SetWindowsHookEx(WH_KEYBOARD_LL, proc,
-                    GetModuleHandle(curModule.ModuleName), 0);
+                return NativeMethods.SetWindowsHookEx(WH_KEYBOARD_LL, proc,
+                    NativeMethods.GetModuleHandle(curModule.ModuleName), 0);
             }
         }
 
@@ -214,22 +183,22 @@ namespace MyExtension
         /// </summary>
         private bool IsVisualStudioFocused()
         {
-            IntPtr hwnd = GetForegroundWindow();
+            IntPtr hwnd = NativeMethods.GetForegroundWindow();
             if (hwnd == IntPtr.Zero) return false;
 
-            GetWindowThreadProcessId(hwnd, out uint processId);
+            NativeMethods.GetWindowThreadProcessId(hwnd, out uint processId);
             return processId == (uint)CurrentProcessId;
         }
 
         /// <summary>
-        /// Writes a diagnostic line to Debug output, the "NeoVisual" pane, and the log file.
-        /// Thread-safe, but NOT for the per-key path (each write is an interop call).
+        /// Writes a diagnostic line through the full facade pipeline (structured log file, debug
+        /// output, and the "NeoVisual" pane). Thread-safe, but NOT for the per-key path (each write
+        /// is an interop call).
         /// </summary>
         private void Log(string message)
         {
-            string fullMessage = $"{Telescope.DiagnosticLog.GlobalKeyboard}{DateTime.Now:HH:mm:ss.fff}  {message}";
-            Debug.WriteLine(fullMessage);
-            Telescope.NeoVisualLog.Log(fullMessage);
+            string fullMessage = $"{Telescope.DiagnosticLog.Hook}{DateTime.Now:HH:mm:ss.fff}  {message}";
+            Telescope.NeoVisualLog.Debug(fullMessage);
         }
 
         public void Dispose()
@@ -239,7 +208,7 @@ namespace MyExtension
 
             if (_hookId != IntPtr.Zero)
             {
-                UnhookWindowsHookEx(_hookId);
+                NativeMethods.UnhookWindowsHookEx(_hookId);
                 _hookId = IntPtr.Zero;
                 Log("Keyboard hook uninstalled.");
             }
@@ -248,32 +217,5 @@ namespace MyExtension
         }
 
         ~GlobalKeyboardHook() => Dispose();
-
-        // ===================== P/Invoke: Win32 API surface =====================
-
-        // Delegate matching the native LowLevelKeyboardProc signature.
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
-
-        [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     }
 }

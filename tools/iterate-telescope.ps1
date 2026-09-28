@@ -3,7 +3,7 @@
 # Solo end-to-end harness for the Telescope overlay. Builds + deploys the VSIX into the VS
 # Experimental Instance via MSBuild (fast, deterministic), launches devenv DIRECTLY with a real
 # solution open (no "select project/folder" start window), opens Telescope (leader + F + T),
-# types a query, and asserts on the runtime trace at %APPDATA%\MyExtension\neovisual.log.
+# types a query, and asserts on the runtime trace at <solution>\log\<index>-neovisual-exp.log.
 #
 # Exit code: 0 = PASS, 1 = FAIL.
 #
@@ -22,12 +22,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-# Single source for log prefixes (regex-escaped) — keep in sync with
-# Telescope/DiagnosticLog.cs; pinned by unit test Run_LogPrefixes_Pinned.
-$script:PfxNeo = '\[NeoVisual\] '
-$script:PfxTel = '\[Telescope\] '
-$script:PfxHook = '\[Hook\] '
-$script:PfxMyExt = '\[MyExtension\] '
+# Shared harness helpers (prefix vars, Write-*, key injection, log waits, foreground,
+# VS-root resolution) — dot-sourced so this script and the other harness scripts share one
+# byte-compatible implementation.
+. (Join-Path $PSScriptRoot 'harness-common.ps1')
 
 # Per-run log files live in <solution>\log\, indexed so the main-VS and experimental-VS logs of
 # the same run are paired (neovisual-<index>-main.log / neovisual-<index>-exp.log).
@@ -57,66 +55,15 @@ $slnPath = Join-Path $scratch 'TelescopeTest.sln'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 function Assert-Budget { if ($stopwatch.Elapsed.TotalSeconds -gt $TimeoutSec) { throw "Timed out after $TimeoutSec s" } }
 
-function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Info($msg) { Write-Host "    $msg" }
-function Write-Pass($msg) { Write-Host "    PASS: $msg" -ForegroundColor Green }
-function Write-Fail($msg) { Write-Host "    FAIL: $msg" -ForegroundColor Red }
-
 # ---------------------------------------------------------------------------
 # Resolve tool paths
 # ---------------------------------------------------------------------------
-# Resolve the VS install root. Prefer the well-known 18/Community path (also works while VS is
-# updating and vswhere returns nothing), falling back to vswhere.
-$candidates = @(
-    'C:\Program Files\Microsoft Visual Studio\18\Community'
-    'C:\Program Files\Microsoft Visual Studio\2022\Community'
-)
-$vsRoot = $candidates | Where-Object { Test-Path (Join-Path $_ 'Common7\IDE\devenv.exe') } | Select-Object -First 1
-if (-not $vsRoot) {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path $vswhere) {
-        $vsRoot = (& $vswhere -products '*' -property installationPath | Select-Object -First 1)
-    }
-}
-if (-not $vsRoot) { throw 'No Visual Studio installation found.' }
+$vsRoot = Resolve-VsRoot
 $msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
 $devenv  = Join-Path $vsRoot 'Common7\IDE\devenv.exe'
 if (-not (Test-Path $msbuild)) { throw "MSBuild not found at $msbuild" }
 if (-not (Test-Path $devenv))  { throw "devenv not found at $devenv" }
 Write-Info "VS root: $vsRoot"
-
-# ---------------------------------------------------------------------------
-# Key injection helper (keybd_event — the repo's KeyInjection approach; works from automation)
-# ---------------------------------------------------------------------------
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class KbInject
-{
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-    private const uint KEYEVENTF_KEYUP = 0x0002;
-    public static void TapVk(ushort vk)
-    {
-        keybd_event((byte)vk, 0, 0, UIntPtr.Zero);
-        keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-    }
-}
-'@ -Language CSharp
-
-Add-Type -Namespace Win32 -Name Fg -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);'
-
-function Wait-LogContains([string]$pattern, [int]$maxMs = 60000) {
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
-        if (Test-Path $logPath) {
-            $line = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
-            if ($line -and $line -match $pattern) { return $true }
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    return $false
-}
 
 function Find-VsWindow {
     $p = Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
@@ -206,7 +153,7 @@ Assert-Budget
 
 # Poll for the extension's keyboard hook to be installed (real signal, not a fixed wait).
 Write-Info "waiting for keyboard hook..."
-if (-not (Wait-LogContains "$($script:PfxHook)installed" 90000)) {
+if (-not (Wait-LogContains $logPath "$($script:PfxHook)installed" 90000)) {
     Write-Fail 'keyboard hook was not installed (extension may not have loaded)'
     if (Test-Path $logPath) { Get-Content $logPath -Tail 20 | ForEach-Object { Write-Info $_ } }
     exit 1
@@ -217,7 +164,7 @@ Assert-Budget
 # The extension itself auto-opens the solution (NEOVISUAL_TEST_SOLUTION). Wait for that to
 # happen so a real editor context exists before we open Telescope.
 Write-Info "waiting for extension to auto-open the solution..."
-if (-not (Wait-LogContains "$($script:PfxMyExt)auto-opened solution" 30000)) {
+if (-not (Wait-LogContains $logPath "$($script:PfxMyExt)auto-opened solution" 30000)) {
     Write-Fail 'extension did not auto-open the solution'
     if (Test-Path $logPath) { Get-Content $logPath -Tail 20 | ForEach-Object { Write-Info $_ } }
     exit 1
@@ -229,13 +176,6 @@ Assert-Budget
 # 4. Bring VS to foreground, open Telescope: leader (Space) then F then T.
 # ---------------------------------------------------------------------------
 Write-Step "Open Telescope (Space -> F -> T)"
-function Bring-ToForeground {
-    param([IntPtr]$hwnd)
-    [KbInject]::TapVk(0x12) | Out-Null   # Alt resets the foreground lock
-    Start-Sleep -Milliseconds 150
-    [Win32.Fg]::SetForegroundWindow($hwnd) | Out-Null
-    Start-Sleep -Milliseconds 300
-}
 
 $telOpen = $false
 for ($attempt = 1; $attempt -le 3 -and -not $telOpen; $attempt++) {
@@ -252,7 +192,7 @@ for ($attempt = 1; $attempt -le 3 -and -not $telOpen; $attempt++) {
     Assert-Budget
 
     # Overlay open is confirmed by the log line "[Telescope] open finder=Files".
-    $telOpen = Wait-LogContains "$($script:PfxTel)open finder=Files" 15000
+    $telOpen = Wait-LogContains $logPath "$($script:PfxTel)open finder=Files" 15000
     if (-not $telOpen) { Start-Sleep -Seconds 1 }
 }
 if (-not $telOpen) {
@@ -271,10 +211,7 @@ Start-Sleep -Milliseconds 1200   # allow focus + initial render
 $vsProc.Refresh()
 Bring-ToForeground $vsProc.MainWindowHandle
 Start-Sleep -Milliseconds 300
-foreach ($ch in $Query.ToCharArray()) {
-    [KbInject]::TapVk([int][char]::ToUpper($ch))
-    Start-Sleep -Milliseconds 60
-}
+Send-Text $Query
 Start-Sleep -Milliseconds 1200   # allow fzf to run
 
 # ---------------------------------------------------------------------------
@@ -316,9 +253,7 @@ if (-not $resultsOk) {
 # 7. Close overlay (Esc) and report.
 # ---------------------------------------------------------------------------
 Write-Step "Close overlay (Escape)"
-Bring-ToForeground $vsProc.MainWindowHandle
-[KbInject]::TapVk(0x1B)  # Esc
-Start-Sleep -Milliseconds 800
+Close-Telescope $vsProc $logPath
 
 if ($failures.Count -gt 0) {
     foreach ($f in $failures) { Write-Fail $f }

@@ -18,9 +18,19 @@ namespace Telescope
 
         /// <summary>
         /// Returns the candidate entries to filter. Called once when the finder is opened, on the
-        /// UI thread (may touch VS/DTE — assert <c>ThreadHelper.ThrowIfNotOnUIThread()</c>).
+        /// UI thread (may touch VS/DTE — assert <c>ThreadHelper.ThrowIfNotOnUIThread()</c>). The
+        /// optional <paramref name="query"/> is used by query-driven finders (see
+        /// <see cref="IsQueryDriven"/>); non-query finders ignore it.
         /// </summary>
-        IReadOnlyList<FinderEntry> GetCandidates();
+        IReadOnlyList<FinderEntry> GetCandidates(string query = "");
+
+        /// <summary>
+        /// True when the finder is <b>query-driven</b>: every query change re-gathers candidates
+        /// from <see cref="GetCandidates(string)"/> and renders them directly (skipping fzf — grep
+        /// semantics are literal, not fuzzy). The overlay branches on this capability and applies a
+        /// debounce so a full-solution scan runs after typing settles, not per keystroke.
+        /// </summary>
+        bool IsQueryDriven { get; }
 
         /// <summary>
         /// Invoked when the user confirms (Enter) an entry. Runs on the UI thread and may call VS

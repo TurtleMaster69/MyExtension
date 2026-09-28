@@ -70,20 +70,32 @@ namespace Telescope
         public static void Clear() => LogFileWriter.Clear();
 
         /// <summary>
+        /// Writes a diagnostic line through the full facade pipeline (structured log file, debug
+        /// output, and the NeoVisual pane). A documented alias for <see cref="Log"/> — the Log body
+        /// already routes through <see cref="Debug.WriteLine"/> internally, so this must NOT call
+        /// <c>Debug.WriteLine</c> itself (that would double-write every message to the debug-output
+        /// file). The text of each line is byte-identical to the old <c>Debug.WriteLine</c> call.
+        /// </summary>
+        public static void Debug(string message) => Log(message);
+
+        /// <summary>Flushes and closes the log writers (package shutdown). Never throws.</summary>
+        public static void Close() => LogFileWriter.Close();
+
+        /// <summary>
         /// Attaches the debug-output trace listener so every <c>Debug.WriteLine</c> in the
         /// extension lands in the per-run log file too. Call once at package init (after
         /// <see cref="Clear"/>). Idempotent.
         /// </summary>
         public static void InstallDebugListener()
         {
-            foreach (TraceListener listener in Debug.Listeners)
+            foreach (TraceListener listener in System.Diagnostics.Debug.Listeners)
             {
                 if (listener is NeoVisualTraceListener)
                 {
                     return;
                 }
             }
-            Debug.Listeners.Add(new NeoVisualTraceListener());
+            System.Diagnostics.Debug.Listeners.Add(new NeoVisualTraceListener());
         }
 
         /// <summary>Writes a timestamped line to the structured NeoVisual log file, the NeoVisual pane, and the debugger.</summary>
@@ -94,7 +106,7 @@ namespace Telescope
             // line here lands in BOTH per-run files: the exp (NeoVisual) file and the main
             // (debug) file, keeping them comparable.
             LogFileWriter.Write(message);
-            Debug.WriteLine(message);
+            System.Diagnostics.Debug.WriteLine(message);
             WriteToPane(message);
         }
 

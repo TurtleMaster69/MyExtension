@@ -7,20 +7,17 @@ namespace Telescope
     /// <c>FinderEntry.Payload</c> so <see cref="ReferencesFinder.OnSelected"/> can open the file
     /// at the line and the overlay preview can jump the caret to it.
     /// </summary>
-    public sealed class ReferenceHit
+    public sealed class ReferenceHit : FileLocation
     {
         public ReferenceHit(string filePath, int lineNumber, int column, bool isWrite, string symbol, string lineText)
+            : base(filePath, lineNumber)
         {
-            FilePath = filePath ?? string.Empty;
-            LineNumber = lineNumber;
             Column = column;
             IsWrite = isWrite;
             Symbol = symbol ?? string.Empty;
             LineText = lineText ?? string.Empty;
         }
 
-        public string FilePath { get; }
-        public int LineNumber { get; }
         public int Column { get; }
         public bool IsWrite { get; }
         public string Symbol { get; }

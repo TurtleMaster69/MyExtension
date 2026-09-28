@@ -15,7 +15,7 @@ namespace Telescope
     /// <b>Threading:</b> <see cref="GetCandidates"/> and <see cref="OnSelected"/> both touch DTE
     /// and therefore must run on the UI thread (the controller guarantees this).
     /// </summary>
-    public sealed class FileFinder : IFinder
+    public sealed class FileFinder : FinderBase<FileHit>
     {
         private readonly Func<DTE> _dteFactory;
 
@@ -24,7 +24,7 @@ namespace Telescope
         private readonly Func<IReadOnlyList<string>>? _testCandidateSource;
         private readonly Action<string>? _testOpener;
 
-        public string Name => "Files";
+        public override string Name => "Files";
 
         /// <param name="dteFactory">
         /// Returns the top-level DTE automation object. A factory (rather than a DTE) is injected
@@ -44,76 +44,63 @@ namespace Telescope
             _dteFactory = () => null!;
         }
 
-        public IReadOnlyList<FinderEntry> GetCandidates()
+        protected override IReadOnlyList<FileHit> GatherHits()
         {
             if (_testCandidateSource != null)
             {
                 // Hermetic test path: no VS thread affinity.
-                var testEntries = new List<FinderEntry>();
+                var testHits = new List<FileHit>();
                 foreach (string path in _testCandidateSource())
                 {
-                    testEntries.Add(new FinderEntry(Path.GetFileName(path), path));
+                    testHits.Add(new FileHit(path, 0));
                 }
-                return testEntries;
+                return testHits;
             }
 
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var entries = new List<FinderEntry>();
+            var hits = new List<FileHit>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            try
+            DTE dte = _dteFactory();
+            if (dte?.Solution == null)
             {
-                DTE dte = _dteFactory();
-                if (dte?.Solution == null)
-                {
-                    return entries;
-                }
-
-                foreach (Project project in dte.Solution.Projects)
-                {
-                    CollectProjectFiles(project, entries, seen);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}FileFinder failed to enumerate: {ex.Message}");
+                return hits;
             }
 
-            return entries;
+            foreach (Project project in dte.Solution.Projects)
+            {
+                CollectProjectFiles(project, hits, seen);
+            }
+
+            return hits;
         }
 
-        public void OnSelected(FinderEntry entry)
+        protected override FinderEntry ToEntry(FileHit hit)
         {
-            if (_testOpener != null)
+            return new FinderEntry(Path.GetFileName(hit.FilePath), hit);
+        }
+
+        protected override void OpenHit(FileHit hit)
+        {
+            if (!File.Exists(hit.FilePath))
             {
-                // Hermetic test path: no VS thread affinity.
-                if (entry.Payload is string path && File.Exists(path))
-                {
-                    _testOpener(path);
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened file: {path}");
-                }
                 return;
             }
 
-            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_testOpener != null)
+            {
+                // Hermetic test path: no VS thread affinity.
+                _testOpener(hit.FilePath);
+                TelescopeLog.Log($"opened file: {hit.FilePath}");
+                return;
+            }
 
-            try
-            {
-                if (entry.Payload is string path && File.Exists(path))
-                {
-                    _dteFactory()?.ItemOperations.OpenFile(path);
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened file: {path}");
-                }
-            }
-            catch (Exception ex)
-            {
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open file failed: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}FileFinder failed to open '{entry.Display}': {ex.Message}");
-            }
+            _dteFactory()?.ItemOperations.OpenFile(hit.FilePath);
+            TelescopeLog.Log($"opened file: {hit.FilePath}");
         }
 
-        private static void CollectProjectFiles(Project project, List<FinderEntry> entries, HashSet<string> seen)
+        protected override string OpenErrorNoun => "file";
+
+        private static void CollectProjectFiles(Project project, List<FileHit> hits, HashSet<string> seen)
         {
             try
             {
@@ -131,7 +118,7 @@ namespace Telescope
                     {
                         if (item.SubProject != null)
                         {
-                            CollectProjectFiles(item.SubProject, entries, seen);
+                            CollectProjectFiles(item.SubProject, hits, seen);
                         }
                     }
                     return;
@@ -142,7 +129,7 @@ namespace Telescope
                     return;
                 }
 
-                CollectItems(project.ProjectItems, entries, seen);
+                CollectItems(project.ProjectItems, hits, seen);
             }
             catch
             {
@@ -150,7 +137,7 @@ namespace Telescope
             }
         }
 
-        private static void CollectItems(ProjectItems items, List<FinderEntry> entries, HashSet<string> seen)
+        private static void CollectItems(ProjectItems items, List<FileHit> hits, HashSet<string> seen)
         {
             if (items == null)
             {
@@ -174,12 +161,12 @@ namespace Telescope
 
                     if (!string.IsNullOrEmpty(path) && File.Exists(path) && seen.Add(path!))
                     {
-                        entries.Add(new FinderEntry(Path.GetFileName(path!), path!));
+                        hits.Add(new FileHit(path!, 0));
                     }
 
                     if (item.ProjectItems != null && item.ProjectItems.Count > 0)
                     {
-                        CollectItems(item.ProjectItems, entries, seen);
+                        CollectItems(item.ProjectItems, hits, seen);
                     }
                 }
                 catch

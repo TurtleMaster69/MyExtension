@@ -97,13 +97,17 @@ $intentionallyAbsent = @(
 )
 
 # Hub-created runtime artifacts (not in the repo until the loop creates them).
-# NOTE: log/tools-hash.txt is NOT allowlisted — it must exist (test-e2e.ps1's Write-ToolsHash
-# materializes it every run), so a missing hash is a lint failure (M-C1).
+# NOTE: log/tools-hash.txt is allowlisted here because it is absent on a fresh clone
+# (before the first harness run) — its existence is enforced by test-e2e.ps1's
+# Write-ToolsHash, which materializes it at the bootstrap of every real run (M-C1),
+# not by this lint. A missing hash on a fresh clone is NOT drift.
 # log/seed-expected/ IS allowlisted: the expected-result tree is written by test-e2e.ps1 only
 # during a real bootstrap (Write-SeedExpected) and consumed by the seed-leak end-of-run guard —
 # it is a per-run artifact, absent on a fresh clone, and its absence is NOT drift.
 $runtimeArtifacts = @(
-    'log/seed-expected'
+    'log',              # per-run log dir (gitignored; absent on a fresh clone)
+    'log/seed-expected',
+    'log/tools-hash.txt'
 )
 
 # Bare filenames that legitimately have no repo counterpart: user-config file and
@@ -126,6 +130,29 @@ $proposedSymbols = @(
 )
 $proposedPaths = @(
     'tools/harness-common.ps1'                           # F37 — proposed shared module
+)
+
+# Template / placeholder paths referenced by the hub-creation ecosystem agents
+# (hub-creator, hub-reviewer, skill-researcher, skill-verifier). These META agents
+# describe creating hubs, workspaces, and skills, so they legitimately cite paths
+# that do not exist in this repo: workspace template files (state.md/tasks.md/
+# log.md/skills.md), alternative opencode spellings (.opencode/agents/), global
+# config paths outside the repo (~/.config/...), and illustrative template paths
+# (.opencode/workspaces/<hub>/sessions/<session-id>/, .opencode/skills/<name>/,
+# .opencode/plugin/compaction.ts). These are NOT drift — they are the very files the
+# hub-creator is instructed to create. Entries are in Test-PathRef's trimmed form
+# (trailing '/' stripped). Verified 2026-09-28: none of these tokens appear in the
+# non-meta scanned docs (AGENTS.md / spec / progress / architecture-review / SKILL.md).
+$templatePaths = @(
+    'README.md',                                        # generic docs-index reference (no README at repo root)
+    '~/.config/opencode/opencode.json',                 # global opencode config, outside the repo
+    '.opencode/workspaces/implementation-hub',          # example workspace the hub-creator would create
+    '.opencode/agents',                                 # valid plural spelling (this repo uses singular agent/)
+    'log.md', 'skills.md', 'state.md', 'tasks.md',      # workspace template files the hub-creator creates
+    '.opencode/workspaces',                             # hub workspaces root (created at runtime)
+    '.opencode/plugin/compaction.ts',                   # optional compaction plugin hook (knowledge-base §6)
+    '.opencode/workspaces/<hub>/sessions/<session-id>', # session-scoped workspace template (§9)
+    '.opencode/skills/<name>'                           # skill discovery-path template
 )
 
 $tokenRegex    = [regex]'(?<=`)[^`\r\n]+(?=`)'  # inline backticked content (single-line; triple-backtick fences can't pair with inline spans)
@@ -158,6 +185,7 @@ function Test-PathRef([string]$token) {
     if ($intentionallyAbsent -contains $p) { return $true }
     if ($runtimeArtifacts -contains $p) { return $true }
     if ($proposedPaths -contains $p) { return $true }
+    if ($templatePaths -contains $p) { return $true }
     $full = Join-Path $repoRoot $p
     if (Test-Path -LiteralPath $full) { return $true }
     $name = Split-Path $p -Leaf

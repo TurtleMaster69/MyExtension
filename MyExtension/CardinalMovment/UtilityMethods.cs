@@ -10,19 +10,6 @@ namespace CardinalNavigation
     class UtilityMethods
     {
         /// <summary>
-        /// root automation model
-        /// </summary>
-        /// <param name="package"></param>
-        /// <returns></returns>
-        public static DTE GetDTE(AsyncPackage package)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            System.IServiceProvider serviceProvider = package as System.IServiceProvider;
-            return (DTE)serviceProvider.GetService(typeof(DTE));
-        }
-
-
-        /// <summary>
         /// more involved window functionality than provided by the DTE 
         /// </summary>
         /// <param name="package"></param>
@@ -68,7 +55,7 @@ namespace CardinalNavigation
             {
                 // No parent to anchor linked windows around; return empty so navigation degrades
                 // to a no-op instead of throwing into the keyboard hook.
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}No parent window for active window; skipping window linking.");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}No parent window for active window; skipping window linking.");
                 return linkedWindows;
             }
 

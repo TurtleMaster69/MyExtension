@@ -1,6 +1,8 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Text;
+using System.Threading;
 
 namespace Telescope
 {
@@ -14,23 +16,67 @@ namespace Telescope
     /// <item><see cref="DebugLogPath"/> — the raw debug output stream (every <c>Debug.WriteLine</c>).</item>
     /// <item><see cref="LogPath"/> — the structured NeoVisual log lines (<see cref="NeoVisualLog.Log"/>).</item>
     /// </list>
+    ///
+    /// <para/>
+    /// <b>Buffered:</b> each file is written through a kept-open <see cref="StreamWriter"/> (lazily
+    /// opened on first write, UTF-8 without BOM, <c>FileShare.Read</c> so the e2e harness can
+    /// <c>Get-Content</c> the file while VS holds it open). Lines reach disk on an explicit
+    /// <see cref="Flush"/>, <see cref="Close"/>, or the ~200ms background timer.
     /// </summary>
     internal static class LogFileWriter
     {
         private static readonly object Sync = new object();
         private static bool _clearedThisProcess;
 
-        /// <summary>Path of the NeoVisual structured log file.</summary>
-        public static string LogPath { get; set; } = Path.Combine(
+        private static StreamWriter? _logWriter;
+        private static StreamWriter? _debugWriter;
+        private static Timer? _flushTimer;
+
+        private static string _logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MyExtension",
             "neovisual.log");
 
-        /// <summary>Path of the raw debug-output file (all Debug.WriteLine).</summary>
-        public static string DebugLogPath { get; set; } = Path.Combine(
+        private static string _debugLogPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MyExtension",
             "neovisual-debug.log");
+
+        /// <summary>Path of the NeoVisual structured log file. Changing it closes + reopens the writer.</summary>
+        public static string LogPath
+        {
+            get => _logPath;
+            set
+            {
+                lock (Sync)
+                {
+                    if (string.Equals(_logPath, value, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                    CloseWriter(ref _logWriter);
+                    _logPath = value;
+                }
+            }
+        }
+
+        /// <summary>Path of the raw debug-output file (all Debug.WriteLine). Changing it closes + reopens the writer.</summary>
+        public static string DebugLogPath
+        {
+            get => _debugLogPath;
+            set
+            {
+                lock (Sync)
+                {
+                    if (string.Equals(_debugLogPath, value, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                    CloseWriter(ref _debugWriter);
+                    _debugLogPath = value;
+                }
+            }
+        }
 
         /// <summary>Truncates both log files. Never throws.</summary>
         public static void Clear()
@@ -45,6 +91,9 @@ namespace Telescope
                 }
                 _clearedThisProcess = true;
 
+                FlushLocked();
+                CloseWriter(ref _logWriter);
+                CloseWriter(ref _debugWriter);
                 ClearFile(LogPath);
                 ClearFile(DebugLogPath);
             }
@@ -53,13 +102,122 @@ namespace Telescope
         /// <summary>Appends a timestamped line to the NeoVisual structured log. Never throws.</summary>
         public static void Write(string message)
         {
-            Append(LogPath, message);
+            string line = FormatLine(message);
+            lock (Sync)
+            {
+                try
+                {
+                    GetWriter(ref _logWriter, LogPath).Write(line + Environment.NewLine);
+                }
+                catch
+                {
+                    // never let logging break the extension
+                }
+            }
         }
 
         /// <summary>Appends a timestamped line to the debug-output log. Never throws.</summary>
         public static void WriteDebug(string message)
         {
-            Append(DebugLogPath, message);
+            string line = FormatLine(message);
+            lock (Sync)
+            {
+                try
+                {
+                    GetWriter(ref _debugWriter, DebugLogPath).Write(line + Environment.NewLine);
+                }
+                catch
+                {
+                    // never let logging break the extension
+                }
+            }
+        }
+
+        /// <summary>Flushes both buffered writers to disk. Never throws.</summary>
+        internal static void Flush()
+        {
+            lock (Sync)
+            {
+                FlushLocked();
+            }
+        }
+
+        /// <summary>Flushes + disposes both writers and the flush timer. Never throws.</summary>
+        internal static void Close()
+        {
+            lock (Sync)
+            {
+                try
+                {
+                    _flushTimer?.Dispose();
+                    _flushTimer = null;
+                }
+                catch
+                {
+                    // never let logging break the extension
+                }
+                CloseWriter(ref _logWriter);
+                CloseWriter(ref _debugWriter);
+            }
+        }
+
+        private static string FormatLine(string message)
+        {
+            return string.Format(CultureInfo.InvariantCulture,
+                "{0:HH:mm:ss.fff} {1}", DateTime.Now, message);
+        }
+
+        private static void FlushLocked()
+        {
+            try
+            {
+                _logWriter?.Flush();
+                _debugWriter?.Flush();
+            }
+            catch
+            {
+                // never let logging break the extension
+            }
+        }
+
+        private static StreamWriter GetWriter(ref StreamWriter? writer, string path)
+        {
+            if (writer == null)
+            {
+                string dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+                writer = new StreamWriter(
+                    new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read),
+                    new UTF8Encoding(false));
+                EnsureTimer();
+            }
+            return writer;
+        }
+
+        private static void EnsureTimer()
+        {
+            if (_flushTimer != null)
+            {
+                return;
+            }
+            _flushTimer = new Timer(_ => Flush(), null, 200, 200);
+        }
+
+        private static void CloseWriter(ref StreamWriter? writer)
+        {
+            try
+            {
+                writer?.Flush();
+                writer?.Dispose();
+            }
+            catch
+            {
+                // never let logging break the extension
+            }
+            writer = null;
         }
 
         private static void ClearFile(string path)
@@ -76,28 +234,6 @@ namespace Telescope
             catch
             {
                 // never let logging break the extension
-            }
-        }
-
-        private static void Append(string path, string message)
-        {
-            string line = string.Format(CultureInfo.InvariantCulture,
-                "{0:HH:mm:ss.fff} {1}", DateTime.Now, message);
-            lock (Sync)
-            {
-                try
-                {
-                    string dir = Path.GetDirectoryName(path);
-                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    {
-                        Directory.CreateDirectory(dir);
-                    }
-                    File.AppendAllText(path, line + Environment.NewLine);
-                }
-                catch
-                {
-                    // never let logging break the extension
-                }
             }
         }
     }

@@ -10,12 +10,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$candidates = @(
-    'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\PublicAssemblies'
-    'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\PublicAssemblies'
-)
-$pub = $candidates | Where-Object { Test-Path (Join-Path $_ 'envdte.dll') } | Select-Object -First 1
-if (-not $pub) { throw 'Could not locate VS PublicAssemblies.' }
+. (Join-Path $PSScriptRoot 'harness-common.ps1')
+$vsRoot = Resolve-VsRoot
+$pub = Join-Path $vsRoot 'Common7\IDE\PublicAssemblies'
+if (-not (Test-Path (Join-Path $pub 'envdte.dll'))) { throw 'Could not locate VS PublicAssemblies.' }
 
 foreach ($a in 'envdte.dll','envdte80.dll','Microsoft.VisualStudio.Interop.dll') {
     try { [System.Reflection.Assembly]::LoadFrom((Join-Path $pub $a)) | Out-Null } catch { }

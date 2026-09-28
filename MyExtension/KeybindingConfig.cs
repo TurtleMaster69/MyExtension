@@ -84,7 +84,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to load built-in keybindings: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to load built-in keybindings: {ex.Message}");
             }
 
             // Optional user overrides, used only when the file exists.
@@ -98,10 +98,10 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
             }
 
-            System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(File.Exists(path) ? path : "none")})");
+            Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(File.Exists(path) ? path : "none")})");
 
 return new KeybindingConfig(leaderKey, bindings);
         }

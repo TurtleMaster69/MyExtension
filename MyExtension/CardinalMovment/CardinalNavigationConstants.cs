@@ -7,16 +7,10 @@
         public readonly static char UP = 'U';
         public readonly static char DOWN = 'D';
 
-        public readonly static int DefaultLogicalYWindowDivide = 30;
         public readonly static int DefaultLogicalXWindowDivide = 12;
         public readonly static int DefaultLogicalTabPaneDivide = 50;
 
         public readonly static double DefaultLogicalSelectorScale = 2;
-
-        public readonly static string DOCUMENT = "DOCUMENT";
-        public readonly static string TOOL = "TOOL";
-
-        public readonly static string GithubMessage = "Please open an issue on Github and include a screenshot of your window configuration.";
 
     }
 }

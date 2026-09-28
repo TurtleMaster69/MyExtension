@@ -7,7 +7,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -203,7 +202,7 @@ namespace Telescope
             {
                 if (IsOpen)
                 {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}textinput='{e.Text}' focused={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
+                    TelescopeLog.Log($"textinput='{e.Text}' focused={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
                 }
             };
 
@@ -229,7 +228,7 @@ namespace Telescope
             {
                 if (IsOpen)
                 {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}deactivated -> closing overlay");
+                    TelescopeLog.Log($"deactivated -> closing overlay");
                     CloseOverlay();
                 }
             };
@@ -264,7 +263,7 @@ namespace Telescope
             RenderResults();
 
             NeoVisualLog.Clear();
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open finder={finder.Name} candidates={_candidates.Count}");
+            TelescopeLog.Log($"open finder={finder.Name} candidates={_candidates.Count}");
 
             // Own the dialog to the VS main window (the Code Search / InstaSearch pattern). A
             // modal dialog owned by VS is OS-guaranteed to be the focused window and disables the
@@ -316,7 +315,7 @@ namespace Telescope
             {
                 // window may already be closed
             }
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}overlay closed");
+            TelescopeLog.Log($"overlay closed");
             OverlayClosed?.Invoke(this, EventArgs.Empty);
         }
 
@@ -331,16 +330,16 @@ namespace Telescope
                 return;
             }
             string query = _promptBox.Text;
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}promptChanged query='{query}'");
+            TelescopeLog.Log($"promptChanged query='{query}'");
             RefreshResults(query);
         }
 
         private void RefreshResults(string query)
         {
             CancelFilter();
-            if (_activeFinder is IQueryFinder queryFinder)
+            if (_activeFinder.IsQueryDriven)
             {
-                _ = RefreshQueryDrivenAsync(queryFinder, query);
+                _ = RefreshQueryDrivenAsync(_activeFinder, query);
                 return;
             }
             _filterCts = new CancellationTokenSource();
@@ -356,14 +355,14 @@ namespace Telescope
         /// directly. The await captures the WPF SynchronizationContext, so the synchronous scan
         /// resumes on the UI thread.
         /// </summary>
-        private async Task RefreshQueryDrivenAsync(IQueryFinder finder, string query)
+        private async Task RefreshQueryDrivenAsync(IFinder finder, string query)
         {
             int gen = ++_queryGeneration;
             await Task.Delay(QueryDebounceMs); // resumes on the UI thread (SynchronizationContext)
             if (gen != _queryGeneration || !IsOpen) return;
             IReadOnlyList<FinderEntry> results;
             try { results = finder.GetCandidates(query) ?? Array.Empty<FinderEntry>(); }
-            catch (Exception ex) { NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}query gather failed: {ex.Message}"); results = Array.Empty<FinderEntry>(); }
+            catch (Exception ex) { TelescopeLog.Log($"query gather failed: {ex.Message}"); results = Array.Empty<FinderEntry>(); }
             if (gen != _queryGeneration || !IsOpen) return;
             _results = results;
             _keyHandler.SetResults(results.Count);
@@ -421,7 +420,7 @@ namespace Telescope
         {
             _selectedIndex = _keyHandler.SelectedIndex;
             _resultsBox.Text = ResultsFormatter.ToText(_results, _selectedIndex);
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}results count={_results.Count} selected={_selectedIndex} boxText={_resultsBox.Text.Length}");
+            TelescopeLog.Log($"results count={_results.Count} selected={_selectedIndex} boxText={_resultsBox.Text.Length}");
             LoadPreviewForSelection();
         }
 
@@ -439,102 +438,9 @@ namespace Telescope
             }
 
             object payload = _results[_selectedIndex].Payload;
-            if (payload is CodeIssue issue && System.IO.File.Exists(issue.FilePath))
+            if (payload is IFileLocation location)
             {
-                try
-                {
-                    string content = System.IO.File.ReadAllText(issue.FilePath);
-                    SetPreviewContent(content);
-                    if (issue.LineNumber > 0)
-                    {
-                        _previewNavigator.MoveToLine(issue.LineNumber);
-                        ApplyPreviewCaret();
-                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
-                    }
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={issue.FilePath} chars={content.Length}");
-                }
-                catch (Exception ex)
-                {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
-                }
-                return;
-            }
-
-            if (payload is ReferenceHit hit && System.IO.File.Exists(hit.FilePath))
-            {
-                try
-                {
-                    string content = System.IO.File.ReadAllText(hit.FilePath);
-                    SetPreviewContent(content);
-                    if (hit.LineNumber > 0)
-                    {
-                        _previewNavigator.MoveToLine(hit.LineNumber);
-                        ApplyPreviewCaret();
-                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
-                    }
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={hit.FilePath} chars={content.Length}");
-                }
-                catch (Exception ex)
-                {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
-                }
-                return;
-            }
-
-            if (payload is ImplementationHit init && System.IO.File.Exists(init.FilePath))
-            {
-                try
-                {
-                    string content = System.IO.File.ReadAllText(init.FilePath);
-                    SetPreviewContent(content);
-                    if (init.LineNumber > 0)
-                    {
-                        _previewNavigator.MoveToLine(init.LineNumber);
-                        ApplyPreviewCaret();
-                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
-                    }
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={init.FilePath} chars={content.Length}");
-                }
-                catch (Exception ex)
-                {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
-                }
-                return;
-            }
-
-            if (payload is GrepHit gh && System.IO.File.Exists(gh.FilePath))
-            {
-                try
-                {
-                    string content = System.IO.File.ReadAllText(gh.FilePath);
-                    SetPreviewContent(content);
-                    if (gh.LineNumber > 0)
-                    {
-                        _previewNavigator.MoveToLine(gh.LineNumber);
-                        ApplyPreviewCaret();
-                        NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
-                    }
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={gh.FilePath} chars={content.Length}");
-                }
-                catch (Exception ex)
-                {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
-                }
-                return;
-            }
-
-            if (payload is string path && System.IO.File.Exists(path))
-            {
-                try
-                {
-                    string content = System.IO.File.ReadAllText(path);
-                    SetPreviewContent(content);
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview file={path} chars={content.Length}");
-                }
-                catch (Exception ex)
-                {
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview load failed: {ex.Message}");
-                }
+                PreviewRenderer.Show(_previewBox, _previewNavigator, location);
                 return;
             }
 
@@ -559,29 +465,41 @@ namespace Telescope
                 ApplyPromptCaretStyle();
                 bool focused = _promptBox.Focus();
                 _promptBox.CaretIndex = _promptBox.Text.Length;
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}Focus prompt => {focused}, mode={( _keyHandler.IsNormalMode ? "normal" : "insert")}, focusedElement={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
+                TelescopeLog.Log($"Focus prompt => {focused}, mode={( _keyHandler.IsNormalMode ? "normal" : "insert")}, focusedElement={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}Focus failed: {ex.Message}");
+                TelescopeLog.Log($"Focus failed: {ex.Message}");
             }
         }
 
         /// <summary>Applies an insert-mode caret placement to the prompt box.</summary>
-        private void ApplyInsertCaret(int caretPlacement)
+        private void ApplyInsertCaret(CaretPlacement placement)
         {
-            switch (caretPlacement)
+            var navigator = new TextMotionNavigator();
+            navigator.SetText(_promptBox.Text);
+            navigator.MoveTo(_promptBox.CaretIndex);
+            switch (placement)
             {
-                case 1: // a (append): caret at end
-                    _promptBox.CaretIndex = _promptBox.Text.Length;
+                case CaretPlacement.End: // a (append): caret at end
+                    navigator.InsertEnd();
                     break;
-                case 2: // I (insert at start)
-                    _promptBox.CaretIndex = 0;
+                case CaretPlacement.Start: // I (insert at start)
+                    navigator.InsertStart();
                     break;
-                default: // i (current/end)
-                    _promptBox.CaretIndex = Math.Min(_promptBox.CaretIndex, _promptBox.Text.Length);
+                default: // i (current): no motion, caret clamped to current
                     break;
             }
+            _promptBox.CaretIndex = navigator.Caret;
+        }
+
+        /// <summary>Enters insert mode and places the caret per <paramref name="placement"/>.</summary>
+        private void EnterInsert(CaretPlacement placement)
+        {
+            _promptBox.IsReadOnly = false;
+            UpdateModeLabel();
+            FocusPrompt();
+            ApplyInsertCaret(placement);
         }
 
         protected override void OnPreviewKeyDown(KeyEventArgs e)
@@ -600,7 +518,7 @@ namespace Telescope
             {
                 e.Handled = true;
                 _focusTarget = e.Key == Key.H ? FocusTarget.List : FocusTarget.Preview;
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}focus target={_focusTarget}");
+                TelescopeLog.Log($"focus target={_focusTarget}");
                 FocusTargetUi();
                 return;
             }
@@ -612,7 +530,7 @@ namespace Telescope
                 {
                     e.Handled = true;
                     _focusTarget = FocusTarget.List;
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}focus target={_focusTarget}");
+                    TelescopeLog.Log($"focus target={_focusTarget}");
                     FocusTargetUi();
                     return;
                 }
@@ -621,7 +539,7 @@ namespace Telescope
                 {
                     e.Handled = true;
                     ApplyPreviewCaret();
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
+                    TelescopeLog.Log($"preview caret={_previewNavigator.Caret} line={_previewNavigator.LineNumber}");
                 }
                 base.OnPreviewKeyDown(e);
                 return;
@@ -669,7 +587,7 @@ namespace Telescope
             }
 
             _promptBox.CaretIndex = navigator.Caret;
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}prompt-motion key={key} caret={navigator.Caret}");
+            TelescopeLog.Log($"prompt-motion key={key} caret={navigator.Caret}");
             return true;
         }
 
@@ -720,17 +638,7 @@ namespace Telescope
 
         private void ApplyPreviewCaret()
         {
-            _previewBox.CaretPosition = CaretToPointer(_previewNavigator.Caret);
-            // Scroll so the caret's line is visible (RichTextBox has no ScrollToCaret).
-            try
-            {
-                Rect caretRect = _previewBox.CaretPosition.GetCharacterRect(LogicalDirection.Forward);
-                _previewBox.ScrollToVerticalOffset(caretRect.Top);
-            }
-            catch
-            {
-                // scroll is best-effort
-            }
+            PreviewRenderer.ApplyCaret(_previewBox, _previewNavigator);
         }
 
         /// <summary>
@@ -740,106 +648,7 @@ namespace Telescope
         /// </summary>
         private void SetPreviewContent(string content)
         {
-            content ??= string.Empty;
-            _previewNavigator.SetText(content);
-
-            var doc = new FlowDocument
-            {
-                PagePadding = new Thickness(0),
-                FontFamily = new FontFamily("Cascadia Code, Consolas"),
-                FontSize = 13,
-                Background = new SolidColorBrush(Color.FromRgb(0x10, 0x14, 0x18)),
-            };
-
-            var segments = SyntaxHighlighter.Segment(content);
-            var para = NewPreviewParagraph();
-            foreach (var segment in segments)
-            {
-                string[] lines = segment.Text.Split('\n');
-                for (int k = 0; k < lines.Length; k++)
-                {
-                    if (k > 0)
-                    {
-                        doc.Blocks.Add(para);
-                        para = NewPreviewParagraph();
-                    }
-                    if (lines[k].Length > 0)
-                    {
-                        para.Inlines.Add(new Run(lines[k])
-                        {
-                            Foreground = ColorFor(segment.Category),
-                        });
-                    }
-                }
-            }
-            doc.Blocks.Add(para);
-
-            _previewBox.Document = doc;
-            _previewBox.CaretPosition = doc.ContentStart;
-            _previewBox.ScrollToHome();
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}preview tokens={segments.Count}");
-        }
-
-        private static Paragraph NewPreviewParagraph()
-        {
-            return new Paragraph
-            {
-                Margin = new Thickness(0),
-                Padding = new Thickness(0),
-            };
-        }
-
-        private static SolidColorBrush ColorFor(SyntaxCategory category)
-        {
-            // One-Dark/GitHub-dark palette that matches the overlay's dark chrome.
-            switch (category)
-            {
-                case SyntaxCategory.Keyword: return new SolidColorBrush(Color.FromRgb(0xc7, 0x92, 0xea));
-                case SyntaxCategory.String: return new SolidColorBrush(Color.FromRgb(0x98, 0xc3, 0x79));
-                case SyntaxCategory.Comment: return new SolidColorBrush(Color.FromRgb(0x7f, 0x84, 0x8e));
-                case SyntaxCategory.Number: return new SolidColorBrush(Color.FromRgb(0xd1, 0x9a, 0x66));
-                default: return new SolidColorBrush(Color.FromRgb(0xc9, 0xd1, 0xd9));
-            }
-        }
-
-        /// <summary>
-        /// Maps a plain-text caret index (the navigator's model) to a <see cref="TextPointer"/>
-        /// inside the currently rendered document. The document is one paragraph per line with one
-        /// run per token, so the mapping walks paragraphs/runs accumulating plain-text length —
-        /// each paragraph boundary counts as the '\n' between lines.
-        /// </summary>
-        private TextPointer CaretToPointer(int index)
-        {
-            FlowDocument doc = _previewBox.Document;
-            int plain = 0;
-            int blockCount = doc.Blocks.Count;
-            int blockIndex = 0;
-
-            foreach (var block in doc.Blocks)
-            {
-                bool lastBlock = ++blockIndex == blockCount;
-                if (block is Paragraph para)
-                {
-                    foreach (var inline in para.Inlines)
-                    {
-                        if (inline is Run run)
-                        {
-                            int len = run.Text.Length;
-                            if (index <= plain + len)
-                            {
-                                return run.ContentStart.GetPositionAtOffset(index - plain, LogicalDirection.Forward);
-                            }
-                            plain += len;
-                        }
-                    }
-                }
-                if (!lastBlock)
-                {
-                    plain += 1; // the '\n' separating this line from the next
-                }
-            }
-
-            return doc.ContentEnd;
+            PreviewRenderer.SetContent(_previewBox, _previewNavigator, content);
         }
 
         private void FocusTargetUi()
@@ -890,24 +699,15 @@ namespace Telescope
                     break;
                 case OverlayAction.EnterInsert:
                     handled = true;
-                    _promptBox.IsReadOnly = false;
-                    UpdateModeLabel();
-                    FocusPrompt();
-                    ApplyInsertCaret(0);
+                    EnterInsert(CaretPlacement.Current);
                     break;
                 case OverlayAction.EnterInsertAppend:
                     handled = true;
-                    _promptBox.IsReadOnly = false;
-                    UpdateModeLabel();
-                    FocusPrompt();
-                    ApplyInsertCaret(1);
+                    EnterInsert(CaretPlacement.End);
                     break;
                 case OverlayAction.EnterInsertStart:
                     handled = true;
-                    _promptBox.IsReadOnly = false;
-                    UpdateModeLabel();
-                    FocusPrompt();
-                    ApplyInsertCaret(2);
+                    EnterInsert(CaretPlacement.Start);
                     break;
                 case OverlayAction.EnterNormal:
                     handled = true;
@@ -931,7 +731,7 @@ namespace Telescope
             if (handled || e.Key == Key.J || e.Key == Key.K || e.Key == Key.Escape || e.Key == Key.Enter)
             {
                 e.Handled = handled;
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}key={e.Key} mode={mode} handled={handled}");
+                TelescopeLog.Log($"key={e.Key} mode={mode} handled={handled}");
             }
         }
 
@@ -948,7 +748,7 @@ namespace Telescope
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}OnSelected failed: {ex.Message}");
+                    NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}OnSelected failed: {ex.Message}");
                 }
             }
         }

@@ -21,19 +21,16 @@ namespace Telescope
     /// line, the category, and the human-readable text. Carried as a <c>FinderEntry.Payload</c> so
     /// <see cref="CodeIssuesFinder.OnSelected"/> can open the file at the line.
     /// </summary>
-    public sealed class CodeIssue
+    public sealed class CodeIssue : FileLocation
     {
         public CodeIssue(CodeIssueKind kind, string filePath, int lineNumber, string text)
+            : base(filePath, lineNumber)
         {
             Kind = kind;
-            FilePath = filePath ?? string.Empty;
-            LineNumber = lineNumber;
             Text = text ?? string.Empty;
         }
 
         public CodeIssueKind Kind { get; }
-        public string FilePath { get; }
-        public int LineNumber { get; }
         public string Text { get; }
     }
 }

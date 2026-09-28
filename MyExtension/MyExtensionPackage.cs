@@ -44,10 +44,11 @@ namespace MyExtension
         private GlobalKeyboardHook? _keyboardLogger;
         private WindowManager? _windowManager;
         private TelescopeController? _telescope;
+        private TelescopeLauncher? _launcher;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
-            Debug.WriteLine("=== Global Keyboard Logger Package STARTED ===");
+            NeoVisualLog.Debug("=== Global Keyboard Logger Package STARTED ===");
             await base.InitializeAsync(cancellationToken, progress);
 
             // Configure the per-run log file (env-driven), start a fresh log for this instance,
@@ -68,9 +69,10 @@ namespace MyExtension
             try
             {
                 _telescope = new TelescopeController();
-                _telescope.RegisterFinder(new FileFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
-                _telescope.RegisterFinder(new CodeIssuesFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
-                _telescope.RegisterFinder(new GrepFinder(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
+                _launcher = new TelescopeLauncher(this, _telescope);
+                _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)));
+                _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this)));
+                _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this)));
                 _telescope.RegisterFinder(new ReferencesFinder(
                     () => GatherReferences(),
                     hit => OpenReference(hit)));
@@ -82,7 +84,21 @@ namespace MyExtension
                 // before the hook so InputHandler can consume its cached state from the start.
                 var monitorSelection = await GetServiceAsync<SVsShellMonitorSelection, IVsMonitorSelection>(throwOnFailure: true, cancellationToken);
                 _windowManager = new WindowManager(monitorSelection);
-                _windowManager.RegisterController(new SolutionExplorerController(() => CardinalNavigation.UtilityMethods.GetDTE(this)));
+                _windowManager.RegisterController(new SolutionExplorerController(() => VsServices.Dte(this)));
+
+                // Register a controller for every tool-window type explicitly (one per type, so
+                // mode is remembered per window type): text-input surfaces get the vim text-motion
+                // controller, everything else the general hjkl controller.
+                foreach (ToolWindowType type in Enum.GetValues(typeof(ToolWindowType)))
+                {
+                    if (type == ToolWindowType.Unknown)
+                    {
+                        continue;
+                    }
+                    _windowManager.RegisterController(GeneralToolWindowController.IsTextInputType(type)
+                        ? new TextInputToolWindowController(type)
+                        : new GeneralToolWindowController(type));
+                }
 
                 // The shell/main window is still configuring during early init and steals focus when
                 // it finishes. For testing, wait until the shell is fully initialized so the
@@ -99,7 +115,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"{Telescope.DiagnosticLog.MyExtension}Failed to initialize keyboard hook: {ex}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.MyExtension}Failed to initialize keyboard hook: {ex}");
             }
         }
 
@@ -410,26 +426,7 @@ namespace MyExtension
         private void OpenTelescope()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope?.Open("Files", centerRect, dte.MainWindow.HWnd);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"{Telescope.DiagnosticLog.MyExtension}Failed to open Telescope: {ex}");
-            }
-        }
-
-        private static System.Drawing.Rectangle? GetWindowRect(IntPtr hwnd)
-        {
-            if (hwnd == IntPtr.Zero || !GetWindowRectNative(hwnd, out var rect))
-            {
-                return null;
-            }
-            return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+            _launcher?.Open("Files");
         }
 
         // ================================================================
@@ -449,12 +446,7 @@ namespace MyExtension
             {
                 return;
             }
-            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-            dte.ItemOperations.OpenFile(hit.FilePath);
-            if (dte.ActiveDocument?.Selection is EnvDTE.TextSelection sel && hit.LineNumber > 0)
-            {
-                sel.GotoLine(hit.LineNumber, false);
-            }
+            OpenFileAtLine(hit.FilePath, hit.LineNumber);
         }
 
         /// <summary>
@@ -470,12 +462,75 @@ namespace MyExtension
             {
                 return;
             }
-            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-            dte.ItemOperations.OpenFile(hit.FilePath);
-            if (dte.ActiveDocument?.Selection is EnvDTE.TextSelection sel && hit.LineNumber > 0)
+            OpenFileAtLine(hit.FilePath, hit.LineNumber);
+        }
+
+        /// <summary>Opens a file in the editor and jumps the caret to the given 1-based line.</summary>
+        private void OpenFileAtLine(string path, int line)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            DteFileOpener.OpenAtLine(VsServices.Dte(this), path, line);
+        }
+
+        /// <summary>
+        /// Resolves the symbol at the caret in the active document via Roslyn (workspace = MEF
+        /// <c>VisualStudioWorkspace</c>, symbol resolution via <c>SymbolFinder</c>). The shared
+        /// prologue of the references/implementations gatherers. Runs on the UI thread; every
+        /// Roslyn async call is wrapped in <c>ThreadHelper.JoinableTaskFactory.Run</c> — never a
+        /// blocking sync-wait, which would deadlock the VS UI thread. Returns false (with all out
+        /// params null) when no reliable symbol can be resolved.
+        /// </summary>
+        private bool TryGetCaretSymbol(
+            out Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace workspace,
+            out Microsoft.CodeAnalysis.Document document,
+            out Microsoft.CodeAnalysis.ISymbol symbol)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            workspace = null!;
+            document = null!;
+            symbol = null!;
+
+            var dte = VsServices.Dte(this);
+            var active = dte?.ActiveDocument;
+            if (active == null)
             {
-                sel.GotoLine(hit.LineNumber, false);
+                return false;
             }
+
+            workspace = VsServices.Mef<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>(this);
+            if (workspace == null)
+            {
+                return false;
+            }
+
+            var solution = workspace.CurrentSolution;
+            var filePath = active.FullName;
+            var docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
+            if (docId == null)
+            {
+                return false;
+            }
+            document = solution.GetDocument(docId);
+            if (document == null)
+            {
+                return false;
+            }
+
+            // Caret offset: prefer the active editor text view (robust under VsVim). Fall back to
+            // DTE TextSelection line/col -> SourceText offset if the view is unavailable.
+            int caret = GetCaretOffset(dte, active, document);
+            if (caret < 0)
+            {
+                return false;
+            }
+
+            var doc = document;
+            var ws = workspace;
+            var semanticModel = ThreadHelper.JoinableTaskFactory.Run(
+                () => doc.GetSemanticModelAsync(System.Threading.CancellationToken.None));
+            symbol = ThreadHelper.JoinableTaskFactory.Run(() =>
+                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindSymbolAtPositionAsync(semanticModel, caret, ws));
+            return symbol != null;
         }
 
         /// <summary>
@@ -488,53 +543,12 @@ namespace MyExtension
         private IReadOnlyList<ReferenceHit> GatherReferences()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-            var active = dte?.ActiveDocument;
-            if (active == null)
-            {
-                return Array.Empty<ReferenceHit>();
-            }
-
-            var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
-                as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
-            var workspace = componentModel?.GetService<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>();
-            if (workspace == null)
+            if (!TryGetCaretSymbol(out var workspace, out var document, out var symbol))
             {
                 return Array.Empty<ReferenceHit>();
             }
 
             var solution = workspace.CurrentSolution;
-            var filePath = active.FullName;
-            var docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
-            if (docId == null)
-            {
-                return Array.Empty<ReferenceHit>();
-            }
-            var document = solution.GetDocument(docId);
-            if (document == null)
-            {
-                return Array.Empty<ReferenceHit>();
-            }
-
-            // Caret offset: prefer the active editor text view (robust under VsVim). Fall back to
-            // DTE TextSelection line/col -> SourceText offset if the view is unavailable.
-            int caret = GetCaretOffset(dte, active, document);
-            if (caret < 0)
-            {
-                return Array.Empty<ReferenceHit>();
-            }
-
-            var root = ThreadHelper.JoinableTaskFactory.Run(
-                () => document.GetSyntaxRootAsync(System.Threading.CancellationToken.None));
-            var semanticModel = ThreadHelper.JoinableTaskFactory.Run(
-                () => document.GetSemanticModelAsync(System.Threading.CancellationToken.None));
-            var symbol = ThreadHelper.JoinableTaskFactory.Run(() =>
-                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindSymbolAtPositionAsync(semanticModel, caret, workspace));
-            if (symbol == null)
-            {
-                return Array.Empty<ReferenceHit>();
-            }
-
             var refs = ThreadHelper.JoinableTaskFactory.Run(() =>
                 Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindReferencesAsync(symbol, solution));
 
@@ -570,51 +584,12 @@ namespace MyExtension
         private IReadOnlyList<ImplementationHit> GatherImplementations()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var dte = CardinalNavigation.UtilityMethods.GetDTE(this);
-            var active = dte?.ActiveDocument;
-            if (active == null)
-            {
-                return Array.Empty<ImplementationHit>();
-            }
-
-            var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
-                as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
-            var workspace = componentModel?.GetService<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>();
-            if (workspace == null)
+            if (!TryGetCaretSymbol(out var workspace, out var document, out var symbol))
             {
                 return Array.Empty<ImplementationHit>();
             }
 
             var solution = workspace.CurrentSolution;
-            var filePath = active.FullName;
-            var docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
-            if (docId == null)
-            {
-                return Array.Empty<ImplementationHit>();
-            }
-            var document = solution.GetDocument(docId);
-            if (document == null)
-            {
-                return Array.Empty<ImplementationHit>();
-            }
-
-            int caret = GetCaretOffset(dte, active, document);
-            if (caret < 0)
-            {
-                return Array.Empty<ImplementationHit>();
-            }
-
-            var root = ThreadHelper.JoinableTaskFactory.Run(
-                () => document.GetSyntaxRootAsync(System.Threading.CancellationToken.None));
-            var semanticModel = ThreadHelper.JoinableTaskFactory.Run(
-                () => document.GetSemanticModelAsync(System.Threading.CancellationToken.None));
-            var symbol = ThreadHelper.JoinableTaskFactory.Run(() =>
-                Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindSymbolAtPositionAsync(semanticModel, caret, workspace));
-            if (symbol == null)
-            {
-                return Array.Empty<ImplementationHit>();
-            }
-
             var impls = ThreadHelper.JoinableTaskFactory.Run(() =>
                 Microsoft.CodeAnalysis.FindSymbols.SymbolFinder.FindImplementationsAsync(symbol, solution));
 
@@ -685,13 +660,6 @@ namespace MyExtension
             ThreadHelper.ThrowIfNotOnUIThread();
             try
             {
-                var componentModel = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
-                    as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
-                if (componentModel == null)
-                {
-                    return -1;
-                }
-
                 var textManager = ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.TextManager.Interop.SVsTextManager))
                     as Microsoft.VisualStudio.TextManager.Interop.IVsTextManager;
                 if (textManager != null)
@@ -699,7 +667,7 @@ namespace MyExtension
                     textManager.GetActiveView(1, null, out Microsoft.VisualStudio.TextManager.Interop.IVsTextView textView);
                     if (textView != null)
                     {
-                        var adapter = componentModel.GetService<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>();
+                        var adapter = VsServices.Mef<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>(this);
                         var wpfView = adapter?.GetWpfTextView(textView);
                         if (wpfView != null)
                         {
@@ -722,7 +690,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}GetCaretOffset failed: {ex.Message}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}GetCaretOffset failed: {ex.Message}");
             }
             return -1;
         }
@@ -761,19 +729,6 @@ namespace MyExtension
             }
         }
 
-        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowRect")]
-        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-        private static extern bool GetWindowRectNative(IntPtr hWnd, out NativeRect rect);
-
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        private struct NativeRect
-        {
-            public int Left;
-            public int Top;
-            public int Right;
-            public int Bottom;
-        }
-
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -784,6 +739,7 @@ namespace MyExtension
                 _windowManager = null;
                 _telescope?.Dispose();
                 _telescope = null;
+                Telescope.NeoVisualLog.Close();
             }
 
             base.Dispose(disposing);

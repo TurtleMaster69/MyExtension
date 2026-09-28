@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 34 live E2E scenarios (no known-RED; a few flake on retry), feature
+> test commands, the 35 live E2E scenarios (no known-RED; a few flake on retry), feature
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -60,14 +60,12 @@ GlobalKeyboardHook (Win32 LL hook)
 | `BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode (predefined "Caret" adornment layer — do NOT export a custom `AdornmentLayerDefinition`, it breaks the editor's MEF composition). |
 | `WindowManager.cs` | Tracks the focused window frame; classifies `ToolWindowType`; dispatches to controllers. |
 | `CardinalMovment/WindowMatrix.cs` | Core navigation algorithm: filters windows by direction, alignment, adjacency, and closest distance. |
-| `CardinalMovment/WindowControlAdapter.cs` | Bridges an `IVsWindowFrame` (IVs shell) to an `EnvDTE.Window` (DTE automation). |
-| `CardinalMovment/IVsFrameView.cs` | Wraps `IVsWindowFrame` (+ `IVsWindowFrame4`) for screen-rect / visibility queries. |
-| `CardinalMovment/IVsUIWindowFrameExtractor.cs` | Enumerates tool + document window frames from `IVsUIShell`. |
+| `CardinalMovment/WindowAdapter.cs` | Pairs an `IVsWindowFrame` (IVs shell) with its `EnvDTE.Window` (DTE automation); exposes the on-screen rect lazily. |
 | `CardinalMovment/UtilityMethods.cs` | DTE / `IVsUIShell` service access and window comparison/linking helpers. |
 | `CardinalMovment/CardinalNavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `CardinalMovment/RectCoordinate.cs` | Simple int `x, y, width, height` rect value object. |
 | `CardinalMovment/LinqExtensionMethods.cs` | `DistinctBy` LINQ helper (used because target framework lacks it). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`): `TelescopeController`, `TelescopeOverlay` (WPF modal), `OverlayKeyHandler` (pure vim state machine), `TextMotionNavigator` (shared pure vim motions for preview + text-input windows), `SyntaxHighlighter` (preview syntax coloring), `FzfFilter` (fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `FileFinder`, `CodeIssuesFinder` (warnings/errors/TODO), `ReferencesFinder` + `ReferenceHit` (symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable), `GrepFinder` + `GrepHit` + `IQueryFinder` (query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders), `ImplementationFinder` + `ImplementationHit` (symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable), `ProjectFiles` (shared DTE enumeration), `ResultsFormatter`, `NeoVisualLog`/`LogFileWriter` (two-file per-run logs). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`): `TelescopeController`, `TelescopeOverlay` (WPF modal), `OverlayKeyHandler` (pure vim state machine), `TextMotionNavigator` (shared pure vim motions for preview + text-input windows), `SyntaxHighlighter` (preview syntax coloring), `FzfFilter` (fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `FileFinder`, `CodeIssuesFinder` (warnings/errors/TODO), `ReferencesFinder` + `ReferenceHit` (symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable), `GrepFinder` + `GrepHit` (query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders), `ImplementationFinder` + `ImplementationHit` (symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable), `ProjectFiles` (shared DTE enumeration), `ResultsFormatter`, `NeoVisualLog`/`LogFileWriter` (two-file per-run logs). |
 
 ## Tool-window controller pattern (newer than the window matrix)
 
@@ -93,25 +91,26 @@ Preview.** The overlay **closes on focus loss** (`Deactivated` → `CloseOverlay
 - **Two window APIs are used together.** The IVs shell API (`IVsWindowFrame`,
   `IVsUIShell`) provides precise on-screen geometry via `GetWindowScreenRect`;
   the DTE automation (`EnvDTE.Window`) provides activation (`window.Activate()`)
-  and framing (`LinkedWindowFrame`). `WindowControlAdapter` pairs them.
+  and framing (`LinkedWindowFrame`). `WindowAdapter` pairs them.
 - **Thread affinity is mandatory.** Almost every IVs/DTE call must be on the UI
   thread. The hook callback marshals to the main thread with
   `ThreadHelper.JoinableTaskFactory.Run(...)` + `SwitchToMainThreadAsync()`, and
   nearly every method starts with `ThreadHelper.ThrowIfNotOnUIThread()`. Keep
   this discipline — add it to any new VS API method. Never call VS objects from
   a background thread.
-- **`coordinates` (on `WindowControlAdapter`) is recomputed each access** via
-  `GetScreenDisplayCoordinates()`
+- **`Rect` (on `WindowAdapter`) is refreshed on every access** via
+  `GetWindowScreenRect`
   — it is not a cached snapshot. Reading it repeatedly reflects live window
   positions.
 - **Hidden/tabbed windows are filtered out** before distance computation
-  (`RemoveHiddenOrTabbedWindows`), since their screen rect reads `0,0,0,0`.
-- **DPR/DPI matters.** `SetWindowDivideSelectionSizes()` scales the
+  (the `WindowNavigationEngine` pipeline's `!IsEmpty` predicate), since their
+  screen rect reads `0,0,0,0`.
+- **DPR/DPI matters.** `NavigationSettings.FromSystemDpi()` scales the
   "divide" tolerance constants by the system DPI scale factor
   (`DpiAwareness.SystemDpiX / DefaultLogicalDpi`). Tune the logical constants in
   `CardinalNavigationConstants` (`DefaultLogicalXWindowDivide`,
-  `DefaultLogicalYWindowDivide`, `DefaultLogicalTabPaneDivide`,
-  `DefaultLogicalSelectorScale`), not the raw pixel values.
+  `DefaultLogicalTabPaneDivide`, `DefaultLogicalSelectorScale`), not the raw
+  pixel values.
 - **The leader key is Space.** `InputHandler.LeaderKey = Keys.Space`. Flat
   (`KeyDown`) handlers consume the key by making `HookCallback` return `(IntPtr)1`
   — that **blocks the key** from reaching VS. Returning `0`/`CallNextHookEx`
@@ -142,26 +141,28 @@ shortcuts (e.g. `Ctrl+H`, distinguished by a `+`). Action names resolve in
 `command:<VsCommandName>`. To add a *new built-in
 action*, add a case in `ResolveAction` and a line in `default-keybindings.json`.
 
-## The navigation algorithm (WindowMatrix)
+## The navigation algorithm (WindowNavigationEngine)
 
-`NavigateInDirection` → `ReduceWindowsAndSelectActive`, which, in order:
+`WindowMatrix.NavigateInDirection` snapshots the active window's rect and the
+candidate rects, then delegates to the pure `WindowNavigationEngine.SelectTarget`
+(active, candidates, direction, settings) — a single O(n) pass over a
+`List<Func<RectCoordinate, RectCoordinate, Direction, bool>>` pipeline:
 
-1. `RemoveHiddenOrTabbedWindows()` — drop windows at rect `0,0,0,0`.
-2. `RemoveWindowsInWrongDirection(direction)` — keep only windows strictly in the
-   requested direction.
-3. `RemoveWindowsNotAligned(direction)` — axis overlap with the active window.
-4. `RemoveWindowsByClosestAdjacency(direction)` — nearest window within the DPI
-   divide.
-5. `SortByLargestAdjacency(direction)` — tie-break by largest shared edge.
-6. Activate `m_ActiveWindows.First()`.
+1. `!c.IsEmpty` — drop windows at rect `0,0,0,0` (hidden/tabbed).
+2. `IsInDirection(c, a, d)` — keep only windows strictly in the requested
+   direction (DOWN uses a `> 1` pixel tolerance).
+3. `IsAligned(c, a, d)` — axis overlap with the active window.
 
-All four "Remove..." steps are direction-parameterized with a local
-`filterFunction`. When adding a filter, follow that pattern and guard with
-`ThreadHelper.ThrowIfNotOnUIThread()` inside the predicate.
+`SelectTarget` first finds the minimum gap (`c.GapTo(active, direction)`) among
+candidates passing the whole pipeline, then picks the candidate with the largest
+adjacency (`c.Adjacency(active, direction.Axis())`) within the divide window
+`[minGap, minGap + divide]` (`settings.YDivide` for Up/Down, `settings.XDivide`
+for Left/Right), breaking ties by last-in-list order. It returns the winning
+candidate's index, or `null` when no candidate qualifies.
 
 > The algorithm currently takes only the **closest** window. It does not
-> implement "jump" or chained-movement behavior — extend `WindowMatrix` here if
-> needed.
+> implement "jump" or chained-movement behavior — extend `WindowNavigationEngine`
+> here if needed.
 
 ## Build / toolchain
 
@@ -206,8 +207,8 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (56) and
-  `dotnet run --project tests/NeoVisual.Tests` (31), with substring filter +
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (77) and
+  `dotnet run --project tests/NeoVisual.Tests` (74), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/test-e2e.ps1` (35 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,

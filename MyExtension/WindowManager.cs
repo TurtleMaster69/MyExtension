@@ -1,4 +1,6 @@
-﻿using Microsoft.VisualStudio;
+﻿using CardinalNavigation;
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using MyExtension;
 using System;
@@ -8,6 +10,11 @@ public sealed class WindowManager : IDisposable
 {
     private readonly IVsMonitorSelection _monitorSelection;
     private uint _selectionEventsCookie;
+
+    // Cached IVsUIShell frame enumeration, invalidated on focus-change events so navigation
+    // reuses the enumeration across keystrokes instead of rebuilding it per Ctrl+H/J/K/L.
+    private List<WindowAdapter>? _cachedAdapters;
+    private bool _adaptersDirty = true;
 
     // The active tool window's controller. Specific controllers can be registered here; any
     // unregistered type falls back to a shared GeneralToolWindowController, giving hjkl + an
@@ -74,28 +81,23 @@ public sealed class WindowManager : IDisposable
     private IToolWindowController GetController(ToolWindowType type)
     {
         // Return a stable per-type controller so mode is remembered per window type.
-        if (_controllers.TryGetValue(type, out var registered))
-        {
-            return registered;
-        }
+        return _controllers.TryGetValue(type, out var registered) ? registered : _defaultController;
+    }
 
-        if (type == ToolWindowType.Unknown)
+    /// <summary>
+    /// Returns the cached frame enumeration, re-enumerating only when it is dirty (a focus
+    /// change) or not yet built. Rects are refreshed lazily per navigation via
+    /// <see cref="WindowAdapter.Rect"/>.
+    /// </summary>
+    internal List<WindowAdapter> GetWindowAdapters(AsyncPackage package)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_cachedAdapters == null || _adaptersDirty)
         {
-            return _defaultController;
+            _cachedAdapters = WindowAdapter.Enumerate(package);
+            _adaptersDirty = false;
         }
-
-        // Text-input surfaces (Command Window, Find and Replace, Immediate Window, ...) get the
-        // vim text-motion controller: normal-mode h/l/w/b/e/a/A/I caret motions over the text box.
-        if (GeneralToolWindowController.IsTextInputType(type))
-        {
-            var text = new TextInputToolWindowController(type);
-            _controllers[type] = text;
-            return text;
-        }
-
-        var general = new GeneralToolWindowController(type);
-        _controllers[type] = general;
-        return general;
+        return _cachedAdapters;
     }
 
     private void RefreshCurrentWindow()
@@ -110,6 +112,7 @@ public sealed class WindowManager : IDisposable
     private void OnWindowFocusChanged()
     {
         Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        _adaptersDirty = true;
         RefreshCurrentWindow();
         if (CurrentWindow == null) { return; }
         CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);

@@ -77,10 +77,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $root 'log'
 
-function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Info($msg) { Write-Host "    $msg" }
-function Write-Pass($msg) { Write-Host "    PASS: $msg" -ForegroundColor Green }
-function Write-Fail($msg) { Write-Host "    FAIL: $msg" -ForegroundColor Red }
+# Shared harness helpers (prefix vars, Write-*, key injection, log waits, foreground, VS-root
+# resolution) live in harness-common.ps1 — dot-source so this script and the other harness scripts
+# share one byte-compatible implementation.
+. (Join-Path $PSScriptRoot 'harness-common.ps1')
 
 # Scenario registry: name -> scriptblock. Each scriptblock receives the VS process object and must
 # throw (or return $false) on failure; the runner reports and continues.
@@ -159,53 +159,6 @@ function Register-Scenario([string]$name, [scriptblock]$body) {
 # ---------------------------------------------------------------------------
 # Scenario definitions
 # ---------------------------------------------------------------------------
-
-# Helpers used inside scenarios (defined at script scope).
-$script:VkEscape = 0x1B
-$script:VkSpace = 0x20
-$script:VkEnter = 0x0D
-$script:VkTab = 0x09
-
-# Per-scenario log baseline: assertions search the whole post-baseline window (never advance), so
-# an assert may re-match a line that an earlier helper (e.g. Open-Telescope) already confirmed.
-$script:LogBaseline = 0
-
-# Single source for log prefixes (regex-escaped) — keep in sync with
-# Telescope/DiagnosticLog.cs; pinned by unit test Run_LogPrefixes_Pinned.
-$script:PfxNeo = '\[NeoVisual\] '
-$script:PfxTel = '\[Telescope\] '
-$script:PfxHook = '\[Hook\] '
-$script:PfxMyExt = '\[MyExtension\] '
-
-function Reset-LogBaseline([string]$logPath) {
-    $script:LogBaseline = if (Test-Path $logPath) { (Get-Content $logPath).Count } else { 0 }
-}
-
-function Send-Tap([int]$vk) { [KbInject]::TapVk([uint16]$vk) }
-function Send-Shift([int]$vk) {
-    # Shift+<key> chord (e.g. G = move to last) via keybd_event.
-    [Win32.Kbd]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero)
-    [KbInject]::TapVk([uint16]$vk)
-    [Win32.Kbd]::keybd_event(0x10, 0, 2, [UIntPtr]::Zero)  # KEYEVENTF_KEYUP
-}
-function Send-Text([string]$text) {
-    foreach ($ch in $text.ToCharArray()) {
-        [KbInject]::TapVk([int][char]::ToUpper($ch))
-        Start-Sleep -Milliseconds 60
-    }
-}
-function Send-Ctrl([int]$vk) {
-    # Ctrl+<key> chord via keybd_event.
-    [Win32.Kbd]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
-    [KbInject]::TapVk([uint16]$vk)
-    [Win32.Kbd]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)  # KEYEVENTF_KEYUP
-}
-function Bring-ToForeground([IntPtr]$hwnd) {
-    [KbInject]::TapVk(0x12) | Out-Null   # Alt resets the foreground lock
-    Start-Sleep -Milliseconds 150
-    [Win32.Fg]::SetForegroundWindow($hwnd) | Out-Null
-    Start-Sleep -Milliseconds 300
-}
 
 function Enter-NormalContext([object]$vs) {
     # Ensure the focused editor is NOT in VsVim insert mode (where Space types a literal space
@@ -422,93 +375,6 @@ function Open-TelescopeImplementation([object]$vs, [string]$logPath) {
         Start-Sleep -Milliseconds 1000
     }
     throw 'Telescope implementation finder did not open'
-}
-
-function Close-Telescope([object]$vs, [string]$logPath) {
-    # The overlay is a modal dialog that ALREADY owns keyboard focus — do NOT call
-    # Bring-ToForeground here (it would SetForegroundWindow the VS main window and steal the
-    # Escapes away from the modal). Esc in insert mode -> normal; Esc in normal mode closes.
-    # Send Escape pairs (with a retry) until the "overlay closed" line appears after our cursor.
-    for ($attempt = 1; $attempt -le 4; $attempt++) {
-        Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 250
-        Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 500
-        if (Wait-NewLogLine $logPath "$($script:PfxTel)overlay closed" 5000) { return }
-    }
-    throw 'Telescope overlay did not close'
-}
-
-function Wait-NewLogLine([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
-    # Searches lines appended after the per-scenario baseline (does NOT advance — an assert may
-    # re-confirm a line another helper already saw). Returns true when the pattern matches.
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
-        if (Test-Path $logPath) {
-            $lines = Get-Content $logPath
-            $count = $lines.Count
-            if ($count -gt $script:LogBaseline) {
-                $tail = $lines[$script:LogBaseline..($count - 1)] -join "`n"
-                if ($tail -match $pattern) { return $true }
-            }
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    return $false
-}
-
-function Wait-NewLogLineAfter([string]$logPath, [int]$fromIndex, [string]$pattern, [int]$maxMs = 3000) {
-    # POSITIVE bounded wait over lines appended AFTER a caller-supplied absolute line index (a
-    # snapshot taken immediately BEFORE the key under test). Unlike Wait-NewLogLine it excludes
-    # earlier lines, so it can attribute a new diagnostic (e.g. an editor-focus vim-mode=/editor-view
-    # line) to the key just pressed. Positive wait, NOT an absence assertion.
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
-        if (Test-Path $logPath) {
-            $lines = Get-Content $logPath
-            if ($lines.Count -gt $fromIndex) {
-                $tail = $lines[$fromIndex..($lines.Count - 1)] -join "`n"
-                if ($tail -match $pattern) { return $true }
-            }
-        }
-        Start-Sleep -Milliseconds 200
-    }
-    return $false
-}
-
-function Wait-LogContains([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
-    # Whole-file matcher (bootstrap/startup waits); does not use the scenario cursor.
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
-        if (Test-Path $logPath) {
-            $line = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
-            if ($line -and $line -match $pattern) { return $true }
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    return $false
-}
-
-function Assert-NewLogLine([string]$logPath, [string]$pattern, [string]$what, [int]$maxMs = 20000) {
-    if (-not (Wait-NewLogLine $logPath $pattern $maxMs)) {
-        throw "never saw: $what (pattern: $pattern)"
-    }
-}
-
-function Assert-NoEnterStorm([string]$logPath, [string]$what) {
-    # Fail-fast (F1): the Enter/o -> OpenSelected() re-injection storm fires ~30 'solution-explorer
-    # open' lines in ~100ms. A legitimate walk presses Enter/o at most once per loop iteration
-    # (<=8), so >10 post-baseline open lines means the storm is present. Count WITHOUT advancing the
-    # baseline (same fixed-baseline discipline as Wait-NewLogLine).
-    if (-not (Test-Path $logPath)) { return }
-    $lines = Get-Content $logPath
-    $count = $lines.Count
-    if ($count -le $script:LogBaseline) { return }
-    $openCount = 0
-    for ($i = $script:LogBaseline; $i -lt $count; $i++) {
-        if ($lines[$i] -match "$($script:PfxNeo)solution-explorer open") { $openCount++ }
-    }
-    if ($openCount -gt 10) {
-        throw "Enter-storm: $openCount 'solution-explorer open' lines post-baseline (bound 10) during $what"
-    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1905,25 +1771,6 @@ if ($selected.Count -lt $Tests.Count) {
 
 Write-Step "E2E scenarios: $($selected -join ', ')"
 
-# --- key injection helper (keybd_event, like the repo's KeyInjection) -----
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class KbInject
-{
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-    private const uint KEYEVENTF_KEYUP = 0x0002;
-    public static void TapVk(ushort vk)
-    {
-        keybd_event((byte)vk, 0, 0, UIntPtr.Zero);
-        keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-    }
-}
-'@ -Language CSharp
-Add-Type -Namespace Win32 -Name Fg -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);'
-Add-Type -Namespace Win32 -Name Kbd -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'
-
 # ---------------------------------------------------------------------------
 # Bootstrap: scratch solution with multiple source files, deploy, launch exp
 # ---------------------------------------------------------------------------
@@ -1988,14 +1835,8 @@ $logPath = Join-Path $logDir "$runIndex-neovisual-exp.log"
 $debugLogPath = Join-Path $logDir "$runIndex-neovisual-main.log"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-# Resolve VS install root.
-$candidates = @('C:\Program Files\Microsoft Visual Studio\18\Community','C:\Program Files\Microsoft Visual Studio\2022\Community')
-$vsRoot = $candidates | Where-Object { Test-Path (Join-Path $_ 'Common7\IDE\devenv.exe') } | Select-Object -First 1
-if (-not $vsRoot) {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path $vswhere) { $vsRoot = (& $vswhere -products '*' -property installationPath | Select-Object -First 1) }
-}
-if (-not $vsRoot) { throw 'No Visual Studio installation found.' }
+# Resolve VS install root (shared helper).
+$vsRoot = Resolve-VsRoot
 $devenv = Join-Path $vsRoot 'Common7\IDE\devenv.exe'
 Write-Info "VS root: $vsRoot"
 
@@ -2060,8 +1901,10 @@ foreach ($name in $selected) {
     Write-Step "Scenario: $name"
     $ok = $false
     try {
-        & $script:Scenarios[$name] $vsProc $logPath
-        $ok = $true
+        # F38: capture the scriptblock's return value and treat $false as a failure (a scenario
+        # that returns $false instead of throwing must not silently pass).
+        $result = & $script:Scenarios[$name] $vsProc $logPath
+        $ok = ($result -ne $false)
     } catch {
         $failures += "$name : $($_.Exception.Message)"
     }

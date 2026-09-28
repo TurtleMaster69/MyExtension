@@ -20,36 +20,44 @@ namespace MyExtension
     /// <para/>
     /// <b>Threading:</b> all members are called on the UI thread only (same thread as the hook).
     /// </summary>
-    internal sealed class SolutionExplorerController : IToolWindowController
+    internal sealed class SolutionExplorerController : ToolWindowControllerBase
     {
         private readonly Func<EnvDTE.DTE> _dteFactory;
-        private bool _isInputMode;
+        private readonly System.Collections.Generic.Dictionary<Keys, Func<bool>> _actions;
 
-        public SolutionExplorerController(Func<EnvDTE.DTE> dteFactory)
+        public SolutionExplorerController(Func<EnvDTE.DTE> dteFactory) : base(ToolWindowType.SolutionExplorer)
         {
             _dteFactory = dteFactory;
             // Solution Explorer is a tree, not a text-input surface: start in normal mode.
             _isInputMode = false;
+            _actions = new System.Collections.Generic.Dictionary<Keys, Func<bool>>
+            {
+                [Keys.I] = () => { FocusSearchBox(); return true; },
+                [Keys.O] = () => { OpenSelected(); return true; },
+                [Keys.Enter] = () => { OpenSelected(); return true; },
+                [Keys.R] = () => { RenameSelected(); return true; },
+                [Keys.M] = () => { MoveSelected(); return true; },
+                [Keys.A] = () => { AddItem(); return true; },
+                [Keys.G] = () => { SelectFirstSourceFile(); return true; },
+                [Keys.H] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(KeyInjection.VK_LEFT); return true; },
+                [Keys.L] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(KeyInjection.VK_RIGHT); return true; },
+                [Keys.J] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=J -> arrow vk=40"); KeyInjection.Press(KeyInjection.VK_DOWN); return true; },
+                [Keys.K] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=K -> arrow vk=38"); KeyInjection.Press(KeyInjection.VK_UP); return true; },
+                [Keys.W] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.W, ref _isInputMode),
+                [Keys.B] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.B, ref _isInputMode),
+                [Keys.E] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.E, ref _isInputMode),
+            };
         }
 
-        public ToolWindowType Type => ToolWindowType.SolutionExplorer;
+        protected override void OnModeChanged() => TextMotionHelper.StyleFocusedSurface(_isInputMode);
 
-        public bool IsInputMode => _isInputMode;
-
-        public void EnterInputMode()
-        {
-            _isInputMode = true;
-            TextMotionHelper.StyleFocusedTextBox(true);
-        }
-
-        public void ExitInputMode()
+        public override void ExitInputMode()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             // Capture the typed query BEFORE any focus action: the first Escape clears the search
             // box's text, so reading it afterwards would always yield empty.
             string query = TextMotionHelper.FindFocusedTextBox()?.Text ?? string.Empty;
-            _isInputMode = false;
-            TextMotionHelper.StyleFocusedTextBox(false);
+            base.ExitInputMode();
             // If we came out of input mode while the search box still had focus (i focused it),
             // return focus to the tree so j/k/h/l continue to navigate the tree, not type into
             // the search box.
@@ -90,26 +98,7 @@ namespace MyExtension
 
                 // Resolve the query-matched tree item: VS's native search filter never selects the
                 // matching node, so we must select it ourselves.
-                EnvDTE.UIHierarchy seh = dte2.ToolWindows.SolutionExplorer;
-                EnvDTE.UIHierarchyItem? target = null;
-                if (seh.UIHierarchyItems.Count > 0)
-                {
-                    EnvDTE.UIHierarchyItem solutionNode = seh.UIHierarchyItems.Item(1);
-                    EnvDTE.UIHierarchyItem? projectNode = FindFirstProjectNode(solutionNode);
-                    if (projectNode != null)
-                    {
-                        // A collapsed project node's children are not enumerated; expand first.
-                        projectNode.UIHierarchyItems.Expanded = true;
-                        var forest = new System.Collections.Generic.List<HierarchyNode>();
-                        var pathToItem = new System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem>(StringComparer.OrdinalIgnoreCase);
-                        BuildForest(projectNode, forest, pathToItem);
-                        string? match = HierarchyResolver.FirstPathMatching(forest, query);
-                        if (match != null && pathToItem.TryGetValue(match, out var t))
-                        {
-                            target = t;
-                        }
-                    }
-                }
+                var (target, _) = ResolveTreeItem(dte2, forest => HierarchyResolver.FirstPathMatching(forest, query));
 
                 // Native Escape #1 clears the query. Press() records the VK in InjectedKeyGuard so the
                 // hook passes it through; _isInputMode is already false, so no second
@@ -158,88 +147,28 @@ namespace MyExtension
                 // Debug aid ONLY — OUTSIDE the M-M7 diagnostic contract (never asserted by the harness;
                 // M-M7 covers only the [NeoVisual]/[Telescope] LOG lines emitted via NeoVisualLog/Log).
                 // Mirrors the established SelectFirstSourceFile catch.
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
             }
         }
 
         /// <summary>The non-hjkl action keys this controller handles in normal mode. w/b/e are vim
         /// text motions for the search box; when the tree (not the search box) is focused they are
         /// not consumed and fall through.</summary>
-        public System.Collections.Generic.IReadOnlyCollection<Keys> ActionKeys { get; } =
-            new System.Collections.Generic.List<Keys>
-            {
-                Keys.O,
-                Keys.Enter,
-                Keys.R,
-                Keys.M,
-                Keys.A,
-                Keys.W,
-                Keys.B,
-                Keys.E,
-                Keys.G,
-            };
+        public override System.Collections.Generic.IReadOnlyCollection<Keys> ActionKeys => _actions.Keys;
 
-        public bool TryMove(Keys key)
+        public override bool TryMove(Keys key)
         {
             // If a WPF TextBox (the Solution Explorer search box) is focused, the controller behaves
             // like a text-input window: h/l/w/b/e/a/A/I move the caret, and every other key falls
-            // through so it types into the search box (no tree actions, no j/k arrow injection).
-            if (TextMotionHelper.TryMoveFocusedTextBox(key, ref _isInputMode))
-            {
-                return true;
-            }
+            // through so it types into the search box (no tree actions, no j/k arrow injection). The
+            // gate is mandatory: without it the merged helper's arrow fallback would swallow h/l in
+            // the tree and replace the collapse/expand diagnostics with toolwindow-move.
             if (TextMotionHelper.FindFocusedTextBox() != null)
             {
-                return false;
+                return TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode);
             }
 
-            switch (key)
-            {
-                case Keys.I:
-                    // i focuses the Solution Explorer search box (the "search text box"), the same
-                    // way Ctrl+; does natively. Entering input mode afterwards lets the user type
-                    // the query; Escape returns to normal tree navigation.
-                    FocusSearchBox();
-                    return true;
-                case Keys.O:
-                    OpenSelected();
-                    return true;
-                case Keys.Enter:
-                    OpenSelected();
-                    return true;
-                case Keys.R:
-                    RenameSelected();
-                    return true;
-                case Keys.M:
-                    MoveSelected();
-                    return true;
-                case Keys.A:
-                    AddItem();
-                    return true;
-                case Keys.G:
-                    SelectFirstSourceFile();
-                    return true;
-                case Keys.H:
-                    // Collapse the selected node's fold (Left arrow).
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer collapse");
-                    KeyInjection.Press(KeyInjection.VK_LEFT);
-                    return true;
-                case Keys.L:
-                    // Expand the selected node's fold (Right arrow).
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer expand");
-                    KeyInjection.Press(KeyInjection.VK_RIGHT);
-                    return true;
-                default:
-                    // j/k move up/down the tree.
-                    int vk = KeyToArrowVk(key);
-                    if (vk == 0)
-                    {
-                        return false;
-                    }
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk}");
-                    KeyInjection.Press(vk);
-                    return true;
-            }
+            return _actions.TryGetValue(key, out var action) && action();
         }
 
         private void OpenSelected()
@@ -281,41 +210,16 @@ namespace MyExtension
                     return;
                 }
 
-                EnvDTE.UIHierarchy seh = dte2.ToolWindows.SolutionExplorer;
-                if (seh.UIHierarchyItems.Count == 0)
-                {
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none");
-                    return;
-                }
-
-                EnvDTE.UIHierarchyItem solutionNode = seh.UIHierarchyItems.Item(1);
-                EnvDTE.UIHierarchyItem? projectNode = FindFirstProjectNode(solutionNode);
-                if (projectNode == null)
-                {
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none");
-                    return;
-                }
-
-                // A collapsed project node's UIHierarchyItems collection is EMPTY until the node is
-                // expanded (verified live: projectNode.UIHierarchyItems.Count == 0 while collapsed).
-                // Set the tree's Expanded flag FIRST so the children are materialized before the walk.
-                projectNode.UIHierarchyItems.Expanded = true;
-
-                // Build BOTH the pure HierarchyNode forest (for FirstSourceFilePath) and a
-                // full-path -> UIHierarchyItem map (for the follow-up programmatic Select).
-                var forest = new System.Collections.Generic.List<HierarchyNode>();
-                var pathToItem = new System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem>(StringComparer.OrdinalIgnoreCase);
-                BuildForest(projectNode, forest, pathToItem);
-
-                string? first = HierarchyResolver.FirstSourceFilePath(forest);
+                var (item, first) = ResolveTreeItem(dte2, HierarchyResolver.FirstSourceFilePath);
                 if (first == null)
                 {
                     Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none");
                     return;
                 }
 
-                // Programmatic select (no key injection).
-                pathToItem[first].Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
+                // Programmatic select (no key injection). item is non-null whenever first != null —
+                // the path came from the forest that populated pathToItem inside ResolveTreeItem.
+                item!.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
 
                 // Open the file directly so the harness's `editor-view-opened` line pins the SAME
                 // path as the `select file=` diagnostic (the injected-Enter chain in the harness
@@ -338,7 +242,7 @@ namespace MyExtension
                 keeper.Interval = System.TimeSpan.FromMilliseconds(100);
                 System.Windows.Threading.DispatcherTimer keeperRef = keeper;
                 var keeperStops = System.Environment.TickCount + 1500;
-                EnvDTE.UIHierarchyItem keepItem = pathToItem[first];
+                EnvDTE.UIHierarchyItem keepItem = item!;
                 keeper.Tick += (_, _) =>
                 {
                     try
@@ -367,8 +271,34 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Shared expand→resolve→Select pipeline: expands the first project node, builds the pure
+        /// <see cref="HierarchyNode"/> forest + full-path → <see cref="EnvDTE.UIHierarchyItem"/> map,
+        /// runs the caller's <paramref name="pick"/> over the forest, and resolves the picked path
+        /// back to its tree item. Returns <c>(null, null)</c> when no project node is reachable or
+        /// the pick returns null; the callers keep their divergent null semantics (ReturnFocusToTree
+        /// skips silently, SelectFirstSourceFile logs <c>select none</c>).
+        /// </summary>
+        private static (EnvDTE.UIHierarchyItem? Target, string? Path) ResolveTreeItem(
+            EnvDTE80.DTE2 dte2,
+            Func<System.Collections.Generic.List<HierarchyNode>, string?> pick)
+        {
+            EnvDTE.UIHierarchy seh = dte2.ToolWindows.SolutionExplorer;
+            if (seh.UIHierarchyItems.Count == 0) return (null, null);
+            var solutionNode = seh.UIHierarchyItems.Item(1);
+            var projectNode = FindFirstProjectNode(solutionNode);
+            if (projectNode == null) return (null, null);
+            projectNode.UIHierarchyItems.Expanded = true;
+            var forest = new System.Collections.Generic.List<HierarchyNode>();
+            var pathToItem = new System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem>(StringComparer.OrdinalIgnoreCase);
+            BuildForest(projectNode, forest, pathToItem);
+            string? path = pick(forest);
+            if (path == null) return (null, null);
+            return (pathToItem.TryGetValue(path, out var t) ? t : null, path);
         }
 
         /// <summary>Finds the FIRST <see cref="EnvDTE.Project"/> node under the solution tree:
@@ -475,17 +405,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
-            }
-        }
-
-        private static int KeyToArrowVk(Keys key)
-        {
-            switch (key)
-            {
-                case Keys.J: return KeyInjection.VK_DOWN;
-                case Keys.K: return KeyInjection.VK_UP;
-                default: return 0;
+                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
     }

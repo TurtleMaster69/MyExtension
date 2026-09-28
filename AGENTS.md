@@ -74,15 +74,20 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
 - `dotnet run --project tests/Telescope.Tests` — Telescope overlay logic.
   Covers overlay navigation + insert/normal mode (`OverlayKeyHandler`, extracted
   pure state machine), file search (`FzfFilter`), file open (`FileFinder`
-  hermetic seam), results formatting, log writer, and the preview-pane vim
-  motions (`TextMotionNavigator`). `-- KeyHandler`, `-- Preview`, `-- FileFinder`,
-  `-- Fzf` run subsets. Currently **56 tests, all passing**.
+  hermetic seam), results formatting, log writer (buffered `LogFileWriter`),
+  the preview-pane vim motions (`TextMotionNavigator`), the finder base
+  (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models).
+  `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf` run subsets.
+  Currently **77 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
-  the injected-key re-entry guard (`InjectedKeyGuard`), helpers.
+  the injected-key re-entry guard (`InjectedKeyGuard`), the shared vim-motion
+  engine (`TextMotionHelper`), the action-table controllers (`ActionKeys`),
+  the focus guard (`FocusGuard`), and the navigation engine
+  (`RectCoordinate`, `NavigationSettings`, `WindowNavigationEngine`).
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`, etc.
-  run subsets. Currently **31 tests, all passing**.
+  run subsets. Currently **74 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -105,8 +110,8 @@ pwsh tools/test-e2e.ps1 -List                        # list scenarios
 ```
 
 Scenarios (35 total; no known-RED remaining — `explorer-open-searchbox` was GREened
-2026-09-27; a few scenarios are flaky on retry, and `telescope-implementation` has a
-tracked intermittent Enter-delivery issue):
+2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
+fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
 - `telescope-search` — typing filters candidates (promptChanged + results)
 - `telescope-navigate` — normal-mode j/k move selection across ≥4 files; i returns to search
@@ -120,7 +125,7 @@ tracked intermittent Enter-delivery issue):
 - `telescope-open-file-searchbox` — insert-mode query, wait for the filtered result, Enter opens it
 - `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
 - `explorer-open-navigation` — `g` programmatically selects the first source file (`solution-explorer select file=...`) then `o` opens it
-- `explorer-open-searchbox` — (KNOWN-RED) i focuses the search box, query filters the tree, o opens; blocked on the focus-exit gap
+- `explorer-open-searchbox` — i focuses the search box, query filters the tree, o opens (GREened 2026-09-27 via `ReturnFocusToTree`)
 - `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 - `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
 - `telescope-q-close` — q closes the overlay in normal mode
@@ -252,8 +257,8 @@ Done and tested (live + unit):
   `.Result`/`.GetAwaiter().GetResult()` on the UI thread.
   — `telescope-references` live test passes.
 - Grep finder: `GrepFinder` (Telescope, `Name="Grep"`, `Space+F G`) searches the
-  solution's project files for the typed query — **query-driven** through a new
-  `IQueryFinder` seam in the overlay (per-keystroke re-gather with a ~200ms
+  solution's project files for the typed query — **query-driven** through the
+  `IsQueryDriven` seam in the overlay (per-keystroke re-gather with a ~200ms
   debounce; the fzf filter path is skipped for query finders but untouched for
   Files/Issues/References). Empty query → no candidates; case-insensitive
   substring scan over `ProjectFiles.Enumerate(dte)` (shared walker), capped at
@@ -373,7 +378,7 @@ Pending (user-requested, NOT yet implemented):
   it consistent, do not "fix" it (breaks references).
 - Two window APIs are used together: `IVsWindowFrame`/`IVsUIShell` for on-screen
   geometry (`GetWindowScreenRect`), `EnvDTE.Window` for activation
-  (`window.Activate()`) and framing (`LinkedWindowFrame`). `WindowControlAdapter`
+  (`window.Activate()`) and framing (`LinkedWindowFrame`). `WindowAdapter`
   pairs them; don't assume the DTE object identity matches the IVs frame.
 - Navigation tolerance divides are DPI-scaled; tune the logical constants in
   `CardinalNavigationConstants`, not raw pixel values.

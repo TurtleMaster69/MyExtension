@@ -1,89 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Windows.Forms;
 using CardinalNavigation;
 using Microsoft.VisualStudio.Shell.Interop;
 using MyExtension;
+using TestHarness;
 
 namespace NeoVisual.Tests
 {
-    /// <summary>
-    /// Minimal, dependency-free test runner for the NeoVisual extension's pure logic. Each public
-    /// static method named <c>Run_*</c> on <see cref="Tests"/> is discovered and executed; any
-    /// thrown exception fails that test. Exit code is the number of failures.
-    ///
-    /// <para/>
-    /// <b>Scope:</b> only logic that is testable without a running Visual Studio — keybinding
-    /// parsing, tool-window type classification, navigation helpers. The VS-coupled layers
-    /// (keyboard hook, WindowMatrix over IVsWindowFrame, DTE calls) are exercised end-to-end by
-    /// <c>tools/iterate-telescope.ps1</c> and the F5 harness instead.
-    ///
-    /// <para/>
-    /// <b>Running a subset:</b> pass a substring filter as the first argument; only tests whose
-    /// name contains it run (e.g. <c>-- Keybinding</c>). Pass <c>--list</c> to print tests.
-    /// </summary>
     internal static class Program
     {
         private static int Main(string[] args)
         {
-            var methods = typeof(Tests).GetMethods(BindingFlags.Public | BindingFlags.Static)
-                .Where(m => m.Name.StartsWith("Run_", StringComparison.Ordinal))
-                .OrderBy(m => m.Name, StringComparer.Ordinal)
-                .ToList();
-
-            if (args.Contains("--list", StringComparer.OrdinalIgnoreCase))
-            {
-                Console.WriteLine("Available tests:");
-                foreach (var m in methods)
-                {
-                    Console.WriteLine($"  {m.Name}");
-                }
-                return 0;
-            }
-
-            string? filter = args.FirstOrDefault(a => !a.StartsWith("-", StringComparison.Ordinal));
-            if (!string.IsNullOrWhiteSpace(filter))
-            {
-                methods = methods.Where(m => m.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-            }
-
-            if (methods.Count == 0)
-            {
-                Console.WriteLine("No tests matched.");
-                return 1;
-            }
-
-            int passed = 0;
-            int failed = 0;
-            foreach (var method in methods)
-            {
-                try
-                {
-                    method.Invoke(null, null);
-                    Console.WriteLine($"PASS  {method.Name}");
-                    passed++;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"FAIL  {method.Name}: {Unwrap(ex).Message}");
-                    failed++;
-                }
-            }
-
-            Console.WriteLine();
-            Console.WriteLine($"{passed} passed, {failed} failed, {methods.Count} total.");
-            return failed;
-        }
-
-        private static Exception Unwrap(Exception ex)
-        {
-            while (ex is TargetInvocationException tie && tie.InnerException != null)
-            {
-                ex = tie.InnerException;
-            }
-            return ex;
+            MyExtension.KeyInjection.SimulateOnly = true;
+            return TestHarness.TestRunner.Run(typeof(Tests), args);
         }
     }
 
@@ -330,22 +261,55 @@ namespace NeoVisual.Tests
 
         public static void Run_TextInput_MapMotions()
         {
-            Assert.Equal(TextMotion.Left, TextInputToolWindowController.MapMotion(Keys.H, false));
-            Assert.Equal(TextMotion.Right, TextInputToolWindowController.MapMotion(Keys.L, false));
-            Assert.Equal(TextMotion.NextWord, TextInputToolWindowController.MapMotion(Keys.W, false));
-            Assert.Equal(TextMotion.PrevWord, TextInputToolWindowController.MapMotion(Keys.B, false));
-            Assert.Equal(TextMotion.EndWord, TextInputToolWindowController.MapMotion(Keys.E, false));
+            Assert.Equal(TextMotion.Left, TextMotionHelper.MapMotion(Keys.H, false));
+            Assert.Equal(TextMotion.Right, TextMotionHelper.MapMotion(Keys.L, false));
+            Assert.Equal(TextMotion.NextWord, TextMotionHelper.MapMotion(Keys.W, false));
+            Assert.Equal(TextMotion.PrevWord, TextMotionHelper.MapMotion(Keys.B, false));
+            Assert.Equal(TextMotion.EndWord, TextMotionHelper.MapMotion(Keys.E, false));
         }
 
         public static void Run_TextInput_MapInsertMotions()
         {
             // A (Shift+a) = insert at end; a = insert after caret; I (Shift+i) = insert at start.
-            Assert.Equal(TextMotion.InsertEnd, TextInputToolWindowController.MapMotion(Keys.A, true));
-            Assert.Equal(TextMotion.InsertAfter, TextInputToolWindowController.MapMotion(Keys.A, false));
-            Assert.Equal(TextMotion.InsertStart, TextInputToolWindowController.MapMotion(Keys.I, true));
+            Assert.Equal(TextMotion.InsertEnd, TextMotionHelper.MapMotion(Keys.A, true));
+            Assert.Equal(TextMotion.InsertAfter, TextMotionHelper.MapMotion(Keys.A, false));
+            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
             // A bare i (no shift) is the generic insert handled by InputHandler, not a motion.
-            Assert.Equal(null, TextInputToolWindowController.MapMotion(Keys.I, false));
-            Assert.Equal(null, TextInputToolWindowController.MapMotion(Keys.X, false));
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.I, false));
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.X, false));
+        }
+
+        // ================================================================
+        // TextMotionEngine — TextMotionHelper.MapMotion (BP-1/T1)
+        // RED: `TextMotionHelper.MapMotion` does not exist yet -> compile error
+        // ================================================================
+
+        public static void Run_TextMotionEngine_MapMotion_LeftRight()
+        {
+            Assert.Equal(TextMotion.Left, TextMotionHelper.MapMotion(Keys.H, false));
+            Assert.Equal(TextMotion.Right, TextMotionHelper.MapMotion(Keys.L, false));
+        }
+
+        public static void Run_TextMotionEngine_MapMotion_Words()
+        {
+            Assert.Equal(TextMotion.NextWord, TextMotionHelper.MapMotion(Keys.W, false));
+            Assert.Equal(TextMotion.PrevWord, TextMotionHelper.MapMotion(Keys.B, false));
+            Assert.Equal(TextMotion.EndWord, TextMotionHelper.MapMotion(Keys.E, false));
+        }
+
+        public static void Run_TextMotionEngine_MapMotion_InsertShift()
+        {
+            // A (Shift+a) = insert at end; a = insert after caret; I (Shift+i) = insert at start.
+            Assert.Equal(TextMotion.InsertEnd, TextMotionHelper.MapMotion(Keys.A, true));
+            Assert.Equal(TextMotion.InsertAfter, TextMotionHelper.MapMotion(Keys.A, false));
+            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
+            // A bare i (no shift) is the generic insert handled by InputHandler, not a motion.
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.I, false));
+        }
+
+        public static void Run_TextMotionEngine_MapMotion_UnknownNull()
+        {
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.X, false));
         }
 
         public static void Run_TextInput_ActionKeys()
@@ -356,6 +320,79 @@ namespace NeoVisual.Tests
             Assert.True(keys.Contains(Keys.B), "b is an action key");
             Assert.True(keys.Contains(Keys.E), "e is an action key");
             Assert.True(keys.Contains(Keys.A), "a/A is an action key");
+        }
+
+        // ================================================================
+        // ActionTable — ActionKeys == _actions.Keys incl. hjkl (BP-2/T2)
+        // RED: hjkl are not in ActionKeys today (SolutionExplorer =
+        // O/Enter/R/M/A/W/B/E/G, TextInput = W/B/E/A) -> assertion failure
+        // ================================================================
+
+        public static void Run_ActionTable_SolutionExplorer_HjklInActionKeys()
+        {
+            var controller = new SolutionExplorerController(() => null!);
+            var keys = new List<Keys>(controller.ActionKeys);
+            Assert.True(keys.Contains(Keys.H), "h is an action key");
+            Assert.True(keys.Contains(Keys.J), "j is an action key");
+            Assert.True(keys.Contains(Keys.K), "k is an action key");
+            Assert.True(keys.Contains(Keys.L), "l is an action key");
+        }
+
+        public static void Run_ActionTable_TextInput_HjklInActionKeys()
+        {
+            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
+            var keys = new List<Keys>(controller.ActionKeys);
+            Assert.True(keys.Contains(Keys.H), "h is an action key");
+            Assert.True(keys.Contains(Keys.L), "l is an action key");
+        }
+
+        public static void Run_ActionTable_SolutionExplorer_ActionKeysMatchTable()
+        {
+            var controller = new SolutionExplorerController(() => null!);
+            var expected = new[]
+            {
+                Keys.O, Keys.Enter, Keys.R, Keys.M, Keys.A, Keys.G,
+                Keys.W, Keys.B, Keys.E, Keys.H, Keys.J, Keys.K, Keys.L, Keys.I,
+            };
+            var actual = new List<Keys>(controller.ActionKeys);
+            Assert.Equal(expected.Length, actual.Count);
+            foreach (var key in expected)
+            {
+                Assert.True(actual.Contains(key), $"ActionKeys contains {key}");
+            }
+        }
+
+        public static void Run_ActionTable_TextInput_ActionKeysMatchTable()
+        {
+            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
+            var expected = new[] { Keys.W, Keys.B, Keys.E, Keys.A, Keys.H, Keys.L };
+            var actual = new List<Keys>(controller.ActionKeys);
+            Assert.Equal(expected.Length, actual.Count);
+            foreach (var key in expected)
+            {
+                Assert.True(actual.Contains(key), $"ActionKeys contains {key}");
+            }
+        }
+
+        public static void Run_ActionTable_UnmappedKeyNotConsumed()
+        {
+            // SolutionExplorer's TryMove is hermetic. TextInput's TryMove JITs an IWpfTextView
+            // reference (Microsoft.VisualStudio.Text.UI) that the test project does not reference,
+            // so only the SolutionExplorer surface is exercised here (documented deviation).
+            var se = new SolutionExplorerController(() => null!);
+            Assert.False(se.TryMove(Keys.X), "SolutionExplorer does not consume X");
+        }
+
+        public static void Run_ActionTable_SolutionExplorer_ConsumesMappedKeys()
+        {
+            // O/R/M/A are hermetic. G (SelectFirstSourceFile) calls
+            // ThreadHelper.ThrowIfNotOnUIThread() and cannot run on the MTA test host, so it is
+            // excluded here (VS-coupled; documented deviation).
+            var controller = new SolutionExplorerController(() => null!);
+            Assert.True(controller.TryMove(Keys.O), "o opens");
+            Assert.True(controller.TryMove(Keys.R), "r renames");
+            Assert.True(controller.TryMove(Keys.M), "m moves");
+            Assert.True(controller.TryMove(Keys.A), "a adds");
         }
 
         // ================================================================
@@ -395,6 +432,28 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // KeyInjection — SimulateOnly (interrupting bugfix, BP-1)
+        // RED: `SimulateOnly` does not exist yet -> compile error
+        // ================================================================
+
+        public static void Run_KeyInjection_SimulateOnly()
+        {
+            // Simulate mode: Press must record the VK in the guard but skip the real
+            // keybd_event (no OS-level injection into whatever window has focus).
+            // Drain any VK_DOWN records left by earlier controller tests so this
+            // assertion is about THIS Press call, not a stale record.
+            while (InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_DOWN)) { }
+
+            KeyInjection.SimulateOnly = true;
+            KeyInjection.Press(KeyInjection.VK_DOWN);
+
+            Assert.True(InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_DOWN),
+                "Press recorded VK_DOWN in the guard even in simulate mode");
+            Assert.False(InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_DOWN),
+                "the recorded VK is consumed once (no double record)");
+        }
+
+        // ================================================================
         // FocusGuard — tool-window routing decision (pure seam)
         // ================================================================
 
@@ -402,22 +461,22 @@ namespace NeoVisual.Tests
         {
             // The leak: with stale tool-window state but an editor focused, routing must be off.
             Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false),
                 "editor-focused tool window must not route keys");
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true, isTextInputSurface: false),
                 "editor-focused action keys must not be interesting");
         }
 
         public static void Run_FocusGuard_TreeFocusedAllowsRouting()
         {
             Assert.True(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false),
                 "tree-focused tool window routes keys");
             Assert.True(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: false),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: false, isTextInputSurface: false),
                 "tree-focused action keys are interesting");
         }
 
@@ -425,7 +484,7 @@ namespace NeoVisual.Tests
         {
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: true, actionKeyCount: 5, editorFocused: false),
+                    isToolWindow: true, isInputMode: true, actionKeyCount: 5, editorFocused: false, isTextInputSurface: false),
                 "input-mode tool window has no action-key pre-filter");
         }
 
@@ -433,7 +492,7 @@ namespace NeoVisual.Tests
         {
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 0, editorFocused: false),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 0, editorFocused: false, isTextInputSurface: false),
                 "zero action keys is never interesting");
         }
 
@@ -441,11 +500,60 @@ namespace NeoVisual.Tests
         {
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: false, isInputMode: false, actionKeyCount: 5, editorFocused: false),
+                    isToolWindow: false, isInputMode: false, actionKeyCount: 5, editorFocused: false, isTextInputSurface: false),
                 "non-tool-window has no action-key pre-filter");
             Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false),
                 "non-tool-window routes nothing");
+        }
+
+        // ================================================================
+        // FocusGuard truth table — veto owned by the guard (BP-4/T5)
+        // RED: the new 4-arg/5-arg signatures don't exist yet -> compile error
+        // ================================================================
+
+        public static void Run_FocusGuard_TruthTable_TextInputSurfaceOwnsKeyboard()
+        {
+            // A text-input surface (Command Window) owns the keyboard even when the editor flag
+            // is stale — the exception that keeps text-input routing alive.
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true),
+                "a text-input surface routes keys despite the stale editor flag");
+        }
+
+        public static void Run_FocusGuard_TruthTable_InputModeOwnsKeyboard()
+        {
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: true, isTextInputSurface: false),
+                "input-mode tool window routes keys despite the stale editor flag");
+        }
+
+        public static void Run_FocusGuard_TruthTable_EditorVetoesNavigation()
+        {
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false),
+                "editor-focused navigation tool window must not route keys");
+        }
+
+        public static void Run_FocusGuard_TruthTable_NonToolWindowNeverRoutes()
+        {
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false),
+                "non-tool-window never routes");
+        }
+
+        public static void Run_FocusGuard_TruthTable_ActionKeysTextInputSurface()
+        {
+            Assert.True(
+                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true, isTextInputSurface: true),
+                "text-input-surface action keys are interesting despite the stale editor flag");
+        }
+
+        public static void Run_FocusGuard_TruthTable_ActionKeysEditorVeto()
+        {
+            Assert.False(
+                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true, isTextInputSurface: false),
+                "editor-focused action keys are not interesting");
         }
 
         public static void Run_FocusGuard_IsTypingTruthTable()
@@ -473,6 +581,55 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // Actions — ActionRegistry (ResolveAction via a registry, BP-4/C3)
+        // RED: `Actions` / `TelescopeLauncher` do not exist yet -> compile error
+        // ================================================================
+
+        public static void Run_ActionsRegistry_ContainsAllBuiltins()
+        {
+            // The registry must hold exactly the 10 built-in action names, kept in sync with
+            // default-keybindings.json (the hand-sync bug this seam removes).
+            Assert.Equal(10, Actions.Registry.Count);
+            var names = new[]
+            {
+                "navigate-left", "navigate-right", "navigate-up", "navigate-down",
+                "telescope", "telescope-issues", "telescope-references",
+                "telescope-implementation", "telescope-grep", "toggle-solution-explorer",
+            };
+            foreach (string name in names)
+            {
+                Assert.True(Actions.Registry.ContainsKey(name), $"registry contains '{name}'");
+            }
+        }
+
+        public static void Run_ActionsRegistry_CaseInsensitive()
+        {
+            // The registry is OrdinalIgnoreCase, so an uppercased built-in name still resolves.
+            Assert.True(Actions.Resolve("NAVIGATE-LEFT", null!, null!) != null,
+                "case-insensitive resolve of a built-in name");
+        }
+
+        public static void Run_ActionsRegistry_UnknownFallsThrough()
+        {
+            // command: names are NOT registry entries — they fall through to ParseCommand in
+            // ResolveAction, so Resolve returns null for them.
+            Assert.True(Actions.Resolve("command:File.Save", null!, null!) == null,
+                "command: names fall through to ParseCommand");
+            Assert.True(Actions.Resolve("bogus", null!, null!) == null,
+                "unknown names resolve to null");
+        }
+
+        public static void Run_ActionsRegistry_TelescopeMapsToFinder()
+        {
+            // The 5 telescope action names map to the finder names the launcher opens.
+            Assert.Equal("Files", TelescopeLauncher.FinderNames["telescope"]);
+            Assert.Equal("Issues", TelescopeLauncher.FinderNames["telescope-issues"]);
+            Assert.Equal("References", TelescopeLauncher.FinderNames["telescope-references"]);
+            Assert.Equal("Implementation", TelescopeLauncher.FinderNames["telescope-implementation"]);
+            Assert.Equal("Grep", TelescopeLauncher.FinderNames["telescope-grep"]);
+        }
+
+        // ================================================================
         // Helpers — DistinctBy, RectCoordinate
         // ================================================================
 
@@ -488,38 +645,183 @@ namespace NeoVisual.Tests
 
         public static void Run_RectCoordinate_StoresFields()
         {
+            // N2 (BP-1): RectCoordinate becomes a readonly struct with uppercase readonly fields.
+            // RED: `r.X` does not compile before the merge (fields are lowercase x,y,width,height).
             var r = new RectCoordinate(1, 2, 3, 4);
-            Assert.Equal(1, r.x);
-            Assert.Equal(2, r.y);
-            Assert.Equal(3, r.width);
-            Assert.Equal(4, r.height);
-        }
-    }
-
-    internal static class Assert
-    {
-        public static void Equal<T>(T expected, T actual)
-        {
-            if (!EqualityComparer<T>.Default.Equals(expected, actual))
-            {
-                throw new Exception($"Expected [{expected}] but got [{actual}]");
-            }
+            Assert.Equal(1, r.X);
+            Assert.Equal(2, r.Y);
+            Assert.Equal(3, r.Width);
+            Assert.Equal(4, r.Height);
         }
 
-        public static void True(bool condition, string message)
+        // ================================================================
+        // RectCoordinate geometry members (BP-1/N2)
+        // RED: Right/Bottom/IsEmpty/Adjacency/GapTo + Axis/Direction don't exist -> compile error
+        // ================================================================
+
+        public static void Run_RectCoordinate_Right_Bottom()
         {
-            if (!condition)
-            {
-                throw new Exception(message);
-            }
+            var r = new RectCoordinate(1, 2, 3, 4);
+            Assert.Equal(4, r.Right);   // X + Width
+            Assert.Equal(6, r.Bottom);  // Y + Height
         }
 
-        public static void False(bool condition, string message)
+        public static void Run_RectCoordinate_IsEmpty()
         {
-            if (condition)
+            Assert.True(new RectCoordinate(0, 0, 0, 0).IsEmpty, "all-zero rect is empty");
+            Assert.False(new RectCoordinate(1, 0, 0, 0).IsEmpty, "non-zero X means not empty");
+        }
+
+        public static void Run_RectCoordinate_Adjacency()
+        {
+            // 1-D span overlap on the given axis (closed-form AdjacencySize).
+            Assert.Equal(5, new RectCoordinate(0, 0, 10, 10).Adjacency(new RectCoordinate(5, 0, 10, 10), Axis.X));
+            Assert.Equal(0, new RectCoordinate(0, 0, 10, 10).Adjacency(new RectCoordinate(20, 0, 10, 10), Axis.X));
+            Assert.Equal(5, new RectCoordinate(0, 0, 10, 10).Adjacency(new RectCoordinate(0, 5, 10, 10), Axis.Y));
+        }
+
+        public static void Run_RectCoordinate_GapTo()
+        {
+            var active = new RectCoordinate(100, 100, 100, 100); // Right=200, Bottom=200
+            Assert.Equal(50, new RectCoordinate(100, 0, 100, 50).GapTo(active, Direction.Up));
+            Assert.Equal(2, new RectCoordinate(100, 202, 100, 50).GapTo(active, Direction.Down));
+            Assert.Equal(50, new RectCoordinate(0, 100, 50, 100).GapTo(active, Direction.Left));
+            Assert.Equal(50, new RectCoordinate(250, 100, 50, 100).GapTo(active, Direction.Right));
+        }
+
+        // ================================================================
+        // NavigationSettings — DPI divide (BP-2/N4)
+        // RED: `NavigationSettings` doesn't exist -> compile error
+        // ================================================================
+
+        public static void Run_NavigationSettings_FromDpi()
+        {
+            // XDivide = 12 * (dpi/96) * 2; YDivide = 50 * (dpi/96) * 2 (exact integers for real DPIs).
+            var s96 = NavigationSettings.FromDpi(96, 96);
+            Assert.Equal(24, s96.XDivide);
+            Assert.Equal(100, s96.YDivide);
+
+            var s144 = NavigationSettings.FromDpi(144, 144);
+            Assert.Equal(36, s144.XDivide);
+            Assert.Equal(150, s144.YDivide);
+
+            var s120 = NavigationSettings.FromDpi(120, 120);
+            Assert.Equal(30, s120.XDivide);
+            Assert.Equal(125, s120.YDivide);
+        }
+
+        // ================================================================
+        // WindowNavigationEngine — pure navigation seam (BP-3/N3)
+        // RED: `WindowNavigationEngine` doesn't exist -> compile error
+        // Pins the CURRENT algorithm: max adjacency within the divide window
+        // [minGap, minGap+divide], last-wins ties, DOWN `c.Y - a.Y > 1`.
+        // ================================================================
+
+        public static void Run_WindowNavigationEngine_Up_PicksLargestAdjacency()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96); // XDivide=24, YDivide=100
+            var active = new RectCoordinate(100, 100, 100, 100); // Right=200, Bottom=200
+            var candidates = new[]
             {
-                throw new Exception(message);
-            }
+                new RectCoordinate(100, 0, 100, 50),  // gap 50, adjacency 100
+                new RectCoordinate(150, 0, 50, 50),   // gap 50, adjacency 50
+            };
+            Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_Down_ToleranceExcludes()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(100, 101, 100, 50), // c.Y - a.Y = 1, EXCLUDED by the >1 tolerance
+                new RectCoordinate(100, 102, 100, 50), // c.Y - a.Y = 2, passes
+            };
+            Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Down, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_Left_PicksLargestAdjacency()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(0, 100, 50, 100),   // gap 50, adjacency 100
+                new RectCoordinate(0, 150, 50, 50),    // gap 50, adjacency 50
+            };
+            Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Left, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_Right_PicksLargestAdjacency()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(250, 100, 50, 100), // gap 50, adjacency 100
+                new RectCoordinate(250, 150, 50, 50),  // gap 50, adjacency 50
+            };
+            Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Right, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_EmptyCandidates_ReturnsNull()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, new RectCoordinate[0], Direction.Up, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_NoCandidateInDirection_ReturnsNull()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[] { new RectCoordinate(100, 201, 100, 50) }; // below, but direction is Up
+            Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_NotAligned_Excluded()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[] { new RectCoordinate(0, 0, 50, 50) }; // above but no X-overlap with [100,200)
+            Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_AdjacencyTie_LastWins()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(100, 0, 100, 50),  // gap 50, adjacency 100
+                new RectCoordinate(100, 20, 100, 50), // gap 30, adjacency 100 (tie)
+            };
+            Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_DivideWindow_ExcludesBeyond()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96); // YDivide=100
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(100, 0, 100, 50),   // gap 50 (min)
+                new RectCoordinate(100, -200, 100, 50), // gap 250 > 50+100, beyond the divide window
+            };
+            Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_HiddenZeroRect_Excluded()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(0, 0, 0, 0),        // hidden/empty, excluded
+                new RectCoordinate(100, 0, 100, 50),  // the only real candidate
+            };
+            Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
     }
 }

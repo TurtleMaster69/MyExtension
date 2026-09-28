@@ -7,10 +7,43 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
+> **Status:** ACTIVE · **Updated:** 2026-09-28 · **Last item:** `neovisual-editor-insert` (GREEN 2026-09-27, `fd18315`)
+
+## Current state
+
+- **In progress:** none — the **Architecture consolidation (5 lanes)** reached GREEN
+  2026-09-28 (unit-only lane; the e2e gates are queued in `e2e-queue.md`, E2E-AC-1..5,
+  status QUEUED). No known-RED e2e scenario remains.
+- **Next up:** the still-open Architecture review backlog findings (F5, F8, F9, F12,
+  F13, F14, F15, F22, F43 — the ones NOT subsumed by the consolidation) are the next
+  candidates. Also pending: the Telescope `fzf` finder (DEFERRED, scope TBD) and the
+  user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop
+  starts it). See the Pending queue + User-requested features + Architecture review
+  backlog sections below.
+
+## Decisions (append-only; newest on top)
+
+- [2026-09-28] DECIDED: Trailmark guidance is single-sourced at
+  `.opencode/agent/trailmark-guidance.md` (all agents reference it, do not re-derive)
+  — reason: the copies had drifted twice (W3/W18) — status: ACTIVE.
+- [2026-09-28] DECIDED: `-NoBootstrap` reuse is allowed ONLY for the flaky-retry
+  re-run; the final-gate full suite always boots fresh — reason: reuse mode
+  re-snapshots the scratch as the `seed-leak` baseline, masking a seed write from an
+  earlier run — status: ACTIVE.
+- [2026-09-28] DECIDED: `log/tools-hash.txt` is allowlisted in `check-doc-refs.ps1`
+  — reason: absent on a fresh clone is NOT drift; existence is enforced by
+  `Write-ToolsHash` at every real run — status: ACTIVE.
+- [2026-09-27] DECIDED: `subagent_depth` stays at the intended value 2 (a local
+  config may differ temporarily) — reason: nested `trailmark-recon`/`code-slice-worker`
+  spawns need depth ≥ 2; do not lower to 1 or raise to ≥3 — status: ACTIVE.
+- [2026-09-27] DECIDED: model pins removed from all agents (inherit session default)
+  — reason: commit `4a2ec0b`; the "cheaper model" rationale for nested recon is void
+  — status: SUPERSEDED (M-M4).
+
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **56 passed**; `tests/NeoVisual.Tests`
-  **38 passed**.
+- Offline units: `tests/Telescope.Tests` **77 passed**; `tests/NeoVisual.Tests`
+  **74 passed** (after the Architecture consolidation, 2026-09-28).
 - Live E2E: `tools/test-e2e.ps1` lists **35 scenarios** (incl. `seed-reset`,
   `seed-leak`, `neovisual-explorer-move-editor-focus`). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
@@ -71,12 +104,11 @@ reads at the start of every loop iteration.
   see Done section). Historical note: it was KNOWN-RED here until the `g`
   programmatic select-first-source-file action shipped. (`neovisual-explorer-open`
   remains the separate Enter-storm scenario — that one is green too.)
-- ⚠️ **`explorer-open-searchbox`** — **KNOWN-RED** (registered; real gap; the ONE
-  remaining known-RED): after
-  `i`→type→`Esc`, `ExitInputMode`'s `View.SolutionExplorer` refocus does NOT
-  restore tree focus — `o` falls through into the search box (no
-  `solution-explorer open`). Needs the search-box focus-exit path fixed.
-  **Queued as the next bugfix item.**
+- ✅ **`explorer-open-searchbox`** — **GREened 2026-09-27** (historical: was KNOWN-RED
+  — after `i`→type→`Esc`, `ExitInputMode`'s `View.SolutionExplorer` refocus did NOT
+  restore tree focus, so `o` fell through into the search box; fixed by
+  `ReturnFocusToTree` + `HierarchyResolver.FirstPathMatching`; see the Done section).
+  **No known-RED remains.**
 
 > Harness-health note (2026-09-19): the two test projects compile the shared
 > `Telescope.csproj` into the same `obj/` path; Defender AV occasionally locks
@@ -86,8 +118,9 @@ reads at the start of every loop iteration.
 
 ## In-progress
 
-- (none — the tree-select capability item reached GREEN 2026-09-19; see the Done
-  section. Next up: `explorer-open-searchbox`, the remaining known-RED bugfix.)
+- (none — the tree-select capability item reached GREEN 2026-09-19 and
+  `explorer-open-searchbox` reached GREEN 2026-09-27; see the Done section. No
+  known-RED remains.)
 
 ## F45 status (Item 1 — log-prefix centralization)
 
@@ -107,7 +140,7 @@ were known-backlog assertion bugs, not regressions).
    `SolutionExplorerController`'s `m` action injects the VS Move command with NO focus guard:
    when Solution Explorer is NOT focused (a document holds focus), the physical `m` falls
    through to the editor and is typed (in VsVim normal mode `m` starts a motion → `ljoljoljo`
-   becomes a typed storm). Reproduced in `log/79-neovisual-exp.log` (15:30:29.338 `m` →
+   becomes a typed storm). Reproduced in a per-run `log/` file (15:30:29.338 `m` →
    `solution-explorer move`, then LMenu; the run's forced teardown saved 20s later). The
    user observed `ljoljoljoljoljo` typed into a seeded file (likely `Models/Order.cs`, the
    first file in the loop iteration order) from the **explorer-navigation** storm — the same
@@ -116,7 +149,9 @@ were known-backlog assertion bugs, not regressions).
    focus probes); otherwise fall through / swallow. Also stop the harness's
    `Assert-NoEnterStorm`/teardown from happening mid-scenario (the 20s LMenu gap proves the
    teardown fired while a scenario was still running — see #2).
-> **STATUS 2026-09-27: FIXED** — `Save-AllDocuments` runs `File.SaveAll` on every kill path.
+> **STATUS 2026-09-27: FIXED** — the `FocusGuard` (`EditorFocusedVeto`,
+> `MyExtension/ToolWindows/FocusGuard.cs`) closes this leak; see the Done entry
+> (commit `1f32d00`).
 
 2. **Harness teardown force-killed VS without saving → next run gets the "did not close
    properly / unsaved changes" prompt, and the leak evidence is lost.** ✅ **FIXED 2026-09-27**
@@ -124,12 +159,28 @@ were known-backlog assertion bugs, not regressions).
    instance's DTE from the ROT by PID via `dte-command.ps1` and runs `File.SaveAll`) and calls
    it on EVERY kill path — `Stop-SpawnedVs`, `Stop-HarnessVs`, and the stale-exploration
    cleanup — so open documents are flushed to disk *before* the process is stopped. This both
-   preserves a leak's file content for inspection and prevents the next run's clean-close
-   warning. (Item #1 remains OPEN.)
+    preserves a leak's file content for inspection and prevents the next run's clean-close
+    warning.
 
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
+
+> **FIRST ITEM (2026-09-28):** ~~the **Architecture consolidation (5 lanes)** plan~~ —
+> **DONE** (GREEN 2026-09-28, unit-only lane; see the Done section). The e2e gates are
+> queued in `e2e-queue.md` (E2E-AC-1..5, status QUEUED) — run them on a capable machine
+> before relying on live behavior. The consolidation subsumed backlog findings
+> (Architecture F2,F3,F4,F6,F7,F11,F36,F37,F38,F39,F40,F41,F44,F46; Code
+> M4,M5,M8,M9 + m17,m18,m19,m21,m23,m25,m33,m37,m38,m43,m44,m45; nits n2,n3) — do not
+> double-execute those. NOT subsumed (stay in the backlog): F5,F8,F9,F12,F13,F14,F15,
+> F22,F43,M19,m6,m7,m8,m9,m10,m11,m12,m13,m16,m20,m22,m24,m32,m34,m35,m36,m46,m47,m48,
+> m58,m59,m60,m62,m63,m64,m65,n1,n4-n16.
+
+> **Next candidates (after the consolidation plan):** the still-open **Architecture
+> review backlog** findings NOT subsumed by the consolidation (F5, F8, F9, F12, F13,
+> F14, F15, F22, F43 — filed 2026-09-19, no FIXED annotation) are the next items for
+> the build loop; pick them before the user-requested features. The Telescope `fzf`
+> finder (item 5) is DEFERRED (scope TBD by the user).
 
 0. ~~Harness seeding hardening~~ — **DONE** (see Done section).
 1. ~~F45 e2e verification subset (BP-23)~~ — **DONE**: the 19-scenario gate ran
@@ -153,8 +204,8 @@ Top of the queue, in priority order:
    exposed real gaps → now the next queue items:
    - ~~**`explorer-open-navigation`**~~ — ✅ **DONE** (tree-select capability,
      GREEN 2026-09-19; see Done section).
-   - **`explorer-open-searchbox`** — fix the search-box focus-exit gap
-     (KNOWN-RED scenario registered). **← next item.**
+   - ~~**`explorer-open-searchbox`**~~ — ✅ **DONE** (search-box focus-exit gap
+     fixed, GREEN 2026-09-27; see Done section).
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
 5.5. ~~**`telescope-implementation` — intermittent injected-Enter loss.**~~ ✅ **DONE
    2026-09-27** (see the Done section; commit `7c6569b`). Root cause was a **harness focus
@@ -263,6 +314,38 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-09-28 — Architecture consolidation (5 lanes)** (Lane: `refactor`, unit-only,
+  e2e deferred; ~20 delegations, 0 VS boots, 0 iterations). ~30 under-factored seams
+  collapsed into target APIs across 5 lanes: L1 mechanical dedup (NativeMethods,
+  TelescopeLauncher, Actions, VsServices, DteFileOpener, TelescopeLog, CaretPlacement,
+  IFinder query fold, shared TestRunner), L2 vim-motion/caret (TextMotionHelper engine,
+  ActionTable, ToolWindowControllerBase, FocusGuard veto, ResolveTreeItem), L3 finder
+  (FileLocation/IFileLocation/FileHit, FinderBase\<THit\>, PreviewRenderer,
+  RoslynCaretContext, ControllerRegistry), L4 navigation (RectCoordinate readonly
+  struct, NavigationSettings, WindowNavigationEngine, WindowAdapter, matrix cache),
+  L5 cross-cutting (buffered LogFileWriter + NeoVisualLog.Debug/Close,
+  harness-common.ps1, IsKeyOfInterest, ProjectLayering decision). Unit suites:
+  Telescope 56→77, NeoVisual 38→74, all passing. NO `[Telescope]`/`[NeoVisual]`/`[Hook]`
+  structured-log literal changed (one adjudicated deviation: hook prefix
+  `[GlobalKeyboard]`→`[Hook]`).
+  **Change summary:** created ~15 new files (NativeMethods, TelescopeLauncher, Actions,
+  VsServices, DteFileOpener, TelescopeLog, FileLocation/IFileLocation/FileHit,
+  FinderBase, PreviewRenderer, WindowAdapter, WindowNavigationEngine, NavigationSettings,
+  Direction, ToolWindowControllerBase, harness-common.ps1, e2e-queue.md); deleted
+  IVsFrameView/WindowControlAdapter/IVsUIWindowFrameExtractor/IQueryFinder + dead
+  constants/filters; rewired InputHandler/WindowMatrix/MyExtensionPackage/WindowManager.
+  **If this regresses, look first at the extracted pure seams (WindowNavigationEngine,
+  FinderBase, TextMotionHelper, FocusGuard) — each is unit-tested; the e2e gates are
+  queued in `e2e-queue.md` (E2E-AC-1..5).**
+- **2026-09-28 — Unit tests triggered real keybd_event injection** (Lane: `bugfix`;
+  3 delegations, 0 VS boots, 0 iterations). The unit tests called `TryMove` on the
+  tool-window controllers, which called `KeyInjection.Press` → real `keybd_event`,
+  injecting arrow/Enter/F2 keys into whatever window had OS focus (the user's active
+  window). **Change summary:** added `KeyInjection.SimulateOnly` (Press records the VK
+  in `InjectedKeyGuard` but skips `keybd_event` when set) + set it `true` in
+  `tests/NeoVisual.Tests/Program.cs` `Main`; added `Run_KeyInjection_SimulateOnly`.
+  **If this regresses, look first at `KeyInjection.Press` (the `if (SimulateOnly)
+  return;` guard) and the `Main` flag.**
 - **2026-09-27 — `neovisual-editor-insert` marker corruption** (Lane: `bugfix`,
   harness-only; 2 delegations, 5 VS boots, 1 iteration). The scenario was 2/2 RED and
   had been carried on the known-RED allowlist as an "IntelliSense flake" — it was
@@ -307,12 +390,13 @@ Top of the queue, in priority order:
   !IsTextInputType`, so the Command Window / an input-mode controller is never
   vetoed — DEVIATION **D4**, which fixed a fail-twice `neovisual-textinput-motions`
   regression); `WindowManager` gained a test-only `stale-toolwindow` sentinel.
-  New **36th** scenario `neovisual-explorer-move-editor-focus` (deterministic,
+  New **35th** scenario `neovisual-explorer-move-editor-focus` (deterministic,
   no timeouts/probes: sentinel + bounded absence scan). D-A/D-B/D-C ACCEPT (open/
   open-o gate strictly stronger; Gamma.cs; read-only GetActiveDocument).
   **If this regresses, look first at `EditorFocusedVeto` (`InputHandler.cs:82`) and
-  the sentinel scenario's bounded absence scan.** Doc sync: 34→35(36) scenarios,
-  NeoVisual 31→38 in spec/AGENTS/SKILL. Commit: `1f32d00`
+  the sentinel scenario's bounded absence scan.** Doc sync: 34→35 scenarios,
+  NeoVisual 31→38 in spec/AGENTS/SKILL. Commit: `1f32d00` (its message says "36th" —
+  a miscount; the actual count is 35).
 - **2026-09-27 — `explorer-open-searchbox` search-box focus-exit gap** (Lane:
   `bugfix (no-seam)`, 5 VERIFY boots + 1 RED boot; attempt 1 GREEN after 1 regression
   iteration). **The last known-RED scenario is now GREEN — the 34-scenario suite has no
@@ -600,7 +684,7 @@ Top of the queue, in priority order:
 - **2026-09-19 — Telescope grep finder** (Lane: feature, attempt 1, GREEN):
   `GrepFinder` + `GrepHit` (Telescope, `Name="Grep"`, `Space+F G`) search the
   solution's project files for the typed query — **query-driven** via a new
-  `IQueryFinder` capability seam in the overlay (per-keystroke re-gather with a
+  `IsQueryDriven` capability seam in the overlay (per-keystroke re-gather with a
   200ms debounce, skipping fzf for query finders; the fzf path for
   Files/Issues/References untouched — A6 verified). Empty query → 0 candidates;
   case-insensitive substring scan (`ProjectFiles.Enumerate`), `HitCap=200`;
@@ -612,7 +696,7 @@ Top of the queue, in priority order:
   pre-existing flake `neovisual-editor-insert`, retry-pass, count 2/3); units
   Telescope 52/52, NeoVisual 25/25.
   **Change summary:** created `Telescope/GrepHit.cs` +
-  `Telescope/GrepFinder.cs` + `Telescope/IQueryFinder.cs`; edited
+  `Telescope/GrepFinder.cs`; edited
   `Telescope/TelescopeOverlay.cs` (debounce + `RefreshQueryDrivenAsync` +
   GrepHit preview branch), `MyExtension/InputHandler.cs`
   (ResolveAction case + `OpenTelescopeGrep()`), `MyExtension/MyExtensionPackage.cs`
@@ -621,7 +705,7 @@ Top of the queue, in priority order:
   seed in `$canonical`), `tests/Telescope.Tests/Program.cs` (+6
   `Run_GrepFinder_*`). No DEVIATIONS.
   **If this regresses, look first at `TelescopeOverlay.RefreshResults`'s
-  IQueryFinder branch (debounce + `grep hits` summary) and `GrepFinder`
+  `IsQueryDriven` branch (debounce + `grep hits` summary) and `GrepFinder`
   `GetCandidates(string)`** — the two BP steps the e2e scenario asserts on.
   Doc sync: Telescope 46→52, scenarios 27→28 across spec.md / AGENTS.md /
   SKILL.md. Commit: `4faaf88`.
@@ -693,6 +777,12 @@ Full detail and the remaining report-only findings (F17-F21, F23-F35, F45) live 
 `docs/architecture-review.md`. Severity of this **filed subset (27 items, of the 46
 total findings)**: 1 critical, 15 major, 11 minor. (The remaining 19 findings —
 F17-F21, F23-F35, F45 — stayed report-only.)
+
+> **2026-09-28 — COVERED-BY the Architecture consolidation plan** (see the Pending
+> queue first item + `docs/implementation_plan.md`): **F2, F3, F4, F6, F7, F11, F36,
+> F37, F38, F39, F40, F41, F44, F46** — do NOT double-execute these; the consolidation
+> plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F12, F13, F14, F15,
+> F22, F43.
 
 ### Critical
 
@@ -779,7 +869,9 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 23. **F41 — Send-Text maps punctuation to wrong VKs.** `tools/test-e2e.ps1:92` (`!` →
     VK_PRIOR/PageUp). Fix: shift-chords or clipboard/SendKeys typing.
 24. **F42 — Harness kills ALL devenv on failure.** `tools/test-e2e.ps1:1105,1048`. Fix:
-    kill only the spawned main/exp instance PIDs.
+    kill only the spawned main/exp instance PIDs. ✅ **FIXED 2026-09-27 (M-M5)** —
+    `$script:SpawnedVsPids` + `Stop-SpawnedVs`/`Stop-HarnessVs`; all blanket
+    `Get-Process devenv | Stop-Process` kills removed.
 25. **F43 — fzf unit test silently passes when fzf absent.** `tests/Telescope.Tests/Program.cs:150`.
     Fix: fail the test or count it as SKIP.
 26. **F44 — dte-command.ps1 hardcoded VS paths.** `tools/dte-command.ps1:13`. Fix: vswhere
@@ -791,16 +883,10 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 
 ## How the loop works
 
-One item at a time: write `docs/implementation_plan.md` (with a known-RED
-allowlist) → RED (e2e-test-builder, right-reason RED) → Build Plan
-(implementation-planner) → BUILD (build-agent) → VERIFY (verification-agent, with
-harness-health checks + failure classification known-RED / flaky / regression) →
-DEBUG (debug-agent, verify-time) → RE-PLAN (implementation-planner) → max 5
-iterations counting real regressions only (flaky/known-RED don't count); escalate
-to the user via `question` on identical-repeat or after the cap. **GREEN** →
-append a durable `## Done` entry to this file, sync `docs/spec.md` + `AGENTS.md` +
-SKILL.md when counts/features changed, and re-run the SPEC REVIEW gate. See
-`neovim_hub.md` LOOP steps 1-10 for the authoritative flow.
+The authoritative loop is `neovim_hub.md` LOOP steps 1-11 (triage lanes → RED →
+PLAN → BUILD → DEBUG → RE-PLAN → VERIFY → final gate → failure-log sweep → GREEN
+commit). This file is the durable record the loop reads/writes; it does not
+duplicate the loop definition.
 
 ## Agent-orchestration review backlog (meta-review, 2026-09-19)
 
@@ -846,10 +932,10 @@ the COMPLETE note below; this header was stale).
 
 6. **M-C1 (downgraded from critical) — tools-hash is instruction-only, not enforced.** ✅ DONE
    `tools/test-e2e.ps1` now has `Write-ToolsHash` (SHA-256 of every file under `tools/`)
-   materialized at the bootstrap of every real run; `tools/check-doc-refs.ps1` no longer
-   allowlists `log/tools-hash.txt` (removed from `$runtimeArtifacts`), so a genuinely missing
-   hash now fails the lint (verified: present→PASS, absent→exit 1). `-List` stays side-effect-free
-   (exits before the call).
+   materialized at the bootstrap of every real run. **2026-09-28 update:** `log/tools-hash.txt`
+   is allowlisted in `$runtimeArtifacts` (absent on a fresh clone is NOT drift — the hash's
+   existence is enforced by `Write-ToolsHash` at every real run, not by the lint). `-List` stays
+   side-effect-free (exits before the call).
 7. **M-M6 — Final-gate unit suites run sequentially.** ✅ DONE
    `verification-agent.md` step 4 now runs BOTH unit projects CONCURRENTLY at the item's
    final gate (they're independent, no shared VS instance); loop-time single-project runs stay
@@ -915,7 +1001,7 @@ Findings + disposition (A-ids are local to this review; fixes to `.opencode/agen
    ✅ FIXED — same trap bullet; `verification-agent.md` now pins `--language c_sharp` and
    drops review-gate/taint from its mandatory set.
 3. **A3 (major) — review-hub slice lists stale.** 12 files missing, incl. all three new
-   finders + the `TelescopeFinder.cs`/`IQueryFinder` seams, `InjectedKeyGuard`,
+    finders + the `TelescopeFinder.cs`/`IsQueryDriven` seams, `InjectedKeyGuard`,
    `HierarchyResolver`, `DiagnosticLog`, `check-doc-refs.ps1`. ✅ FIXED —
    `neovim_review_hub.md` slice lists updated + "enumerate at dispatch time" note.
 4. **A4 (minor) — `prompt-rule.md` registered as a callable agent.** ✅ FIXED — added
@@ -1142,3 +1228,150 @@ defects plus DONE/OPEN items whose record no longer matches the repo.
     removed / forbidden API" symbols (`IsCompletionActive`, `IsEmpty`, `Intersects`,
     `HashCode`, `MaxBy`, `MinBy`) are on the external allowlist. Every hub GREEN now
     re-scans the report, so W12-style drift is mechanically gated.
+
+## Code review backlog (from docs/code-review.md, 2026-09-28)
+
+> **PRIORITY (user directive 2026-09-28): architecture/consolidation fixes in this
+> backlog — and the still-open Architecture review backlog above — are to be resolved
+> FIRST, before any feature is added/resolved (the user-requested features 6-9 and the
+> deferred fzf finder).** The consolidation cluster (M4/M5/M8/M9/M10/M11/M17 + the
+> merge candidates in the report's "Consolidation plan") is the recommended first lane.
+
+> **2026-09-28 — COVERED-BY the Architecture consolidation plan** (see the Pending
+> queue first item + `docs/implementation_plan.md`): **M4, M5, M8, M9 + m17, m18, m19,
+> m21, m23, m25, m33, m37, m38, m43, m44, m45 + n2, n3** — do NOT double-execute these.
+> **Still open (NOT subsumed):** M19 + m6, m7, m8, m9, m10, m11, m12, m13, m16, m20,
+> m22, m24, m32, m34, m35, m36, m46, m47, m48, m58, m59, m60, m62, m63, m64, m65 + n1,
+> n4-n16.
+
+Findings approved for filing (user selection: "All NEW findings"). Full detail lives in
+`docs/code-review.md` (first run — the file did not exist before 2026-09-28). The F-ids
+already filed in the Architecture review backlog above (F1-F16, F22, F36-F44, F46) are
+NOT re-filed; the majors that re-confirm them (M1=F2, M2=F14, M3=F5, M6=F7, M7=F6,
+M10=F3, M11=F4, M12=F8, M13=F9, M14=F10, M15=F11, M16=F12, M17=F13, M18=F15) stay in
+the report only. Filed subset (59 items): 5 major, 38 minor, 16 nit.
+
+### Major
+
+1. **M4 — Six near-identical `OpenTelescope*` methods.** `InputHandler.cs:465,486,508,530,551`
+   + `MyExtensionPackage.cs:410` — only the finder-name string differs. Fix: one
+   `OpenTelescope(string finder)` called by `ResolveAction` + the command handler.
+2. **M5 — Roslyn gatherers share ~90% prologue.** `MyExtensionPackage.cs:488` vs `:570`
+   (`GatherReferences`/`GatherImplementations`); `:445`/`:466` openers byte-identical.
+   Fix: shared `ResolveSymbolAtCaret()` + one `OpenHit(file, line)`.
+3. **M8 — Redundant filter passes per navigation.** `WindowMatrix.cs:294`
+   (RemoveWindowsByClosestAdjacency re-runs two filters already applied at :436-437).
+   Fix: drop the inner calls. ✅ FIXED — N3's `WindowNavigationEngine.SelectTarget`
+   runs the pipeline as ONE O(n) pass (each predicate applied once).
+4. **M9 — TextInputToolWindowController re-implements ~60% of TextMotionHelper.**
+   `TextInputToolWindowController.cs:223-340` (MotionName/FindFocusedTextBox/GetParent/
+   CreateBlockBrush/GetAsyncKeyState private copies). Fix: delegate the WPF branch to
+   `TextMotionHelper.TryMoveFocusedTextBox`; delete the private copies.
+5. **M19 — GrepFinder full-solution scan synchronously on the UI thread per settled
+   keystroke.** `GrepFinder.cs:52-98,153-175`. Fix: `Task.Run` the file scan; cache the
+   file list; marshal only results back.
+
+### Minor
+
+6. **m6 — `_package` field unused.** `GlobalKeyboardHook.cs:49`. Drop it.
+7. **m7 — `InitializeAsync` swallows all setup exceptions.** `MyExtensionPackage.cs:100-103`.
+   Log the failing step via `NeoVisualLog`; install the hook last.
+8. **m8 — `WindowManager` selection callback cast can throw; `guid != null` always true.**
+   `WindowManager.cs:116-129`. Guard `value is int`; drop the null check.
+9. **m9 — `IsTestStaleInjected()` does `File.Exists` per key on the hook path.**
+   `WindowManager.cs:37-38`. Cache the sentinel result for the process lifetime.
+10. **m10 — `FindFirstSourceFileInItems` is a third hand-rolled DTE walker.**
+    `MyExtensionPackage.cs:269-315`. Reuse `ProjectFiles.Enumerate`.
+11. **m11 — `IsWriteLocation` reflection failure silently downgrades to "read".**
+    `MyExtensionPackage.cs:749-762`. Log a one-time warning when the property is missing.
+12. **m12 — `_cachedTyping=false` set unconditionally on LostAggregateFocus.**
+    `VimModeTracker.cs:189`. Guard with the `ReferenceEquals(_focusedView, view)` check.
+13. **m13 — InjectedKeyGuard pending per-VK counter never expires.** `InjectedKeyGuard.cs:42-67`.
+    Add a bounded TTL or clear-on-key-up.
+14. **m16 — DPI divide uses system DPI, not per-monitor.** `WindowMatrix.cs:104`. Use
+    per-monitor DPI.
+15. **m17 — Same 4 screen-rect ints cached twice.** `IVsFrameView.cs:36,160`;
+    `WindowControlAdapter.cs:20,47`. Expose one cached `RectCoordinate` from `IVsFrameView`.
+16. **m18 — `.First()` + catch(InvalidOperationException) as control flow.**
+    `WindowControlAdapter.cs:75`. Use `FirstOrDefault` + null check.
+17. **m19 — IVsWindowFrameNotify members throw NotImplementedException.**
+    `IVsFrameView.cs:129`. Drop the interface or implement no-ops. ✅ FIXED — the
+    interface dies with `IVsFrameView` (N1 WindowAdapter).
+18. **m20 — `CheckDte` redundant warm-up.** `WindowMatrix.cs:118`. Remove it.
+19. **m21 — DOWN filter magic `> 1` pixel tolerance.** `WindowMatrix.cs:385`. Name the
+    constant / exclude the editor by identity.
+20. **m22 — Dead null-activeWindow guard.** `WindowMatrix.cs:73`. Move the null check
+    before GetLinkedWindowControlAdapters.
+21. **m23 — `GetWindowScreenRect` return ignored.** `WindowControlAdapter.cs:56`. Log and
+    skip on false.
+22. **m24 — `CompareWindows` caption heuristic false-positive pairs.**
+    `UtilityMethods.cs:112`. Compare by HWND/frame identity.
+23. **m25 — `RectCoordinate` mutable public fields.** `RectCoordinate.cs:12`. Make readonly.
+24. **m32 — ~1.5s `FocusKeeper` timer idiom duplicated.** `SolutionExplorerController.cs:337-358`
+    vs `:125-154`. Extract a shared `FocusKeeper` helper.
+25. **m33 — Editor-hosted insert motions (a/A/I) never clear the block caret.**
+    `TextInputToolWindowController.cs:143-145`. Pass `styleCaret:true` / call
+    `ApplyCaretStyle` after setting `_isInputMode`.
+26. **m34 — `I`/`A` insert placements resolve to whole-buffer, not current-line.**
+    `TextInputToolWindowController.cs:193-194`; `TextMotionNavigator.cs:207-210`. Fix in
+    `TextMotionNavigator` (LineStart/current-line end).
+27. **m35 — `FirstPathMatching` returns a folder's empty FilePath.**
+    `SolutionExplorerController.cs:106-110`. Skip `PhysicalFolderKind` nodes with empty
+    FilePath.
+28. **m36 — `TryMove`/`ExecuteCommand` lack `ThrowIfNotOnUIThread()`.**
+    `SolutionExplorerController.cs:182,470`. Add the guard.
+29. **m37 — EditorFocusedVeto composed in InputHandler, outside the pure tested guard.**
+    `FocusGuard.cs:30`. Move the veto composition into `FocusGuard`.
+30. **m38 — Up to 3 focus-resolution attempts per key.** `TextInputToolWindowController.cs:129`.
+    Order by the cheap `Keyboard.FocusedElement is IWpfTextView` check first.
+31. **m43 — Key→motion dispatch triplicated (preview/prompt/tool-window).**
+    `TelescopeOverlay.cs:653-719`; `TextMotionHelper.cs:51-101`. Extract a shared
+    key→`TextMotion` dispatcher (same fix as M10).
+32. **m44 — `GotoLine` byte-identical in two finders.** `CodeIssuesFinder.cs:122-137` vs
+    `GrepFinder.cs:136-151`. Hoist into a shared helper.
+33. **m45 — `File.AppendAllText` per Log call on the typing hot path.** `LogFileWriter.cs:82-102`.
+    Buffer writes (kept-open StreamWriter, flush on timer/close) or throttle per-keystroke logs.
+34. **m46 — `QuoteArg` naive Windows arg quoting.** `FzfFilter.cs:155-158`. Pass the query
+    via stdin (`--query=-`) or use proper Windows arg quoting.
+35. **m47 — Unterminated string ending in `\` throws `ArgumentOutOfRangeException`.**
+    `SyntaxHighlighter.cs:196-208`. Clamp `i` to Length after the escape skip.
+36. **m48 — `Dispose` swallows UI-thread assert, skips `CloseOverlay` off-thread.**
+    `TelescopeController.cs:80-92`. Marshal the close to the UI thread before nulling.
+37. **m58 — Unit tests reach real `keybd_event`.** `tests/NeoVisual.Tests/Program.cs:193-224`.
+    Inject a fake `KeyInjection` seam so unit tests have no OS side effects.
+38. **m59 — Fixed `Start-Sleep -Seconds 10` + per-key sleeps.** `tools/test-e2e.ps1:2025`;
+    `tools/iterate-telescope.ps1:179`. Replace with bounded polls on a real signal.
+39. **m60 — FzfFilter empty-query passthrough + missing-fzf fallback untested.**
+    `tests/Telescope.Tests/Program.cs:148-164`. Add tests for both branches.
+40. **m62 — TextMotionNavigator edge branches untested.** `tests/Telescope.Tests/Program.cs:303-409`.
+    Add boundary tests (Down/Up at bounds, NextWord past end).
+41. **m63 — spec.md §4 diagnostics contract omits asserted lines.** `docs/spec.md:153`
+    (`open finder=`, `Focus prompt => True`, `results count=... selected=...`,
+    `key=... mode=... handled=...`). Add them.
+42. **m64 — Stale "AGENTS.md test counts (56/26)".** `docs/progress.md:940`. Update to 56/38.
+43. **m65 — W12 fix claims architecture-review.md F1/F16/F45 annotated FIXED — they are not.**
+    `docs/progress.md:1126`. Annotate them (or correct the claim).
+
+### Nit
+
+44. **n1 — `upperDistaneBound` typo.** `WindowMatrix.cs:345`.
+45. **n2 — DefaultLogicalYWindowDivide (30) unused.** `CardinalNavigationConstants.cs:10`. ✅ FIXED — deleted in N4 (NavigationSettings).
+46. **n3 — `ThrowOnFailure` inside the Next loop.** `IVsUIWindowFrameExtractor.cs:31`.
+47. **n4 — Broken indentation.** `KeybindingConfig.cs:106`.
+48. **n5 — Preview `Key.D4` triggers LineEnd without Shift.** `TelescopeOverlay.cs:705`.
+49. **n6 — `ProjectFiles.Enumerate` lacks `ThrowIfNotOnUIThread()` self-assert.**
+    `ProjectFiles.cs:15`.
+50. **n7 — `CaretToPointer` walks whole FlowDocument per caret move.** `TelescopeOverlay.cs:811-843`.
+51. **n8 — `telescope-open` re-asserts a line `Open-Telescope` already waited for.**
+    `tools/test-e2e.ps1:748-754`.
+52. **n9 — `Run_RectCoordinate_StoresFields` coverage-touches a data holder.**
+    `tests/NeoVisual.Tests/Program.cs:489-496`.
+53. **n10 — Stale comment "DiagnosticLog.cs does not exist yet → RED".**
+    `tests/Telescope.Tests/Program.cs:937`.
+54. **n11 — Syntax braces assertion is a weak presence check.** `tests/Telescope.Tests/Program.cs:539`.
+55. **n12 — `Run_HierarchyResolver_FirstSourceFile` eager test.** `tests/NeoVisual.Tests/Program.cs:236-269`.
+56. **n13 — Stray form-feed + truncated commit hash `d18315`.** `docs/progress.md:49`.
+57. **n14 — Garbled parenthetical about slnx project count.** `docs/spec.md:23`.
+58. **n15 — Key-files table omits `Telescope/DiagnosticLog.cs`.** `docs/spec.md:84`.
+59. **n16 — SKILL.md claims `coordinates` is "recomputed each access … live" — it's a
+    construction-time snapshot.** `.opencode/skills/vs-extension-dev/SKILL.md`.

@@ -17,7 +17,7 @@ namespace Telescope
     /// <b>Threading:</b> <see cref="GetCandidates(string)"/> and <see cref="OnSelected"/> touch DTE
     /// and therefore must run on the UI thread (the overlay's debounce resumes on the UI thread).
     /// </summary>
-    public sealed class GrepFinder : IFinder, IQueryFinder
+    public sealed class GrepFinder : FinderBase<GrepHit>
     {
         /// <summary>Total-hit cap: a query that matches everything must not stall the UI.</summary>
         private const int HitCap = 200;
@@ -28,7 +28,9 @@ namespace Telescope
         private readonly Func<IReadOnlyList<string>>? _testFileSource;
         private readonly Action<GrepHit>? _testOpener;
 
-        public string Name => "Grep";
+        public override string Name => "Grep";
+
+        public override bool IsQueryDriven => true;
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         public GrepFinder(Func<DTE> dteFactory)
@@ -44,12 +46,9 @@ namespace Telescope
             _dteFactory = () => null!;
         }
 
-        public IReadOnlyList<FinderEntry> GetCandidates()
-        {
-            return GetCandidates(string.Empty);
-        }
+        protected override IReadOnlyList<GrepHit> GatherHits() => Array.Empty<GrepHit>();
 
-        public IReadOnlyList<FinderEntry> GetCandidates(string query)
+        public override IReadOnlyList<FinderEntry> GetCandidates(string query)
         {
             // Empty query -> deterministic empty initial state (NO gather log, so the finder-open
             // line emits only the generic "open finder=Grep candidates=0").
@@ -67,7 +66,7 @@ namespace Telescope
                 {
                     ScanFile(path, query, hits);
                 }
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}grep hits={hits.Count}");
+                TelescopeLog.Log($"grep hits={hits.Count}");
                 return hits.Select(ToEntry).ToList();
             }
 
@@ -90,20 +89,21 @@ namespace Telescope
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}GrepFinder failed to enumerate: {ex.Message}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}GrepFinder failed to enumerate: {ex.Message}");
             }
 
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}grep hits={hits.Count}");
+            TelescopeLog.Log($"grep hits={hits.Count}");
             return hits.Select(ToEntry).ToList();
         }
 
-        public void OnSelected(FinderEntry entry)
+        protected override FinderEntry ToEntry(GrepHit hit)
         {
-            if (entry.Payload is not GrepHit hit)
-            {
-                return;
-            }
+            string display = $"{Path.GetFileName(hit.FilePath)}:{hit.LineNumber}: {hit.LineText}";
+            return new FinderEntry(display, hit);
+        }
 
+        protected override void OpenHit(GrepHit hit)
+        {
             if (_testOpener != null)
             {
                 // Hermetic test path: no VS thread affinity.
@@ -111,44 +111,17 @@ namespace Telescope
                 return;
             }
 
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
+            if (!File.Exists(hit.FilePath))
             {
-                if (!File.Exists(hit.FilePath))
-                {
-                    return;
-                }
+                return;
+            }
 
-                DTE dte = _dteFactory();
-                dte.ItemOperations.OpenFile(hit.FilePath);
-                GotoLine(dte, hit.LineNumber);
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened grep: file={hit.FilePath} line={hit.LineNumber}");
-            }
-            catch (Exception ex)
-            {
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open grep failed: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}GrepFinder failed to open '{entry.Display}': {ex.Message}");
-            }
+            DTE dte = _dteFactory();
+            DteFileOpener.OpenAtLine(dte, hit.FilePath, hit.LineNumber);
+            TelescopeLog.Log($"opened grep: file={hit.FilePath} line={hit.LineNumber}");
         }
 
-        /// <summary>Jumps the active document's selection to the given 1-based line.</summary>
-        private static void GotoLine(DTE dte, int line)
-        {
-            try
-            {
-                var doc = dte.ActiveDocument;
-                if (doc?.Selection is TextSelection selection && line > 0)
-                {
-                    selection.GotoLine(line, false);
-                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}goto line={line}");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}goto line failed: {ex.Message}");
-            }
-        }
+        protected override string OpenErrorNoun => "grep";
 
         private static void ScanFile(string path, string query, List<GrepHit> hits)
         {
@@ -172,12 +145,6 @@ namespace Telescope
             {
                 // unreadable/binary file — skip
             }
-        }
-
-        private static FinderEntry ToEntry(GrepHit hit)
-        {
-            string display = $"{Path.GetFileName(hit.FilePath)}:{hit.LineNumber}: {hit.LineText}";
-            return new FinderEntry(display, hit);
         }
     }
 }

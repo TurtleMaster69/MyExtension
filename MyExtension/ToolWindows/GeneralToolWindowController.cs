@@ -21,36 +21,24 @@ namespace MyExtension
     /// <para/>
     /// <b>Threading:</b> all members are called on the UI thread only (same thread as the hook).
     /// </summary>
-    internal sealed class GeneralToolWindowController : IToolWindowController
+    internal sealed class GeneralToolWindowController : ToolWindowControllerBase
     {
-        private readonly ToolWindowType _type;
-        private bool _isInputMode;
-
-        public GeneralToolWindowController(ToolWindowType type)
+        public GeneralToolWindowController(ToolWindowType type) : base(type)
         {
-            _type = type;
             // Text-input tool windows (search/rename/command surfaces) default to input mode so the
             // user can type immediately; everything else starts in normal (navigation) mode.
             _isInputMode = IsTextInputType(type);
         }
 
-        public ToolWindowType Type => _type;
-
-        public bool IsInputMode => _isInputMode;
-
-        public void EnterInputMode() => _isInputMode = true;
-
-        public void ExitInputMode() => _isInputMode = false;
-
         /// <summary>The default controller acts on no non-hjkl keys.</summary>
-        public System.Collections.Generic.IReadOnlyCollection<Keys> ActionKeys =>
+        public override System.Collections.Generic.IReadOnlyCollection<Keys> ActionKeys =>
             System.Array.Empty<Keys>();
 
         /// <summary>
         /// Handles a normal-mode key. Only hjkl map to arrows (left/down/up/right respectively);
         /// any other key is not consumed here. Returns true when the key was handled.
         /// </summary>
-        public bool TryMove(Keys key)
+        public override bool TryMove(Keys key)
         {
             int vk = KeyToArrowVk(key);
             if (vk == 0)

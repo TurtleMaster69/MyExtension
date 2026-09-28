@@ -7,18 +7,15 @@ namespace Telescope
     /// Carried as a <c>FinderEntry.Payload</c> so <see cref="ImplementationFinder.OnSelected"/>
     /// can open the file at the line and the overlay preview can jump the caret to it.
     /// </summary>
-    public sealed class ImplementationHit
+    public sealed class ImplementationHit : FileLocation
     {
         public ImplementationHit(string filePath, int lineNumber, string symbolName, string kind)
+            : base(filePath, lineNumber)
         {
-            FilePath = filePath ?? string.Empty;
-            LineNumber = lineNumber;
             SymbolName = symbolName ?? string.Empty;
             Kind = kind ?? string.Empty;
         }
 
-        public string FilePath { get; }
-        public int LineNumber { get; }
         public string SymbolName { get; }
         public string Kind { get; }
     }

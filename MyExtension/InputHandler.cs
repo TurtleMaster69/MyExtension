@@ -1,4 +1,4 @@
-﻿using CardinalNavigation;
+using CardinalNavigation;
 using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
@@ -32,11 +32,20 @@ namespace MyExtension
     /// </summary>
     internal class InputHandler
     {
+        /// <summary>
+        /// The default controller's key set (hjkl + i) — the keys every tool-window controller
+        /// acts on in normal mode. Shared by the hook's cheap pre-filter and <see cref="HandleKey"/>
+        /// so the set is defined once instead of duplicated.
+        /// </summary>
+        internal static readonly IReadOnlyCollection<Keys> DefaultControllerKeys =
+            new[] { Keys.H, Keys.J, Keys.K, Keys.L, Keys.I };
+
         private readonly AsyncPackage _package;
         private readonly VimModeTracker _vsVim;
         private readonly PopupNavigation _popupNav;
         private readonly WindowManager _windowManager;
         private readonly TelescopeController _telescope;
+        private readonly TelescopeLauncher _launcher;
 
         // Leader-sequence state: the keys typed since the leader key, and whether a sequence is
         // currently in progress. _leaderActive is volatile because the hook thread's cheap
@@ -65,7 +74,8 @@ namespace MyExtension
                     _windowManager.IsToolWindow,
                     c?.IsInputMode == true,
                     c?.ActionKeys.Count ?? 0,
-                    EditorFocusedVeto);
+                    _vsVim.IsEditorFocused,
+                    GeneralToolWindowController.IsTextInputType(_windowManager.Type));
             }
         }
 
@@ -97,6 +107,7 @@ namespace MyExtension
         {
             _package = package;
             _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
+            _launcher = new TelescopeLauncher(package, telescope);
             _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
 
             // The Vim mode tracker is a shared MEF part (also an IWpfTextViewCreationListener
@@ -121,14 +132,12 @@ namespace MyExtension
 
             try
             {
-                var componentModel = ((System.IServiceProvider)_package).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
-                    as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
-                return componentModel?.DefaultExportProvider.GetExportedValue<VimModeTracker>()
+                return VsServices.Mef<VimModeTracker>(_package)
                     ?? new VimModeTracker();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to resolve VimModeTracker: {ex.Message}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to resolve VimModeTracker: {ex.Message}");
                 return new VimModeTracker();
             }
         }
@@ -149,7 +158,7 @@ namespace MyExtension
                 var action = ResolveAction(pair.Value);
                 if (action == null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
+                    NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
                     continue;
                 }
 
@@ -167,34 +176,33 @@ namespace MyExtension
         }
 
         /// <summary>
-        /// Maps a named action string to a delegate. Built-in actions (cardinal navigation) are
-        /// a fixed switch; the generic <c>"command:Name"</c> form runs any VS command by name,
-        /// which is how the LazyVim-style leader bindings (<c>w</c> -> save, etc.) are wired into
-        /// the extension without a code change per command.
+        /// Maps a named action string to a delegate. Built-in actions (cardinal navigation,
+        /// telescope finders, solution-explorer toggle) resolve through the <see cref="Actions"/>
+        /// registry; the generic <c>"command:Name"</c> form runs any VS command by name, which is
+        /// how the LazyVim-style leader bindings (<c>w</c> -> save, etc.) are wired into the
+        /// extension without a code change per command.
         /// </summary>
-        private Action ResolveAction(string name)
+        private Action? ResolveAction(string name)
         {
             string trimmed = (name ?? string.Empty).Trim();
             string lower = trimmed.ToLowerInvariant();
 
-            switch (lower)
+            var action = Actions.Resolve(lower, this, _launcher);
+            if (action != null)
             {
-                case "navigate-left": return () => Navigate(CardinalNavigationConstants.LEFT);
-                case "navigate-right": return () => Navigate(CardinalNavigationConstants.RIGHT);
-                case "navigate-up": return () => Navigate(CardinalNavigationConstants.UP);
-                case "navigate-down": return () => Navigate(CardinalNavigationConstants.DOWN);
-                case "telescope": return () => OpenTelescope();
-                case "telescope-issues": return () => OpenTelescopeIssues();
-                case "telescope-references": return () => OpenTelescopeReferences();
-                case "telescope-implementation": return () => OpenTelescopeImplementation();
-                case "telescope-grep": return () => OpenTelescopeGrep();
-                case "toggle-solution-explorer": return () => ToggleSolutionExplorer();
-                default:
-                    break;
+                return action;
             }
+            return ParseCommand(trimmed);
+        }
 
+        /// <summary>
+        /// Handles the generic <c>"command:Name"</c> action form: runs any VS command by name.
+        /// Returns null when the name is not a command: prefix or names an empty command.
+        /// </summary>
+        private Action? ParseCommand(string trimmed)
+        {
             const string commandPrefix = "command:";
-            if (lower.StartsWith(commandPrefix, StringComparison.Ordinal))
+            if (trimmed.StartsWith(commandPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 string command = trimmed.Substring(commandPrefix.Length).Trim();
                 if (command.Length == 0)
@@ -218,12 +226,12 @@ namespace MyExtension
 
             try
             {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var dte = VsServices.Dte(_package);
                 dte.ExecuteCommand(command, string.Empty);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
 
@@ -273,7 +281,7 @@ namespace MyExtension
             // tool window actually holds keyboard focus. VS's frame-selection state can lag behind
             // real WPF focus, so when an editor is focused the key must fall through to VS instead
             // of being consumed by the (stale) tool-window controller.
-            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, GeneralToolWindowController.IsTextInputType(_windowManager.Type)))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller != null)
@@ -374,6 +382,56 @@ namespace MyExtension
             return false;
         }
 
+        /// <summary>
+        /// Cheap pre-filter run by the hook before <see cref="HandleKey"/>. Returns true for every
+        /// key that <see cref="HandleKey"/> could possibly act on — a strict superset of the
+        /// handler's interest, so handled keys can never be skipped. Reads only in-process state
+        /// (no COM/interop).
+        /// </summary>
+        public bool IsKeyOfInterest(Keys key, bool ctrl, bool shift, bool alt)
+        {
+            // Any modifier chord is a candidate simple shortcut (Ctrl+H, ...), and while a leader
+            // sequence is in progress ANY key can extend or break it — both handled.
+            if (IsLeaderActive || ctrl || shift || alt)
+            {
+                return true;
+            }
+
+            // The leader key (Space by default) starts a sequence.
+            if (key == _leaderKey)
+            {
+                return true;
+            }
+
+            // Escape cancels a leader sequence / exits tool-window input mode.
+            if (key == Keys.Escape)
+            {
+                return true;
+            }
+
+            // Ctrl swallow while a completion popup is open.
+            if (key == Keys.ControlKey || key == Keys.LControlKey || key == Keys.RControlKey)
+            {
+                return true;
+            }
+
+            // Tool-window normal mode: hjkl + the controller's action keys must reach the handler.
+            if (FocusGuard.ShouldRouteToolWindowKey(
+                    _windowManager.IsToolWindow,
+                    _vsVim.IsEditorFocused,
+                    _windowManager.CurrentController?.IsInputMode == true,
+                    GeneralToolWindowController.IsTextInputType(_windowManager.Type)))
+            {
+                var c = _windowManager.CurrentController;
+                if (c != null && !c.IsInputMode && (DefaultControllerKeys.Contains(key) || c.ActionKeys.Contains(key)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private void ResetSequence()
         {
             _leaderActive = false;
@@ -390,7 +448,7 @@ namespace MyExtension
             // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
             // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
             // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
-            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, EditorFocusedVeto))
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, GeneralToolWindowController.IsTextInputType(_windowManager.Type)))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)
@@ -448,133 +506,28 @@ namespace MyExtension
         }
 
         /// <summary>Performs Cardinal window navigation in a compass direction (see WindowMatrix).</summary>
-        private void Navigate(char direction)
+        internal void Navigate(char direction)
         {
             NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}navigate direction={direction}");
             // Rebuild the window matrix each navigation (windows can be resized/opened/closed),
             // but source the active window from WindowManager's cached frame rather than re-deriving
-            // it from DTE.
-            var wm = new WindowMatrix(_package, _windowManager.CurrentWindow);
+            // it from DTE. The frame enumeration itself is cached by WindowManager and invalidated
+            // on focus-change events.
+            var wm = new WindowMatrix(_windowManager.GetWindowAdapters(_package), _package, _windowManager.CurrentWindow);
             wm.NavigateInDirection(direction);
-        }
-
-        /// <summary>
-        /// Opens the Telescope overlay with the "Files" finder, centered over the VS main window.
-        /// The <see cref="FileFinder"/> gathers its candidates via DTE on the UI thread.
-        /// </summary>
-        private void OpenTelescope()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
-                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope.Open("Files", centerRect, dte.MainWindow.HWnd);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Opens the Telescope overlay with the "Issues" finder (warnings/errors/TODO markers),
-        /// centered over the VS main window. The <see cref="CodeIssuesFinder"/> gathers candidates
-        /// via DTE on the UI thread.
-        /// </summary>
-        private void OpenTelescopeIssues()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
-                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope.Open("Issues", centerRect, dte.MainWindow.HWnd);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope issues: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Opens the Telescope overlay with the "References" finder (read/write references to the
-        /// symbol at the caret), centered over the VS main window. The
-        /// <see cref="ReferencesFinder"/> gathers candidates via the host's Roslyn call on the UI
-        /// thread.
-        /// </summary>
-        private void OpenTelescopeReferences()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
-                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope.Open("References", centerRect, dte.MainWindow.HWnd);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope references: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Opens the Telescope overlay with the "Implementation" finder (implementations/overrides
-        /// of the symbol at the caret), centered over the VS main window. The
-        /// <see cref="ImplementationFinder"/> gathers candidates via the host's Roslyn call on the
-        /// UI thread.
-        /// </summary>
-        private void OpenTelescopeImplementation()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
-                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope.Open("Implementation", centerRect, dte.MainWindow.HWnd);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope implementation: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Opens the Telescope overlay with the "Grep" finder (query-driven live grep over the
-        /// solution's files), centered over the VS main window. The <see cref="GrepFinder"/>
-        /// gathers candidates via DTE on the UI thread per typed query.
-        /// </summary>
-        private void OpenTelescopeGrep()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
-                var centerRect = GetWindowRect(dte.MainWindow.HWnd);
-                _telescope.Open("Grep", centerRect, dte.MainWindow.HWnd);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope grep: {ex.Message}");
-            }
         }
 
         /// <summary>
         /// Toggles the Solution Explorer tool window: opens + focuses it when hidden, closes it
         /// when visible. Backed by the DTE <c>View.SolutionExplorer</c> command and window Close.
         /// </summary>
-        private void ToggleSolutionExplorer()
+        internal void ToggleSolutionExplorer()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
             try
             {
-                var dte = CardinalNavigation.UtilityMethods.GetDTE(_package);
+                var dte = VsServices.Dte(_package);
                 var window = dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer);
                 if (window.Visible)
                 {
@@ -589,31 +542,8 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
+                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
             }
-        }
-
-        /// <summary>Retrieves the on-screen rectangle (in pixels) of a window handle.</summary>
-        private static System.Drawing.Rectangle? GetWindowRect(IntPtr hwnd)
-        {
-            if (hwnd == IntPtr.Zero || !GetWindowRectNative(hwnd, out var rect))
-            {
-                return null;
-            }
-            return new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
-        }
-
-        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowRect")]
-        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-        private static extern bool GetWindowRectNative(IntPtr hWnd, out NativeRect rect);
-
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        private struct NativeRect
-        {
-            public int Left;
-            public int Top;
-            public int Right;
-            public int Bottom;
         }
     }
 }

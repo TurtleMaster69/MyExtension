@@ -14,6 +14,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestRunner.cs" Link="TestRunner.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- MyExtension references the VS SDK with ExcludeAssets="runtime" (VS supplies it at load
          time). The pure-logic tests here don't touch VS services, but the assemblies must be
          resolvable so the MyExtension types can be JIT'd. Pull the interop + shell framework in

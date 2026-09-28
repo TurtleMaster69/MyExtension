@@ -1,16 +1,35 @@
-using System.Runtime.InteropServices;
+using System;
 using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
 using Telescope;
 
 namespace MyExtension
 {
     /// <summary>
-    /// Shared vim-caret behavior for WPF <see cref="System.Windows.Controls.TextBox"/> surfaces
-    /// inside tool windows — the Solution Explorer search box and the text-input tool windows
-    /// (Command Window, Find and Replace, ...). Finds the focused WPF text box, applies a
+    /// The vim text motions available in a text-input tool window's normal mode. Pure mapping
+    /// (key + shift state -> motion) so it can be unit-tested hermetically; the motion math itself
+    /// lives in the shared <see cref="TextMotionNavigator"/>.
+    /// </summary>
+    internal enum TextMotion
+    {
+        Left,
+        Right,
+        NextWord,
+        PrevWord,
+        EndWord,
+        InsertAfter,
+        InsertEnd,
+        InsertStart,
+    }
+
+    /// <summary>
+    /// Shared vim-caret behavior for the tool-window text surfaces — the Solution Explorer search
+    /// box and the text-input tool windows (Command Window, Find and Replace, ...). Finds the
+    /// focused surface (WPF text box, VS editor text view, or WinForms text box), applies a
     /// normal-mode motion to its caret via the shared <see cref="TextMotionNavigator"/>, and toggles
     /// the <b>block</b> (normal mode) vs <b>line</b> (insert mode) caret.
     /// </summary>
@@ -44,32 +63,107 @@ namespace MyExtension
         }
 
         /// <summary>
-        /// Applies a normal-mode vim motion to the focused WPF TextBox, if any. Returns true when a
-        /// box was focused and the key was a motion (h/l/w/b/e/a/A/I); <paramref name="isInputMode"/>
-        /// is set true for the a/A/I insert placements. Logs the motion for the E2E harness.
+        /// Maps a normal-mode key to the text motion it triggers (shift distinguishes A/a and I/i).
+        /// Returns null when the key is not a text-input motion (e.g. a bare <c>i</c>, which the
+        /// generic insert handler in <see cref="InputHandler"/> takes care of).
         /// </summary>
-        public static bool TryMoveFocusedTextBox(Keys key, ref bool isInputMode)
+        public static TextMotion? MapMotion(Keys key, bool shift)
         {
-            var box = FindFocusedTextBox();
-            if (box == null)
+            switch (key)
             {
-                return false;
+                case Keys.H: return TextMotion.Left;
+                case Keys.L: return TextMotion.Right;
+                case Keys.W: return TextMotion.NextWord;
+                case Keys.B: return TextMotion.PrevWord;
+                case Keys.E: return TextMotion.EndWord;
+                case Keys.A:
+                    // A (Shift+a) = insert at end of line; a = insert after the caret.
+                    return shift ? TextMotion.InsertEnd : TextMotion.InsertAfter;
+                case Keys.I:
+                    // I (Shift+i) = insert at start of line; a bare i is the generic insert.
+                    return shift ? TextMotion.InsertStart : (TextMotion?)null;
+                default:
+                    return null;
             }
+        }
 
+        /// <summary>
+        /// Applies a normal-mode vim motion to the focused text surface, if any: a WPF TextBox
+        /// (modern tool windows), else a VS editor text view (the Command Window / Immediate Window
+        /// input is editor-hosted), else a WinForms text box (legacy tool windows), else an
+        /// arrow-key fallback for h/l. Returns true when a surface was focused and the key was a
+        /// motion (h/l/w/b/e/a/A/I); <paramref name="isInputMode"/> is set true for the a/A/I insert
+        /// placements. Logs the motion for the E2E harness.
+        /// </summary>
+        public static bool TryMoveFocusedSurface(Keys key, ref bool isInputMode)
+        {
             // Physical shift state (GetAsyncKeyState, like the hook itself) — NOT WPF's
-            // Keyboard.Modifiers, which lags behind injected keys.
-            bool shift = (GetAsyncKeyState(0x10) & 0x8000) != 0;
-            TextMotion? motion = TextInputToolWindowController.MapMotion(key, shift);
+            // Keyboard.Modifiers, which lags behind injected keys because our hook callback runs
+            // before WPF dispatches the Shift key-down message.
+            bool shift = (NativeMethods.GetAsyncKeyState(0x10) & 0x8000) != 0;
+            TextMotion? motion = MapMotion(key, shift);
             if (motion == null)
             {
                 return false;
             }
 
-            var navigator = new TextMotionNavigator();
-            navigator.SetText(box.Text);
-            navigator.MoveTo(box.CaretIndex);
+            if (FindFocusedTextBox() is System.Windows.Controls.TextBox wpf)
+            {
+                return ApplyMotionToBox(wpf.Text, wpf.CaretIndex,
+                    caret => wpf.CaretIndex = caret,
+                    key, motion.Value, styleCaret: true, ref isInputMode);
+            }
 
-            switch (motion.Value)
+            if (Keyboard.FocusedElement is IWpfTextView view)
+            {
+                try
+                {
+                    var snapshot = view.TextSnapshot;
+                    string text = snapshot.GetText();
+                    int caret = view.Caret.Position.BufferPosition.Position;
+                    return ApplyMotionToBox(text, caret,
+                        c => view.Caret.MoveTo(new SnapshotPoint(snapshot, Math.Max(0, Math.Min(c, snapshot.Length)))),
+                        key, motion.Value, styleCaret: false, ref isInputMode);
+                }
+                catch
+                {
+                    // editor view read failed — fall through to the arrow fallback below
+                }
+            }
+
+            if (FindFocusedWinFormsTextBox() is System.Windows.Forms.TextBoxBase win)
+            {
+                return ApplyMotionToBox(win.Text, win.SelectionStart,
+                    caret => { win.SelectionStart = caret; win.SelectionLength = 0; },
+                    key, motion.Value, styleCaret: false, ref isInputMode);
+            }
+
+            // No text box focused — fall back to arrow-key navigation for h/l so the window
+            // still responds, but ignore the word/insert motions.
+            if (motion == TextMotion.Left || motion == TextMotion.Right)
+            {
+                int vk = motion == TextMotion.Left ? KeyInjection.VK_LEFT : KeyInjection.VK_RIGHT;
+                string focused = Keyboard.FocusedElement?.GetType().FullName ?? "null";
+                IntPtr hwnd = NativeMethods.GetFocus();
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk} focused={focused} hwnd=0x{hwnd.ToInt64():X}");
+                KeyInjection.Press(vk);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Runs a motion over <paramref name="text"/>/<paramref name="caret"/> using the shared
+        /// navigator and applies the resulting caret through <paramref name="applyCaret"/>. Logs the
+        /// motion so the E2E harness can assert caret positions.
+        /// </summary>
+        private static bool ApplyMotionToBox(string text, int caret, Action<int> applyCaret, Keys key, TextMotion motion, bool styleCaret, ref bool isInputMode)
+        {
+            var navigator = new TextMotionNavigator();
+            navigator.SetText(text);
+            navigator.MoveTo(caret);
+
+            switch (motion)
             {
                 case TextMotion.Left: navigator.Left(); break;
                 case TextMotion.Right: navigator.Right(); break;
@@ -83,21 +177,39 @@ namespace MyExtension
             }
 
             int newCaret = navigator.Caret;
-            box.CaretIndex = newCaret;
 
-            if (motion.Value is TextMotion.InsertAfter or TextMotion.InsertEnd or TextMotion.InsertStart)
+            if (motion == TextMotion.InsertAfter || motion == TextMotion.InsertEnd || motion == TextMotion.InsertStart)
             {
                 isInputMode = true;
-                ApplyCaretStyle(box, true);
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}textinput-enter-input {MotionName(motion.Value)} caret={newCaret}");
+                applyCaret(newCaret);
+                if (styleCaret && FindFocusedTextBox() is System.Windows.Controls.TextBox focusedBox)
+                {
+                    ApplyCaretStyle(focusedBox, true);
+                }
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}textinput-enter-input {MotionName(motion)} caret={newCaret}");
             }
             else
             {
-                ApplyCaretStyle(box, false);
-                string sample = box.Text.Length > 30 ? box.Text.Substring(0, 30) : box.Text;
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={box.Text.Length} text='{sample}'");
+                applyCaret(newCaret);
+                if (styleCaret && FindFocusedTextBox() is System.Windows.Controls.TextBox focusedBox)
+                {
+                    ApplyCaretStyle(focusedBox, false);
+                }
+                string sample = text.Length > 30 ? text.Substring(0, 30) : text;
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={text.Length} text='{sample}'");
             }
             return true;
+        }
+
+        private static string MotionName(TextMotion motion)
+        {
+            switch (motion)
+            {
+                case TextMotion.InsertAfter: return "after";
+                case TextMotion.InsertEnd: return "end";
+                case TextMotion.InsertStart: return "start";
+                default: return motion.ToString();
+            }
         }
 
         /// <summary>Sets block (normal) vs line (insert) caret on a WPF TextBox.</summary>
@@ -113,23 +225,52 @@ namespace MyExtension
             }
         }
 
-        /// <summary>Applies the caret style to the currently focused WPF TextBox, if any.</summary>
-        public static void StyleFocusedTextBox(bool isInputMode)
+        /// <summary>
+        /// Applies the caret style to the currently focused surface: a WPF TextBox via
+        /// <see cref="ApplyCaretStyle"/> and a VS editor text view via <see cref="ApplyEditorViewCaret"/>.
+        /// </summary>
+        public static void StyleFocusedSurface(bool isInputMode)
         {
             if (FindFocusedTextBox() is System.Windows.Controls.TextBox box)
             {
                 ApplyCaretStyle(box, isInputMode);
             }
+            if (Keyboard.FocusedElement is IWpfTextView view)
+            {
+                ApplyEditorViewCaret(view, isInputMode);
+            }
         }
 
-        private static string MotionName(TextMotion motion)
+        /// <summary>
+        /// Toggles the block-caret adornment on a VS editor text view: active in normal mode,
+        /// inactive (native line caret) in insert mode. Best-effort — the adornment must never
+        /// crash the hook.
+        /// </summary>
+        public static void ApplyEditorViewCaret(IWpfTextView view, bool isInputMode)
         {
-            switch (motion)
+            try
             {
-                case TextMotion.InsertAfter: return "after";
-                case TextMotion.InsertEnd: return "end";
-                case TextMotion.InsertStart: return "start";
-                default: return motion.ToString();
+                BlockCaretAdornment.Attach(view).Active = !isInputMode;
+            }
+            catch
+            {
+                // the adornment must never crash the hook — block caret is best-effort
+            }
+        }
+
+        /// <summary>
+        /// The WinForms text box holding the Win32 keyboard focus (for legacy tool windows), or null.
+        /// </summary>
+        private static System.Windows.Forms.TextBoxBase? FindFocusedWinFormsTextBox()
+        {
+            try
+            {
+                IntPtr hwnd = NativeMethods.GetFocus();
+                return hwnd == IntPtr.Zero ? null : System.Windows.Forms.Control.FromHandle(hwnd) as System.Windows.Forms.TextBoxBase;
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -165,8 +306,5 @@ namespace MyExtension
             drawing.Freeze();
             return drawing;
         }
-
-        [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
     }
 }

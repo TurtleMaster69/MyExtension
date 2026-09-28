@@ -22,12 +22,12 @@ namespace Telescope
     /// <b>Threading:</b> <see cref="GetCandidates"/> and <see cref="OnSelected"/> run on the UI
     /// thread (asserted); the injected gatherer/opener are the host's UI-thread calls.
     /// </summary>
-    public sealed class ImplementationFinder : IFinder
+    public sealed class ImplementationFinder : FinderBase<ImplementationHit>
     {
         private readonly Func<IReadOnlyList<ImplementationHit>> _gatherer;
         private readonly Action<ImplementationHit> _opener;
 
-        public string Name => "Implementation";
+        public override string Name => "Implementation";
 
         /// <param name="gatherer">Returns the implementation hits for the symbol at the caret (host-side Roslyn call).</param>
         /// <param name="opener">Opens a hit's file at its line (host-side DTE call).</param>
@@ -37,62 +37,27 @@ namespace Telescope
             _opener = opener ?? throw new ArgumentNullException(nameof(opener));
         }
 
-        public IReadOnlyList<FinderEntry> GetCandidates()
+        protected override IReadOnlyList<ImplementationHit> GatherHits()
         {
-            // UI-thread assert (IFinder contract, parity with ReferencesFinder). Outside VS the
-            // JoinableTaskContext is uninitialized — treated as on-UI-thread, so the unit-test
-            // host does not throw here.
-            if (ThreadHelper.JoinableTaskContext != null)
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-            }
-
-            IReadOnlyList<ImplementationHit> hits;
-            try
-            {
-                hits = _gatherer() ?? Array.Empty<ImplementationHit>();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}implementations gather failed: {ex.Message}");
-                hits = Array.Empty<ImplementationHit>();
-            }
-
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}implementations gathered count={hits.Count}");
-            return hits.Select(ToEntry).ToList();
+            IReadOnlyList<ImplementationHit> hits = _gatherer() ?? Array.Empty<ImplementationHit>();
+            TelescopeLog.Log($"implementations gathered count={hits.Count}");
+            return hits;
         }
 
-        public void OnSelected(FinderEntry entry)
-        {
-            // UI-thread assert (IFinder contract, parity with ReferencesFinder). Outside VS the
-            // JoinableTaskContext is uninitialized — treated as on-UI-thread, so the unit-test
-            // host does not throw here.
-            if (ThreadHelper.JoinableTaskContext != null)
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-            }
-
-            if (entry.Payload is not ImplementationHit hit)
-            {
-                return;
-            }
-
-            try
-            {
-                _opener(hit);
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}opened implementation: file={hit.FilePath} line={hit.LineNumber}");
-            }
-            catch (Exception ex)
-            {
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.Telescope}open implementation failed: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"{Telescope.DiagnosticLog.Telescope}ImplementationFinder failed to open '{entry.Display}': {ex.Message}");
-            }
-        }
-
-        private static FinderEntry ToEntry(ImplementationHit hit)
+        protected override FinderEntry ToEntry(ImplementationHit hit)
         {
             string display = $"{hit.Kind} {hit.SymbolName} — {Path.GetFileName(hit.FilePath)}:{hit.LineNumber}";
             return new FinderEntry(display, hit);
         }
+
+        protected override void OpenHit(ImplementationHit hit)
+        {
+            _opener(hit);
+            TelescopeLog.Log($"opened implementation: file={hit.FilePath} line={hit.LineNumber}");
+        }
+
+        protected override string OpenErrorNoun => "implementation";
+
+        protected override string GatherErrorLiteral(Exception ex) => $"{Telescope.DiagnosticLog.Telescope}implementations gather failed: {ex.Message}";
     }
 }

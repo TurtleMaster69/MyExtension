@@ -28,6 +28,11 @@ reads at the start of every loop iteration.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-09-28] DECIDED: Telescope `fzf` finder scope (via the `question` tool) — the
+  user wants **BOTH** the fuzzy content finder (A: a `FzfFinder` scanning file contents
+  with fzf fuzzy matching, preview + open at line) AND the fuzzy file finder (B: the
+  file-name finder filtered by fzf — the existing `FileFinder` already does this;
+  confirm/keep it). Plan in `docs/backlog-plans.md` — status: PLANNED (not executed).
 - [2026-09-28] DECIDED: LazyVim gap-analysis triage (via the `question` tool) — Gap 1
   window mgmt = EXTEND/REUSE native (split/zoom/delete-window via native commands); Gap 2
   buffer switch = SKIP (VsVim Shift+H/J/K/L already handles it); Gap 3 diag nav =
@@ -219,8 +224,10 @@ Top of the queue, in priority order:
      with a debounce, preview line-jump).
    - ~~`implementation` finder~~ — **DONE** (see Done section; `Space+F I`,
      Roslyn `FindImplementationsAsync`, preview line-jump).
-   - `fzf` finder — with preview pane. **DEFERRED** (user clarified 2026-09-19:
-     build implementation first; fzf-finder scope TBD by the user).
+   - `fzf` finder — with preview pane. **SCOPE DECIDED 2026-09-28** (user: fuzzy
+     content finder + fuzzy file finder; see the Decisions section + `backlog-plans.md`).
+     Was DEFERRED (user clarified 2026-09-19: build implementation first; fzf-finder
+     scope TBD by the user) — now PLANNED, not executed.
 4. ~~Add the 4 new planned E2E scenarios~~ — **PARTIAL**: `telescope-open-file-searchbox`
    + `telescope-open-file-navigation` **DONE** (see Done section); the other 2
    exposed real gaps → now the next queue items:

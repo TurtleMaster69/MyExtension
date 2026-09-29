@@ -570,3 +570,83 @@ Decisions, and add the chosen ones to the pending queue.
 - **Gap 7 (org imports):** SKIP.
 - **Gaps 8-11 (quickfix, search/replace, hover/signature, git status/diff/blame/log):**
   NOT YET TRIAGED — ask the user in a later pass.
+
+---
+
+# Telescope `fzf` finder — FEATURE-TRIAGE research (2026-09-28)
+
+> The last finder in the roadmap (progress.md item 5, DEFERRED 2026-09-19, scope TBD).
+> The overlay ALREADY uses fzf internally as its filter engine (`FzfFilter`), so the
+> "fzf finder" is a finder that uses fzf's FUZZY matching as its SEARCH engine — not a
+> new filter mechanism.
+
+## Research
+
+1. **LazyVim reference:** LazyVim's finders are `<leader>ff` find-files (file NAMES,
+   Telescope `find_files`) and `<leader>fg` grep (file CONTENTS, Telescope `live_grep`
+   via ripgrep). The extension's analogs: `FileFinder` (Space+F,T — file names, filtered
+   by fzf) and `GrepFinder` (Space+F,G — file contents, LITERAL substring scan).
+2. **The gap:** the grep finder is a literal-substring scan (`GrepFinder`). fzf's
+   `--filter` mode does FUZZY matching. A finder that searches file CONTENTS with fzf's
+   fuzzy matching (a "fuzzy grep") is the natural 4th finder — it is what the roadmap's
+   "fzf finder" most plausibly means.
+3. **Native VS:** `Edit.FindInFiles` (Ctrl+Shift+F) is literal; `Edit.NavigateTo` is
+   symbol navigation. There is NO native fuzzy-content-search finder — this is a BUILD.
+4. **Preview pane:** the other finders (grep/issues/references/implementation) all have
+   preview panes (jump to the hit line). The fzf finder would too.
+
+## Scope options (present to the user)
+
+- **A. Fuzzy content finder (recommended):** a `FzfFinder` that scans the solution's
+  project files for lines matching the typed query via fzf's fuzzy matching (per-query
+  re-gather like the grep finder, `IsQueryDriven`), previews the hit line, Enter opens
+  the file at the line. Diagnostics: `[Telescope] fzf hits=...` / `opened fzf: file=...
+  line=...`. Feature lane (new diagnostics).
+- **B. File-name finder:** a finder that lists the solution's files and filters by fzf
+  fuzzy matching — REDUNDANT with the existing `FileFinder` (which already filters by
+  fzf). Likely SKIP.
+- **C. Buffers finder:** a finder listing open buffers — the user already handles buffer
+  switching via VsVim Shift+H/J/K/L (gap 2 triage). Likely SKIP.
+
+## Next step
+
+Present the scope options to the user via the `question` tool; record the decision in
+`docs/progress.md` Decisions; if BUILD, add it to the pending queue + write the plan.
+
+## Decision (2026-09-28 — user answered via the `question` tool)
+
+**BUILD BOTH:** the user wants the **fuzzy content finder (A)** AND the **fuzzy file
+finder (B)**.
+
+- **A. Fuzzy content finder** — a `FzfFinder` (Telescope, `Name="Fzf"`, `Space+F Z` or
+  similar): scans the solution's project files for lines matching the typed query via
+  fzf's fuzzy matching (per-query re-gather like the grep finder, `IsQueryDriven`),
+  previews the hit line, Enter opens the file at the line. Diagnostics:
+  `[Telescope] fzf hits=...` / `opened fzf: file=... line=...`. Feature lane (new
+  diagnostics).
+- **B. Fuzzy file finder** — the file-name finder filtered by fzf fuzzy matching. The
+  existing `FileFinder` (Space+F,T) already filters by fzf — confirm/keep it as the
+  fuzzy file finder (no new code needed beyond confirming the fzf filter path), OR add
+  a distinct `Name="FzfFiles"` finder if the user wants it separate. TBD at plan time.
+
+### Plan sketch (A — the new finder)
+
+1. New `FzfFinder : FinderBase<FileHit>` (or a `FzfHit` with line info), `IsQueryDriven`
+   like `GrepFinder`: per-query re-gather over `ProjectFiles.Enumerate(dte)` (shared
+   walker), scanning each file's lines for fzf fuzzy matches.
+2. The fzf fuzzy matching runs through the existing `FzfFilter.FilterAsync` (the overlay
+   already uses it) — feed the file lines as candidates, get the fuzzy-matched lines.
+3. Preview jumps to the hit line (`TextMotionNavigator.MoveToLine`); Enter opens the
+   file at the line (`TextSelection.GotoLine`).
+4. Diagnostics: `[Telescope] fzf hits=...` (per-query summary) and
+   `[Telescope] opened fzf: file=... line=...`.
+5. Register in `MyExtensionPackage` + bind a leader key (e.g. `Space+F Z`).
+
+### Tests / e2e gates
+
+- **Unit (Telescope.Tests):** the pure hit-gathering/line-mapping logic (extract a
+  dependency-free seam like `GrepFinder`'s) — `Run_FzfFinder_*`. RED: the class doesn't
+  exist → compile error.
+- **e2e (NEW scenario):** a scenario that opens the fzf finder, types a query, asserts
+  the fuzzy hits + preview, and opens at the line.
+- **Blocker:** e2e RED booting VS (the fzf fuzzy gather only exists in a live instance).

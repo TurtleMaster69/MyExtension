@@ -28,6 +28,15 @@ reads at the start of every loop iteration.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-09-28] DECIDED: LazyVim gap-analysis triage (via the `question` tool) — Gap 1
+  window mgmt = EXTEND/REUSE native (split/zoom/delete-window via native commands); Gap 2
+  buffer switch = SKIP (VsVim Shift+H/J/K/L already handles it); Gap 3 diag nav =
+  EXTEND/REUSE native (Edit.NextError/PreviousError); Gap 4 recent files = BUILD
+  (Telescope-style finder); Gap 5 symbols finder = BUILD (Telescope-style); Gap 6 goto
+  def = BUILD (goto-definition finder + wire VsVim gd/gr/gi to the Telescope finders);
+  Gap 7 org imports = SKIP. Gaps 8-11 (quickfix, search/replace, hover/signature, git
+  status/diff/blame/log) NOT YET TRIAGED. Chosen items added to the pending queue
+  (items 6-10). Plans in `docs/backlog-plans.md` — status: PLANNED (not executed).
 - [2026-09-28] DECIDED: FEATURE-TRIAGE for user-requested features 6-9 — the user
   chose **BUILD** for all four (via the `question` tool): (6) extend the Solution
   Explorer search-box vim motions to j/k/0/$ + block caret; (7) extend the overlay to a
@@ -221,12 +230,28 @@ Top of the queue, in priority order:
      fixed, GREEN 2026-09-27; see Done section).
 5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
 5.5. ~~**`telescope-implementation` — intermittent injected-Enter loss.**~~ ✅ **DONE
-   2026-09-27** (see the Done section; commit `7c6569b`). Root cause was a **harness focus
-   race** — `Assert-OverlayFocused` was PID-only, so Enter was injected before the overlay
-   became the OS foreground window. Fixed by requiring the actual overlay window (PID +
-   title `Telescope`); `telescope-implementation` now passes 3/3 sequential runs. (The
-   original "no `[Hook] key=Return`" clue was a red herring — `Keys.Return` is not in
-   `IsInteresting`; the real line is `[Telescope] key=Return … handled=True`.)
+    2026-09-27** (see the Done section; commit `7c6569b`). Root cause was a **harness focus
+    race** — `Assert-OverlayFocused` was PID-only, so Enter was injected before the overlay
+    became the OS foreground window. Fixed by requiring the actual overlay window (PID +
+    title `Telescope`); `telescope-implementation` now passes 3/3 sequential runs. (The
+    original "no `[Hook] key=Return`" clue was a red herring — `Keys.Return` is not in
+    `IsInteresting`; the real line is `[Telescope] key=Return … handled=True`.)
+6. **Gap 1: Window management** (LazyVim gap-analysis, triage=EXTEND/REUSE native
+   2026-09-28) — leader bindings for split below/right, delete window, toggle zoom via
+   `Window.Split` / `Window.CloseToolWindow` / `View.Zoom`. Small feature. Plan in
+   `docs/backlog-plans.md`.
+7. **Gap 3: Diagnostics navigation** (LazyVim gap-analysis, triage=EXTEND/REUSE native
+   2026-09-28) — next/prev error bindings via `Edit.NextError` / `Edit.PreviousError`.
+   Small feature. Plan in `docs/backlog-plans.md`.
+8. **Gap 4: Recent files finder** (LazyVim gap-analysis, triage=BUILD 2026-09-28) —
+   Telescope-style recent-files finder. Feature lane. Plan in `docs/backlog-plans.md`.
+9. **Gap 5: LSP symbols finder** (LazyVim gap-analysis, triage=BUILD 2026-09-28) —
+   Telescope-style document/workspace symbols finder. Feature lane. Plan in
+   `docs/backlog-plans.md`.
+10. **Gap 6: Goto-definition finder + wire VsVim gd/gr/gi to the Telescope finders**
+    (LazyVim gap-analysis, triage=BUILD 2026-09-28) — a goto-definition finder; VsVim's
+    `gd`/`gr`/`gi` trigger the Telescope finders (references for `gr`, implementation for
+    `gi`, goto-definition for `gd`). Feature lane. Plan in `docs/backlog-plans.md`.
 
 ## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
 

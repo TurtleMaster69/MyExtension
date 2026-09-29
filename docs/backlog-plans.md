@@ -474,3 +474,99 @@ pipeline (initial-plan REVIEW + e2e RED booting VS).
 2. Each item: write its plan into `docs/implementation_plan.md`, run the RED gate
    (unit-level where a seam exists; e2e RED booting VS for the feature lane), BUILD,
    VERIFY, commit.
+
+---
+
+# LazyVim gap-analysis pass (2026-09-28 — review/triage, NOT auto-implement)
+
+> Scheduled in `docs/progress.md` after the tree-select + searchbox items went GREEN
+> (both done). Compares the implemented features + built-in bindings against LazyVim's
+> keymaps. Every gap below goes through the SAME feature-triage gate (ask the user:
+> build vs extend/reuse native VS vs skip) before implementation.
+
+## Implemented today (baseline)
+
+- **Window nav:** Ctrl+H/J/K/L (Cardinal navigation).
+- **Leader bindings:** Space+B,D close file; Space+W save; Space+Q exit; Space+E
+  toggle Solution Explorer; Space+F,F GoToFile; Space+F,T telescope; Space+F,D issues;
+  Space+F,G grep; Space+F,B NavigateTo; Space+F,R references; Space+F,I implementation;
+  Space+C,W Command Window; Space+C,A QuickActions (→ code-actions picker, feature 8);
+  Space+C,R rename; Space+/ find; Space+C,F format; Space+S,S NavigateTo; Space+G,G
+  GitChanges; Space+G,B branches; Space+G,C commit; Space+T,T terminal; Space+B,B build;
+  Space+B,R debug.
+- **Telescope finders:** files, issues, grep, references, implementation.
+- **Tool-window controllers:** Solution Explorer (hjkl + o/r/m/a/g + search box),
+  text-input windows (h/l/w/b/e/a/A/I + block caret).
+
+## Gaps vs LazyVim (prioritized by relevance to this extension's scope)
+
+### High relevance (extends existing surfaces)
+
+1. **Window management** — LazyVim `<leader>-` split below, `<leader>|` split right,
+   `<leader>wd` delete window, `<leader>wm` toggle zoom, `<C-Up/Down/Left/Right>` resize.
+   We have window NAVIGATION only. Native VS: `Window.Split`, `Window.CloseToolWindow`,
+   `View.Zoom` — extend/reuse the native commands. **Triage needed.**
+2. **Buffer switching** — LazyVim `<S-h>`/`<S-l>` prev/next buffer, `<leader>bb` switch
+   buffer, `<leader>bd` delete buffer, `<leader>bo` delete others. We have only
+   Space+B,D (File.Close). Native VS: `Window.NextDocumentWindow` /
+   `Window.PreviousDocumentWindow` / `File.Close`. **Triage needed.**
+3. **Diagnostics navigation** — LazyVim `]d`/`[d` next/prev diagnostic, `]e`/`[e`
+   next/prev error, `]w`/`[w` next/prev warning. We have the issues FINDER (Space+F D)
+   but no quick next/prev. Native VS: `Edit.NextError` / `Edit.PreviousError` (Error
+   List navigation). **Triage needed.**
+4. **Recent files finder** — LazyVim `<leader>fr` recent. We have no recent-files
+   finder. Native VS: `File.RecentFiles` / `Window.NavigateTo` (already bound to
+   Space+F,B). **Triage needed.**
+5. **LSP symbols finder** — LazyVim `<leader>ss` symbols, `<leader>sS` workspace
+   symbols. We have no symbols finder. Native VS: `Edit.NavigateTo` (already bound to
+   Space+S,S). **Triage needed.**
+6. **Goto definition / type / declaration** — LazyVim `gd`/`gy`/`gD`. We have
+   references (Space+F,R) + implementation (Space+F,I) finders but no goto-definition
+   binding. Native VS: `Edit.GoToDefinition`, `Edit.GoToImplementation`. **Triage
+   needed.**
+7. **Organize imports** — LazyVim `<leader>co`. Native VS: `Edit.RemoveAndSort` /
+   `Refactor.RemoveAndSort`. **Triage needed.**
+
+### Medium relevance (new surfaces)
+
+8. **Quickfix finder** — LazyVim `<leader>sq`/`<leader>xQ`. Native VS: `View.ErrorList`
+   / `View.Output`. **Triage needed.**
+9. **Search/replace** — LazyVim `<leader>sr` (grug-far). Native VS: `Edit.ReplaceInFiles`
+   (Ctrl+Shift+H). **Triage needed.**
+10. **Hover / signature help** — LazyVim `K`/`gK`. Native VS: `Edit.QuickInfo` /
+    `Edit.ParameterInfo`. **Triage needed.**
+11. **Git status/diff/blame/log** — LazyVim `<leader>gs`/`gd`/`gb`/`gl`. We have
+    GitChanges/branches/commit. Native VS: `View.GitChanges` (bound), `Team.Git.*`.
+    **Triage needed.**
+
+### Low relevance (out of scope for this extension)
+
+12. Surround (`gsa/gsd/gsr`), yank history (`<leader>p`), marks/registers/jumps/undotree
+    finders, help/keymaps finders, toggle-option bindings (`<leader>uf/us/uw/...`),
+    codelens, terminal (already bound Space+T,T). These are Neovim-ecosystem features
+    with weak VS analogs — likely SKIP unless the user wants them.
+
+## Next step
+
+Present the High + Medium gaps (1-11) to the user via the `question` tool (build /
+extend-reuse native VS / skip per gap), record the decisions in `docs/progress.md`
+Decisions, and add the chosen ones to the pending queue.
+
+## Triage decisions (2026-09-28 — user answered via the `question` tool)
+
+- **Gap 1 (window mgmt):** EXTEND/REUSE native — leader bindings for split below/right,
+  delete window, toggle zoom via `Window.Split` / `Window.CloseToolWindow` /
+  `View.Zoom`. Small feature.
+- **Gap 2 (buffer switch):** SKIP — the user already has Shift+H/J/K/L buffer switching
+  working in VsVim; no implementation needed.
+- **Gap 3 (diag nav):** EXTEND/REUSE native — next/prev error bindings via
+  `Edit.NextError` / `Edit.PreviousError`. Small feature.
+- **Gap 4 (recent files):** BUILD — a Telescope-style recent-files finder.
+- **Gap 5 (symbols finder):** BUILD — a Telescope-style LSP symbols finder
+  (document/workspace).
+- **Gap 6 (goto def):** BUILD — a goto-definition finder + wire VsVim's `gd`/`gr`/`gi`
+  to trigger the Telescope finders (references finder for `gr`, implementation finder
+  for `gi`, a new goto-definition finder for `gd`).
+- **Gap 7 (org imports):** SKIP.
+- **Gaps 8-11 (quickfix, search/replace, hover/signature, git status/diff/blame/log):**
+  NOT YET TRIAGED — ask the user in a later pass.

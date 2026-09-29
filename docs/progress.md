@@ -28,6 +28,14 @@ reads at the start of every loop iteration.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-09-28] DECIDED: FEATURE-TRIAGE for user-requested features 6-9 — the user
+  chose **BUILD** for all four (via the `question` tool): (6) extend the Solution
+  Explorer search-box vim motions to j/k/0/$ + block caret; (7) extend the overlay to a
+  3-way Input/List/Preview pane switch with Ctrl+J/K; (8) build a Telescope-style
+  code-actions picker (`Leader+C+A`); (9) build a Telescope-like vim-mode overlay for
+  Solution Explorer rename/move/add. Each is a feature-lane item (M-M7 applies to any
+  that add/change a `[Telescope]`/`[NeoVisual]` diagnostic). Plans in
+  `docs/backlog-plans.md` — status: PLANNED (not executed; needs a VS-capable machine).
 - [2026-09-28] DECIDED: Trailmark guidance is single-sourced at
   `.opencode/agent/trailmark-guidance.md` (all agents reference it, do not re-derive)
   — reason: the copies had drifted twice (W3/W18) — status: ACTIVE.

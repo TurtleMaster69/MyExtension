@@ -376,7 +376,7 @@ Top of the queue, in priority order:
   (check-doc-refs 0 unresolved, dte-command -SelfTest, iterate-telescope -SelfCheck,
   check-doc-refs -SelfCheck). NO e2e harness commands run (user mandate — VS-capable
   machine required; the correct machine runs VS 2026). e2e gates queued in
-  `docs/e2e-queue.md` (E2E-CR-1..3, E2E-M1..M42).
+  `docs/e2e-queue.md` (E2E-CR-1..3, E2E-M1..M42). Commit: `f4450cb`.
   **Change summary:** created ~20 new files (OverlayShowState, StaleToolWindowSentinel,
   KeyNameBuilder, KeyNames, NavigationSnapshot, HierarchyWalker, HitOpener, TryDispatch,
   BlockCaretStyle, FocusKeeper, VimModeClassifier, VimModeSource, InitSteps,

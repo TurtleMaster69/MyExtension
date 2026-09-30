@@ -54,13 +54,20 @@ namespace MyExtension
             {
                 _sequence.Add(key);
 
-                string sequence = string.Join(",", _sequence.Select(KeyToString));
+                string sequence = string.Join(",", _sequence.Select(KeyNames.ToString));
 
                 if (_bindings.TryGetValue(sequence, out var action))
                 {
                     _active = false;
                     _sequence.Clear();
-                    action();
+                    try
+                    {
+                        action();
+                    }
+                    catch (Exception ex)
+                    {
+                        return LeaderResult.Failed(sequence, ex.Message);
+                    }
                     return LeaderResult.Execute(action, sequence);
                 }
 
@@ -87,23 +94,6 @@ namespace MyExtension
             _active = false;
             _sequence.Clear();
         }
-
-        /// <summary>
-        /// Friendly, stable key name used in the config file. A few non-alphanumeric keys have
-        /// awkward enum names (e.g. the "/" key maps to <c>Keys.OemQuestion</c>/<c>Oem2</c>,
-        /// "+" to <c>Keys.Oemplus</c>), so we map those to their printable character for a
-        /// readable default config.
-        /// </summary>
-        private static string KeyToString(Keys key)
-        {
-            switch (key)
-            {
-                case Keys.OemQuestion: return "/";   // 191, same value as Keys.Oem2
-                case Keys.Oemplus: return "+";       // 187
-                case Keys.OemMinus: return "-";      // 189
-                default: return key.ToString();
-            }
-        }
     }
 
     /// <summary>The outcome of routing a key through <see cref="LeaderSequenceMatcher"/>.</summary>
@@ -112,6 +102,7 @@ namespace MyExtension
         PassThrough,
         Consume,
         Execute,
+        Failed,
         Abort,
     }
 
@@ -124,17 +115,20 @@ namespace MyExtension
         public LeaderResultKind Kind { get; }
         public Action? Action { get; }
         public string? Sequence { get; }
+        public string? ErrorMessage { get; }
 
-        private LeaderResult(LeaderResultKind kind, Action? action, string? sequence)
+        private LeaderResult(LeaderResultKind kind, Action? action, string? sequence, string? errorMessage)
         {
             Kind = kind;
             Action = action;
             Sequence = sequence;
+            ErrorMessage = errorMessage;
         }
 
-        public static LeaderResult PassThrough => new(LeaderResultKind.PassThrough, null, null);
-        public static LeaderResult Consume => new(LeaderResultKind.Consume, null, null);
-        public static LeaderResult Execute(Action action, string sequence) => new(LeaderResultKind.Execute, action, sequence);
-        public static LeaderResult Abort => new(LeaderResultKind.Abort, null, null);
+        public static LeaderResult PassThrough => new(LeaderResultKind.PassThrough, null, null, null);
+        public static LeaderResult Consume => new(LeaderResultKind.Consume, null, null, null);
+        public static LeaderResult Execute(Action action, string sequence) => new(LeaderResultKind.Execute, action, sequence, null);
+        public static LeaderResult Failed(string sequence, string errorMessage) => new(LeaderResultKind.Failed, null, sequence, errorMessage);
+        public static LeaderResult Abort => new(LeaderResultKind.Abort, null, null, null);
     }
 }

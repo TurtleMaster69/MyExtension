@@ -33,7 +33,15 @@ namespace Telescope
     /// </summary>
     internal sealed class FzfFilter
     {
+        private const int DefaultFilterTimeoutMs = 3000;
+
         private readonly string _fzfPath;
+
+        /// <summary>
+        /// Timeout for a single fzf <c>--filter</c> run; a hung subprocess is killed and the filter
+        /// falls back to the full candidate list. Settable so the timeout test can shrink it.
+        /// </summary>
+        internal int FilterTimeoutMs { get; set; } = DefaultFilterTimeoutMs;
 
         /// <summary>
         /// Creates a filter that resolves <c>fzf</c> from the system PATH. If <paramref name="fzfPath"/>
@@ -118,7 +126,20 @@ namespace Telescope
                 var errorTask = p.StandardError.ReadToEndAsync();
                 using (cancellationToken.Register(() => TryKill(p)))
                 {
-                    await Task.WhenAll(outputTask, errorTask);
+                    var all = Task.WhenAll(outputTask, errorTask);
+                    var timeout = Task.Delay(FilterTimeoutMs, cancellationToken);
+                    var winner = await Task.WhenAny(all, timeout);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return lines; // silent — overlay discards
+                    }
+                    if (winner == timeout)
+                    {
+                        TryKill(p);
+                        TelescopeLog.Log($"fzf filter failed: timeout after {FilterTimeoutMs}ms");
+                        return lines;
+                    }
+                    await all;
                 }
 
                 var output = await outputTask;
@@ -130,9 +151,10 @@ namespace Telescope
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // fzf missing/crashed: fall back to the full candidate list.
+                TelescopeLog.Log($"fzf filter failed: {ex.Message}");
                 return lines;
             }
         }
@@ -152,9 +174,11 @@ namespace Telescope
             }
         }
 
-        private static string QuoteArg(string value)
+        internal static string QuoteArg(string value)
         {
-            return "\"" + value.Replace("\"", "\\\"") + "\"";
+            string escaped = value.Replace("\"", "\\\"");
+            int trailing = escaped.Length - escaped.TrimEnd('\\').Length;
+            return "\"" + escaped + new string('\\', trailing) + "\"";
         }
     }
 }

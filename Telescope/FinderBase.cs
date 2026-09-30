@@ -34,7 +34,7 @@ namespace Telescope
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug(GatherErrorLiteral(ex));
+                TelescopeLog.Log(GatherErrorLiteral(ex));
                 hits = Array.Empty<THit>();
             }
 
@@ -57,7 +57,6 @@ namespace Telescope
             catch (Exception ex)
             {
                 TelescopeLog.Log($"open {OpenErrorNoun} failed: {ex.Message}");
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}{FinderNameForErrors} failed to open '{entry.Display}': {ex.Message}");
             }
         }
 
@@ -69,10 +68,8 @@ namespace Telescope
             }
         }
 
-        protected virtual string GatherErrorLiteral(Exception ex) => $"{Telescope.DiagnosticLog.Telescope}{GetType().Name} failed to enumerate: {ex.Message}";
+        protected virtual string GatherErrorLiteral(Exception ex) => $"{GetType().Name} failed to enumerate: {ex.Message}";
 
         protected virtual string OpenErrorNoun => "item";
-
-        protected virtual string FinderNameForErrors => GetType().Name;
     }
 }

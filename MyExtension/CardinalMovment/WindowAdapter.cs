@@ -17,18 +17,20 @@ namespace CardinalNavigation
     {
         private IVsWindowFrame _frame;
         private EnvDTE.Window _dte;
-        private RectCoordinate _rect;
+        private readonly IVsWindowFrame4? _frame4;
 
         public WindowAdapter(IVsWindowFrame frame, EnvDTE.Window dte)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             _frame = frame;
             _dte = dte;
+            _frame4 = frame as IVsWindowFrame4;
         }
 
         /// <summary>
-        /// The window's on-screen rect, refreshed on every access (the engine snapshots
-        /// rects once per navigation).
+        /// The window's on-screen rect, refreshed on every access. The engine snapshots all
+        /// rects in a single pass per navigation (see <see cref="NavigationSnapshot"/>), so
+        /// this is read once per window per navigation.
         /// </summary>
         public RectCoordinate Rect => RefreshRect();
 
@@ -120,10 +122,21 @@ namespace CardinalNavigation
         private RectCoordinate RefreshRect()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var frame4 = (IVsWindowFrame4)_frame;
+            return TryGetScreenRect(_frame4) ?? RectCoordinate.Empty;
+        }
+
+        /// <summary>
+        /// Reads the frame's on-screen rect via the IVsWindowFrame4 interface, or null when the
+        /// frame does not conform (the old cast path threw InvalidCastException).
+        /// </summary>
+        internal static RectCoordinate? TryGetScreenRect(IVsWindowFrame4? frame4)
+        {
+            if (frame4 == null)
+            {
+                return null;
+            }
             frame4.GetWindowScreenRect(out int left, out int top, out int width, out int height);
-            _rect = new RectCoordinate(left, top, width, height);
-            return _rect;
+            return new RectCoordinate(left, top, width, height);
         }
     }
 }

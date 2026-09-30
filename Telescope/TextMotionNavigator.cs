@@ -117,7 +117,7 @@ namespace Telescope
             }
             // The current line's start is the char after a '\n' at (lineStart-1). The previous
             // line ends at the '\n' BEFORE that one, so search from (lineStart-2).
-            int prevNewline = _text.LastIndexOf('\n', lineStart - 2);
+            int prevNewline = _text.LastIndexOf('\n', Math.Max(0, lineStart - 2));
             int prevStart = prevNewline < 0 ? 0 : prevNewline + 1;
             int prevEnd = _text.IndexOf('\n', prevStart);
             int maxIndex = (prevEnd < 0 ? _text.Length : prevEnd);
@@ -152,7 +152,7 @@ namespace Telescope
         }
 
         /// <summary>Start of line (0).</summary>
-        public void LineStartHome() => MoveTo(LineStart(_caret));
+        public void LineStart() => MoveTo(LineStart(_caret));
 
         /// <summary>End of line ($).</summary>
         public void LineEnd()

@@ -5,6 +5,8 @@ namespace CardinalNavigation
 {
     readonly struct RectCoordinate
     {
+        public static readonly RectCoordinate Empty = new RectCoordinate(0, 0, 0, 0);
+
         public readonly int X;
         public readonly int Y;
         public readonly int Width;

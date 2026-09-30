@@ -44,7 +44,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope {finderName}: {ex.Message}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Failed to open Telescope {finderName}: {ex.Message}");
             }
         }
     }

@@ -41,23 +41,26 @@ namespace MyExtension
         /// <summary>Stable package identity used by the registration attributes.</summary>
         public const string PackageGuidString = "2f73bf14-6619-47e7-850c-29e95557f429";
 
-        private GlobalKeyboardHook? _keyboardLogger;
+        private GlobalKeyboardHook? _keyboardHook;
         private WindowManager? _windowManager;
         private TelescopeController? _telescope;
         private TelescopeLauncher? _launcher;
+        private IVsMonitorSelection? _monitorSelection;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
-            NeoVisualLog.Debug("=== Global Keyboard Logger Package STARTED ===");
+            NeoVisualLog.Log("=== Global Keyboard Logger Package STARTED ===");
             await base.InitializeAsync(cancellationToken, progress);
 
             // Configure the per-run log file (env-driven), start a fresh log for this instance,
             // and route every Debug.WriteLine into it too. The log folder/run-index come from the
             // harness (NEOVISUAL_LOG_DIR / NEOVISUAL_LOG_INDEX); the exp vs main suffix is
-            // detected from this process's command line.
-            ConfigureLogFile();
-            Telescope.NeoVisualLog.Clear();
-            Telescope.NeoVisualLog.InstallDebugListener();
+            // hardcoded in ConfigureLogPath (-exp.log = structured NeoVisual log the harness
+            // asserts on, -main.log = raw debug-output stream), not command-line-detected. Each
+            // pre-try step is protected so logging can never break package load.
+            RunInitStep("configure-log", () => ConfigureLogFile());
+            RunInitStep("clear-log", () => Telescope.NeoVisualLog.Clear());
+            RunInitStep("install-debug-listener", () => Telescope.NeoVisualLog.InstallDebugListener());
             NeoVisualLog.Log($"{Telescope.DiagnosticLog.MyExtension}session started");
 
             // The hook must be installed on the UI thread (its callback touches VS objects and
@@ -65,57 +68,109 @@ namespace MyExtension
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
             // Wrapped so a bad state (e.g. missing VsVim) can't take the whole package down; the
-            // extension degrades to a no-op and we log the reason.
+            // extension degrades to a no-op and we log the reason. Each named step runs in its own
+            // try/catch (via InitSteps) so a failure never aborts the later steps.
             try
             {
-                _telescope = new TelescopeController();
-                _launcher = new TelescopeLauncher(this, _telescope);
-                _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)));
-                _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this)));
-                _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this)));
-                _telescope.RegisterFinder(new ReferencesFinder(
-                    () => GatherReferences(),
-                    hit => OpenReference(hit)));
-                _telescope.RegisterFinder(new ImplementationFinder(
-                    () => GatherImplementations(),
-                    hit => OpenImplementation(hit)));
-
-                // Build WindowManager (current-window tracking + tool-window controller dispatch)
-                // before the hook so InputHandler can consume its cached state from the start.
-                var monitorSelection = await GetServiceAsync<SVsShellMonitorSelection, IVsMonitorSelection>(throwOnFailure: true, cancellationToken);
-                _windowManager = new WindowManager(monitorSelection);
-                _windowManager.RegisterController(new SolutionExplorerController(() => VsServices.Dte(this)));
-
-                // Register a controller for every tool-window type explicitly (one per type, so
-                // mode is remembered per window type): text-input surfaces get the vim text-motion
-                // controller, everything else the general hjkl controller.
-                foreach (ToolWindowType type in Enum.GetValues(typeof(ToolWindowType)))
+                var steps = new (string Name, Func<Task> Step)[]
                 {
-                    if (type == ToolWindowType.Unknown)
+                    ("telescope", () =>
                     {
-                        continue;
-                    }
-                    _windowManager.RegisterController(GeneralToolWindowController.IsTextInputType(type)
-                        ? new TextInputToolWindowController(type)
-                        : new GeneralToolWindowController(type));
-                }
+                        _telescope = new TelescopeController();
+                        _launcher = new TelescopeLauncher(this, _telescope);
+                        return Task.CompletedTask;
+                    }),
+                    ("finders", () =>
+                    {
+                        var fileCache = new ProjectFileCache();
+                        _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)));
+                        _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this), fileCache));
+                        _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this), fileCache));
+                        _telescope.RegisterFinder(new ReferencesFinder(
+                            () => GatherReferences(),
+                            hit => OpenHitAtLine(hit)));
+                        _telescope.RegisterFinder(new ImplementationFinder(
+                            () => GatherImplementations(),
+                            hit => OpenHitAtLine(hit)));
+                        return Task.CompletedTask;
+                    }),
+                    ("monitor-selection", async () =>
+                    {
+                        _monitorSelection = await GetServiceAsync<SVsShellMonitorSelection, IVsMonitorSelection>(throwOnFailure: true, cancellationToken);
+                    }),
+                    ("window-manager", () =>
+                    {
+                        // Build WindowManager (current-window tracking + tool-window controller
+                        // dispatch) before the hook so InputHandler can consume its cached state
+                        // from the start.
+                        _windowManager = new WindowManager(_monitorSelection);
+                        _windowManager.RegisterController(new SolutionExplorerController(() => VsServices.Dte(this)));
+                        return Task.CompletedTask;
+                    }),
+                    ("controllers", () =>
+                    {
+                        // Register a controller for every tool-window type explicitly (one per
+                        // type, so mode is remembered per window type): text-input surfaces get the
+                        // vim text-motion controller, everything else the general hjkl controller.
+                        // The factory returns null for SolutionExplorer (the specialized controller
+                        // above is the ONLY registration) and Unknown, so the specialized
+                        // controller is never overwritten regardless of registration order.
+                        foreach (ToolWindowType type in Enum.GetValues(typeof(ToolWindowType)))
+                        {
+                            var controller = WindowManager.DefaultControllerFor(type);
+                            if (controller != null)
+                            {
+                                _windowManager.RegisterController(controller);
+                            }
+                        }
+                        return Task.CompletedTask;
+                    }),
+                    ("shell-wait", () =>
+                    {
+                        // The shell/main window is still configuring during early init and steals
+                        // focus when it finishes. For testing, wait until the shell is fully
+                        // initialized so the environment is stable (and won't grab focus) before
+                        // we open the solution/hook.
+                        return WaitForShellInitializedAsync(cancellationToken);
+                    }),
+                    ("auto-open-solution", () =>
+                    {
+                        // For testing: if NEOVISUAL_TEST_SOLUTION is set, open it in this
+                        // (experimental) instance via DTE so VS isn't stuck on the "select
+                        // project/solution" window.
+                        return TryAutoOpenSolutionAsync(cancellationToken);
+                    }),
+                    ("hook", () =>
+                    {
+                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager);
+                        return Task.CompletedTask;
+                    }),
+                    ("command", () => RegisterTelescopeCommandAsync(cancellationToken)),
+                };
 
-                // The shell/main window is still configuring during early init and steals focus when
-                // it finishes. For testing, wait until the shell is fully initialized so the
-                // environment is stable (and won't grab focus) before we open the solution/hook.
-                await WaitForShellInitializedAsync(cancellationToken);
-
-                // For testing: if NEOVISUAL_TEST_SOLUTION is set, open it in this (experimental)
-                // instance via DTE so VS isn't stuck on the "select project/solution" window.
-                await TryAutoOpenSolutionAsync(cancellationToken);
-
-                _keyboardLogger = new GlobalKeyboardHook(this, _telescope, _windowManager);
-
-                await RegisterTelescopeCommandAsync(cancellationToken);
+                await new InitSteps(msg => NeoVisualLog.Log(msg)).RunAsync(steps);
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.MyExtension}Failed to initialize keyboard hook: {ex}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.MyExtension}init failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Runs a synchronous init step in its own try/catch, logging
+        /// <c>[MyExtension] init &lt;name&gt; ok</c> / <c>[MyExtension] init &lt;name&gt; failed:
+        /// {ex.Message}</c>. Never throws — logging must not break package load.
+        /// </summary>
+        private void RunInitStep(string name, Action step)
+        {
+            try
+            {
+                step();
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.MyExtension}init {name} ok");
+            }
+            catch (Exception ex)
+            {
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.MyExtension}init {name} failed: {ex.Message}");
             }
         }
 
@@ -242,7 +297,7 @@ namespace MyExtension
             ThreadHelper.ThrowIfNotOnUIThread();
             try
             {
-                string? path = FindFirstSourceFile(dte.Solution.Projects);
+                string? path = ProjectFiles.Enumerate(dte).FirstOrDefault(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase));
                 if (path == null || !System.IO.File.Exists(path))
                 {
                     NeoVisualLog.Log($"{Telescope.DiagnosticLog.MyExtension}no source file found to open in editor");
@@ -255,79 +310,6 @@ namespace MyExtension
             {
                 NeoVisualLog.Log($"{Telescope.DiagnosticLog.MyExtension}open editor file failed: {ex.Message}");
             }
-        }
-
-        private static string? FindFirstSourceFile(EnvDTE.Projects projects)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            try
-            {
-                foreach (EnvDTE.Project project in projects)
-                {
-                    if (project == null)
-                    {
-                        continue;
-                    }
-                    string? found = FindFirstSourceFileInItems(project.ProjectItems);
-                    if (found != null)
-                    {
-                        return found;
-                    }
-                }
-            }
-            catch
-            {
-                // solution enumeration can throw on odd projects — treat as not found
-            }
-            return null;
-        }
-
-        private static string? FindFirstSourceFileInItems(EnvDTE.ProjectItems items)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            if (items == null)
-            {
-                return null;
-            }
-            try
-            {
-                foreach (EnvDTE.ProjectItem item in items)
-                {
-                    if (item == null)
-                    {
-                        continue;
-                    }
-                    try
-                    {
-                        if (item.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                        {
-                            return item.FileNames[0];
-                        }
-                    }
-                    catch
-                    {
-                        // item has no file name (folder, virtual node) — keep descending
-                    }
-                    if (item.SubProject != null)
-                    {
-                        string? sub = FindFirstSourceFileInItems(item.SubProject.ProjectItems);
-                        if (sub != null)
-                        {
-                            return sub;
-                        }
-                    }
-                    string? nested = FindFirstSourceFileInItems(item.ProjectItems);
-                    if (nested != null)
-                    {
-                        return nested;
-                    }
-                }
-            }
-            catch
-            {
-                // project model can be flaky for SDK-style projects — stop descending
-            }
-            return null;
         }
 
         /// <summary>
@@ -434,35 +416,17 @@ namespace MyExtension
         // ================================================================
 
         /// <summary>
-        /// Opens a reference hit's file in the editor and jumps the caret to the hit's 1-based
-        /// line (line-level ONLY — <see cref="ReferenceHit.Column"/> is reported metadata, not a
-        /// column jump, matching <see cref="CodeIssuesFinder"/>). The finder's
-        /// <c>OnSelected</c> wraps this call and emits the <c>opened reference</c> diagnostic.
+        /// Opens a finder hit's file in the editor and jumps the caret to the hit's 1-based line
+        /// (line-level ONLY — <see cref="ReferenceHit.Column"/> is reported metadata, not a column
+        /// jump, matching <see cref="CodeIssuesFinder"/>). Shared by the references and
+        /// implementations finders via <see cref="HitOpener"/>; the finders' <c>OnSelected</c>
+        /// wraps this call and emits the <c>opened reference</c> / <c>opened implementation</c>
+        /// diagnostic.
         /// </summary>
-        private void OpenReference(ReferenceHit hit)
+        private void OpenHitAtLine(IFileLocation hit)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (!System.IO.File.Exists(hit.FilePath))
-            {
-                return;
-            }
-            OpenFileAtLine(hit.FilePath, hit.LineNumber);
-        }
-
-        /// <summary>
-        /// Opens an implementation hit's file in the editor and jumps the caret to the hit's
-        /// 1-based declaring line (line-level ONLY — no column metadata is carried on
-        /// <see cref="ImplementationHit"/>). The finder's <c>OnSelected</c> wraps this call and
-        /// emits the <c>opened implementation</c> diagnostic.
-        /// </summary>
-        private void OpenImplementation(ImplementationHit hit)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            if (!System.IO.File.Exists(hit.FilePath))
-            {
-                return;
-            }
-            OpenFileAtLine(hit.FilePath, hit.LineNumber);
+            HitOpener.OpenAtLine(hit, (path, line) => OpenFileAtLine(path, line));
         }
 
         /// <summary>Opens a file in the editor and jumps the caret to the given 1-based line.</summary>
@@ -690,7 +654,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}GetCaretOffset failed: {ex.Message}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}GetCaretOffset failed: {ex.Message}");
             }
             return -1;
         }
@@ -733,8 +697,8 @@ namespace MyExtension
         {
             if (disposing)
             {
-                _keyboardLogger?.Dispose();
-                _keyboardLogger = null;
+                _keyboardHook?.Dispose();
+                _keyboardHook = null;
                 _windowManager?.Dispose();
                 _windowManager = null;
                 _telescope?.Dispose();

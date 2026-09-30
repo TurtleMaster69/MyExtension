@@ -193,6 +193,14 @@ were known-backlog assertion bugs, not regressions).
 
 Top of the queue, in priority order:
 
+> **FIRST ITEM (2026-09-29):** ~~the **Code review findings (75 findings, 12 phases)**
+> plan~~ — **DONE** (GREEN 2026-09-30, unit-only lane; see the Done section). All 12
+> phases executed per-phase RED→GREEN; final suites Telescope.Tests 135 / NeoVisual.Tests
+> 130 (both 0 failed); `dotnet build` 0 errors; all harness-health self-checks PASS. The
+> e2e gates are queued in `e2e-queue.md` (E2E-CR-1..3, E2E-M1..M42, status QUEUED) — run
+> them on a VS-capable machine (the correct machine runs VS 2026) before relying on live
+> behavior. No e2e harness commands were run on this machine (user mandate).
+
 > **FIRST ITEM (2026-09-28):** ~~the **Architecture consolidation (5 lanes)** plan~~ —
 > **DONE** (GREEN 2026-09-28, unit-only lane; see the Done section). The e2e gates are
 > queued in `e2e-queue.md` (E2E-AC-1..5, status QUEUED) — run them on a capable machine
@@ -358,6 +366,37 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-09-30 — Code review findings (75 findings, 12 phases)** (Lane: `feature/bugfix
+  program`, unit-only, e2e deferred; ~40 delegations, 0 VS boots, 0 iterations). All 75
+  findings (3 critical, 30 major, 30 minor, 12 nit) from `docs/code-review.md` executed
+  per-phase RED→GREEN in the unit-only lane. Phases 0-6 behavior fixes, 7-9 refactors,
+  10-12 harness/test/naming. Final suites: **Telescope.Tests 135, NeoVisual.Tests 130**
+  (both 0 failed); `dotnet build` 0 errors; all harness-health self-checks PASS
+  (check-doc-refs 0 unresolved, dte-command -SelfTest, iterate-telescope -SelfCheck,
+  check-doc-refs -SelfCheck). NO e2e harness commands run (user mandate — VS-capable
+  machine required; the correct machine runs VS 2026). e2e gates queued in
+  `docs/e2e-queue.md` (E2E-CR-1..3, E2E-M1..M42).
+  **Change summary:** created ~20 new files (OverlayShowState, StaleToolWindowSentinel,
+  KeyNameBuilder, KeyNames, NavigationSnapshot, HierarchyWalker, HitOpener, TryDispatch,
+  BlockCaretStyle, FocusKeeper, VimModeClassifier, VimModeSource, InitSteps,
+  SimpleShortcutMatcher, FocusTargetModel, FileContentCache, LineIndex, FilterFailureLog,
+  PaneFailureTracker); deleted BuildSimpleKey/KeyToString/Classify(string)/BuildForest/
+  OpenReference/OpenImplementation/FindFirstSourceFileInItems/CollectProjectFiles/
+  CollectItems/ToDirection/LEFT-RIGHT-UP-DOWN constants/_rect/_keyboardLogger/expHive/
+  Find-VsWindow; rewired InputHandler/WindowMatrix/WindowManager/MyExtensionPackage/
+  VimModeTracker/TelescopeOverlay/SolutionExplorerController/PreviewRenderer/GrepFinder/
+  CodeIssuesFinder/FinderBase/LogFileWriter/NeoVisualLog/Actions; consolidated the harness
+  (Open-TelescopeFinder, Ensure-SolutionExplorerOpen, Wait-LogLine, Assert-Budget,
+  Get-LogCacheIndex, -SelfCheck/-SelfTest seams, PID-scoped kills, Process-scope env,
+  always-reset seeding). New diagnostics: `[NeoVisual] stale-toolwindow sentinel active`,
+  `[NeoVisual] leader-binding failed:`, `[NeoVisual] shortcut-binding failed:`,
+  `[NeoVisual] output pane unavailable:`, `[MyExtension] init <step> ok/failed:`,
+  `[Telescope] fzf filter failed:`, `[Telescope] fzf unavailable — showing unfiltered
+  list`, `[Telescope] filter failed:`. **If this regresses, look first at the extracted
+  pure seams (OverlayShowState, VimModeState/VimModeClassifier, FocusGuard,
+  SimpleShortcutMatcher, TryDispatch, HierarchyWalker, HitOpener) — each is unit-tested;
+  the e2e gates are queued in `e2e-queue.md`.**
 
 - **2026-09-28 — F15 CodeIssuesFinder per-open DTE re-enumeration** (Lane: `bugfix`;
   3 delegations, 0 VS boots, 0 iterations). `CodeIssuesFinder.GatherHits` re-enumerated
@@ -702,7 +741,7 @@ Top of the queue, in priority order:
   the last-but-one known-RED e2e scenario `explorer-open-navigation`.
   **Change summary:** created `MyExtension/ToolWindows/HierarchyResolver.cs`; edited
   `MyExtension/ToolWindows/SolutionExplorerController.cs` (`Keys.G` action key +
-  `SelectFirstSourceFile`/`BuildForest`/`FindFirstProjectNode`),
+  `SelectFirstSourceFile`/`HierarchyForestBuilder`/`FindFirstProjectNode`),
   `tests/NeoVisual.Tests/Program.cs` (`Run_HierarchyResolver_FirstSourceFile` +
   `Contains(Keys.G)` assertion), `tools/test-e2e.ps1` (`explorer-open-navigation`
   scenario now presses `g`); docs synced (spec/AGENTS/SKILL/progress).
@@ -749,7 +788,7 @@ Top of the queue, in priority order:
   **Change summary:** created `Telescope/ImplementationHit.cs` +
   `Telescope/ImplementationFinder.cs`; edited `Telescope/TelescopeOverlay.cs`
   (ImplementationHit preview branch), `MyExtension/MyExtensionPackage.cs`
-  (`GatherImplementations`/`OpenImplementation`/registration),
+  (`GatherImplementations`/`OpenHitAtLine`/registration),
   `MyExtension/InputHandler.cs` (ResolveAction case + `OpenTelescopeImplementation()`),
   `MyExtension/default-keybindings.json` (`F,I` → `telescope-implementation`),
   `tools/test-e2e.ps1` (scenario + `Models/IShape.cs`/`Shape.cs` seeds in
@@ -802,7 +841,7 @@ Top of the queue, in priority order:
   `Telescope/ReferencesFinder.cs`; edited `Telescope/TelescopeOverlay.cs`
   (ReferenceHit preview branch), `MyExtension/InputHandler.cs`
   (ResolveAction case + `OpenTelescopeReferences()`), `MyExtension/MyExtensionPackage.cs`
-  (finder registration + Roslyn gatherer `GatherReferences`/`OpenReference`),
+  (finder registration + Roslyn gatherer `GatherReferences`/`OpenHitAtLine`),
   `MyExtension/default-keybindings.json` (`F,R` → `telescope-references`),
   `MyExtension/MyExtension.csproj` (+ `Microsoft.VisualStudio.LanguageServices`
   4.14.0, `ExcludeAssets="runtime"`), `tools/test-e2e.ps1` (scenario + seeded
@@ -1362,8 +1401,8 @@ the report only. Filed subset (59 items): 5 major, 38 minor, 16 nit.
    `WindowManager.cs:116-129`. Guard `value is int`; drop the null check.
 9. **m9 — `IsTestStaleInjected()` does `File.Exists` per key on the hook path.**
    `WindowManager.cs:37-38`. Cache the sentinel result for the process lifetime.
-10. **m10 — `FindFirstSourceFileInItems` is a third hand-rolled DTE walker.**
-    `MyExtensionPackage.cs:269-315`. Reuse `ProjectFiles.Enumerate`.
+10. **m10 — the package's first-.cs DTE walker was a third hand-rolled walker; removed in M22 —
+    reuse `ProjectFiles.Enumerate`.**
 11. **m11 — `IsWriteLocation` reflection failure silently downgrades to "read".**
     `MyExtensionPackage.cs:749-762`. Log a one-time warning when the property is missing.
 12. **m12 — `_cachedTyping=false` set unconditionally on LostAggregateFocus.**

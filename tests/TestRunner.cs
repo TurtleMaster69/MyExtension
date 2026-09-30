@@ -93,6 +93,14 @@ namespace TestHarness
             }
         }
 
+        public static void True(bool condition)
+        {
+            if (!condition)
+            {
+                throw new Exception("Assert.True failed");
+            }
+        }
+
         public static void True(bool condition, string message)
         {
             if (!condition)
@@ -101,11 +109,83 @@ namespace TestHarness
             }
         }
 
+        public static void False(bool condition)
+        {
+            if (condition)
+            {
+                throw new Exception("Assert.False failed");
+            }
+        }
+
         public static void False(bool condition, string message)
         {
             if (condition)
             {
                 throw new Exception(message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A disposable unique temp directory (created on construction, deleted recursively on
+    /// dispose). Replaces the hand-rolled <c>Path.Combine(Path.GetTempPath(), ...)</c> +
+    /// <c>Directory.Delete(dir, recursive: true)</c> blocks in the test programs.
+    /// </summary>
+    public sealed class TempDir : IDisposable
+    {
+        public string Path { get; }
+
+        public TempDir()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "neovisual_tests_" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(Path);
+        }
+
+        public void Dispose()
+        {
+            try { System.IO.Directory.Delete(Path, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Shared test scaffolding: LogPath/DebugLogPath save-set-restore helpers (M29). These are
+    /// deliberately NOT <c>Run_</c>-prefixed so the runner never discovers them as tests.
+    /// </summary>
+    public static class TestScaffold
+    {
+        /// <summary>
+        /// Runs <paramref name="body"/> with <c>Telescope.LogFileWriter.LogPath</c> temporarily set to
+        /// <paramref name="logPath"/>, restoring the previous value in a finally block.
+        /// </summary>
+        public static void WithLogPath(string logPath, Action body)
+        {
+            string original = Telescope.LogFileWriter.LogPath;
+            try
+            {
+                Telescope.LogFileWriter.LogPath = logPath;
+                body();
+            }
+            finally
+            {
+                Telescope.LogFileWriter.LogPath = original;
+            }
+        }
+
+        /// <summary>
+        /// Runs <paramref name="body"/> with <c>Telescope.LogFileWriter.DebugLogPath</c> temporarily set
+        /// to <paramref name="debugPath"/>, restoring the previous value in a finally block.
+        /// </summary>
+        public static void WithDebugLogPath(string debugPath, Action body)
+        {
+            string original = Telescope.LogFileWriter.DebugLogPath;
+            try
+            {
+                Telescope.LogFileWriter.DebugLogPath = debugPath;
+                body();
+            }
+            finally
+            {
+                Telescope.LogFileWriter.DebugLogPath = original;
             }
         }
     }

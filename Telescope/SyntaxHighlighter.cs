@@ -40,7 +40,7 @@ namespace Telescope
     /// </summary>
     internal static class SyntaxHighlighter
     {
-        private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
+        private static readonly HashSet<string> _keywords = new(StringComparer.Ordinal)
         {
             // C# reserved keywords
             "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
@@ -61,7 +61,7 @@ namespace Telescope
         /// Splits <paramref name="text"/> into colored segments, in order. Handles multi-line
         /// constructs (block comments, verbatim strings) by emitting segments that contain '\n'.
         /// </summary>
-        public static IReadOnlyList<SyntaxSegment> Segment(string text)
+        public static IReadOnlyList<SyntaxSegment> Tokenize(string text)
         {
             var result = new List<SyntaxSegment>();
             if (string.IsNullOrEmpty(text))
@@ -158,7 +158,7 @@ namespace Telescope
                     int start = i;
                     while (i < len && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
                     string word = text.Substring(start, i - start);
-                    result.Add(new SyntaxSegment(word, Keywords.Contains(word) ? SyntaxCategory.Keyword : SyntaxCategory.Default));
+                    result.Add(new SyntaxSegment(word, _keywords.Contains(word) ? SyntaxCategory.Keyword : SyntaxCategory.Default));
                     continue;
                 }
 
@@ -195,7 +195,7 @@ namespace Telescope
             {
                 if (text[i] == '\\')
                 {
-                    i += 2; // escaped character, e.g. \" or \n
+                    i += (i + 1 < text.Length) ? 2 : 1; // escaped character, e.g. \" or \n
                     continue;
                 }
                 if (text[i] == quote)

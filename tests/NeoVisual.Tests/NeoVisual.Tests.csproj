@@ -24,6 +24,12 @@
          for runtime resolution, mirroring the Telescope test project. -->
     <PackageReference Include="Microsoft.VisualStudio.Interop" Version="17.14.40260" ExcludeAssets="build;analyzers" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" ExcludeAssets="build;analyzers" />
+    <!-- ITextView lives in Microsoft.VisualStudio.Text.UI.dll, which is NOT in Shell.Framework.
+         The VimModeSource fake passes null! for ITextView, but the type must be resolvable at
+         runtime for the MyExtension types to JIT. VimModeTracker also implements
+         IWpfTextViewCreationListener, so the sibling Text.UI.Wpf assembly is required too. -->
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI" Version="17.14.249" ExcludeAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.14.249" ExcludeAssets="build;analyzers" />
   </ItemGroup>
 
   <ItemGroup>

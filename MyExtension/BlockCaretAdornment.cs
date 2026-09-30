@@ -45,10 +45,10 @@ namespace MyExtension
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
 
-            _white = new Rectangle { Fill = Brushes.White };
+            _white = new Rectangle { Fill = new SolidColorBrush(Telescope.BlockCaretStyle.WhiteFill) };
             _glyph = new TextBlock
             {
-                Foreground = Brushes.Black,
+                Foreground = new SolidColorBrush(Telescope.BlockCaretStyle.GlyphColor),
                 TextAlignment = TextAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,

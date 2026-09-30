@@ -55,7 +55,7 @@ namespace CardinalNavigation
             {
                 // No parent to anchor linked windows around; return empty so navigation degrades
                 // to a no-op instead of throwing into the keyboard hook.
-                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}No parent window for active window; skipping window linking.");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}No parent window for active window; skipping window linking.");
                 return linkedWindows;
             }
 

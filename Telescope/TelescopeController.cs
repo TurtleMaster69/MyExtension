@@ -53,7 +53,7 @@ namespace Telescope
 
             if (!_finders.TryGetValue(finderName, out var finder))
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}Unknown finder '{finderName}'.");
+                TelescopeLog.Log($"Unknown finder '{finderName}'.");
                 return false;
             }
 

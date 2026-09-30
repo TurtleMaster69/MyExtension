@@ -30,6 +30,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Telescope.Tests" />
     <InternalsVisibleTo Include="MyExtension" />
+    <InternalsVisibleTo Include="NeoVisual.Tests" />
   </ItemGroup>
 
 </Project>

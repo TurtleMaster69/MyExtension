@@ -22,8 +22,8 @@ namespace MyExtension
         /// from the editor veto.
         /// </summary>
         public static bool HasToolWindowActionKeys(
-            bool isToolWindow, bool isInputMode, int actionKeyCount, bool editorFocused, bool isTextInputSurface)
-            => isToolWindow && !isInputMode && actionKeyCount > 0 && (!editorFocused || isTextInputSurface);
+            bool isToolWindow, bool isInputMode, int actionKeyCount, bool editorFocused, bool isTextInputSurface, bool textInputSurfaceFocused)
+            => isToolWindow && !isInputMode && actionKeyCount > 0 && (!editorFocused || (isTextInputSurface && textInputSurfaceFocused));
 
         /// <summary>
         /// True when a key should be routed to the focused tool window's controller. False when an
@@ -31,8 +31,8 @@ namespace MyExtension
         /// A tool window in input mode, or a text-input surface, owns its keyboard even when the
         /// editor-focus flag is stale.
         /// </summary>
-        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface)
-            => isToolWindow && !(editorFocused && !isInputMode && !isTextInputSurface);
+        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused)
+            => isToolWindow && !(editorFocused && !isInputMode && !(isTextInputSurface && textInputSurfaceFocused));
 
         /// <summary>
         /// True when the user is typing, so the leader key must type a literal space. A tool window

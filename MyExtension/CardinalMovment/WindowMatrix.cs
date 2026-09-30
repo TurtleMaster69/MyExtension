@@ -11,9 +11,9 @@ namespace CardinalNavigation
     class WindowMatrix
     {
 
-        private List<WindowAdapter> m_ActiveWindows;
+        private List<WindowAdapter> _activeWindows;
 
-        private WindowAdapter m_activeWindow;
+        private WindowAdapter _activeWindow;
 
         private NavigationSettings _settings;
 
@@ -46,29 +46,29 @@ namespace CardinalNavigation
                     ? VsShellUtilities.GetWindowObject(currentFrame)
                     : dteService.ActiveWindow;
 
-                m_ActiveWindows = WindowAdapter.LinkedTo(activeWindow, adapters).
+                _activeWindows = WindowAdapter.LinkedTo(activeWindow, adapters).
                     ToList();
 
                 if (activeWindow == null)
                 {
                     // No active window to anchor navigation around; degrade to a no-op rather than
-                    // throwing (navigation should never crash the hook). m_activeWindow stays null;
+                    // throwing (navigation should never crash the hook). _activeWindow stays null;
                     // NavigateInDirection guards against it.
-                    m_ActiveWindows = new List<WindowAdapter>();
-                    m_activeWindow = null!;
+                    _activeWindows = new List<WindowAdapter>();
+                    _activeWindow = null!;
                     return;
                 }
 
                 // If the active window can't be paired to an adapter (possible when the window list
                 // is mid-change), degrade to a no-op rather than throwing.
-                m_activeWindow = WindowAdapter.FindActive(activeWindow, m_ActiveWindows) ?? null!;
+                _activeWindow = WindowAdapter.FindActive(activeWindow, _activeWindows) ?? null!;
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Debug(
+                Telescope.NeoVisualLog.Log(
                     $"{Telescope.DiagnosticLog.NeoVisual}Window matrix initialization failed: {ex.Message}\n{ex.StackTrace}");
-                m_ActiveWindows = new List<WindowAdapter>();
-                m_activeWindow = null!;
+                _activeWindows = new List<WindowAdapter>();
+                _activeWindow = null!;
             }
         }
 
@@ -81,7 +81,7 @@ namespace CardinalNavigation
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Debug(
+                Telescope.NeoVisualLog.Log(
                     $"{Telescope.DiagnosticLog.NeoVisual}Unable to get DTE for window navigation: {ex.Message}\n{ex.StackTrace}");
             }
         }
@@ -91,41 +91,38 @@ namespace CardinalNavigation
         /// or do nothing if none is found.
         /// </summary>
         /// <param name="direction"></param>
-        public void NavigateInDirection(char direction)
+        public void NavigateInDirection(Direction direction)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            // Guard order matters: m_activeWindow may be null, so test it before dereferencing it.
-            if (m_activeWindow == null || m_ActiveWindows.Count == 0 || m_activeWindow.AutoHides())
+            // Guard order matters: _activeWindow may be null, so test it before dereferencing it.
+            if (_activeWindow == null || _activeWindows.Count == 0)
             {
                 return;
             }
             try
             {
-                Direction dir = ToDirection(direction);
-                RectCoordinate active = m_activeWindow.Rect;
-                List<RectCoordinate> candidates = m_ActiveWindows.Select(w => w.Rect).ToList();
-                int? target = WindowNavigationEngine.SelectTarget(active, candidates, dir, _settings);
+                // AutoHides() is inside the try so a DTE window disposed/odd-frame exception is
+                // caught by the per-navigation catch below instead of escaping to the hook path.
+                if (_activeWindow.AutoHides())
+                {
+                    return;
+                }
+                List<RectCoordinate> rects = _activeWindows.Select(w => w.Rect).ToList();
+                NavigationSnapshot? snapshot = NavigationSnapshot.Capture(rects, _activeWindows.IndexOf(_activeWindow));
+                if (snapshot == null) { return; }
+                int? target = WindowNavigationEngine.SelectTarget(snapshot.Active, snapshot.Candidates, direction, _settings);
                 if (target.HasValue)
                 {
-                    m_ActiveWindows[target.Value].Activate();
+                    _activeWindows[target.Value].Activate();
                 }
             }
             catch (Exception ex)
             {
                 // Navigation is best-effort: never throw into the keyboard hook or pop a modal
                 // dialog mid-typing. Log and move on.
-                Telescope.NeoVisualLog.Debug(
+                Telescope.NeoVisualLog.Log(
                     $"{Telescope.DiagnosticLog.NeoVisual}Window navigation failed: {ex.Message}\n{ex.StackTrace}");
             }
-        }
-
-        private static Direction ToDirection(char direction)
-        {
-            if (direction == CardinalNavigationConstants.UP) return Direction.Up;
-            if (direction == CardinalNavigationConstants.DOWN) return Direction.Down;
-            if (direction == CardinalNavigationConstants.LEFT) return Direction.Left;
-            if (direction == CardinalNavigationConstants.RIGHT) return Direction.Right;
-            throw new ArgumentOutOfRangeException(nameof(direction));
         }
 
     }

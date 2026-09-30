@@ -50,6 +50,10 @@ namespace Telescope
         private bool _activationHandled;
         private CancellationTokenSource? _filterCts;
 
+        // State-based guard for the deferred ShowDialog(): RequestShow() in ShowOverlay, Close() in
+        // CloseOverlay, and the ApplicationIdle BeginInvoke only shows when ShouldShowDialog().
+        private readonly OverlayShowState _showState = new();
+
         // Query-driven finder debounce: a settle delay before the synchronous full-solution scan
         // runs, so typing does not stall the UI per keystroke. The generation counter invalidates
         // stale gathers when the query keeps changing during the delay.
@@ -59,21 +63,12 @@ namespace Telescope
         // Line caret brush for insert mode; white block brush for normal mode (white block, black
         // text via the TextBox's native glyph render under a white fill, matching the tool windows).
         private static readonly Brush PromptLineCaretBrush = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde));
-        private static readonly Brush PromptBlockCaretBrush = CreatePromptBlockBrush();
-
-        private static DrawingBrush CreatePromptBlockBrush()
-        {
-            var rect = new System.Windows.Rect(0, 0, 8, 16);
-            var drawing = new DrawingBrush(new GeometryDrawing(
-                Brushes.White, null, new RectangleGeometry(rect)));
-            drawing.Freeze();
-            return drawing;
-        }
+        private static readonly Brush PromptBlockCaretBrush = BlockCaretStyle.CreateBlockBrush();
 
         // Where the overlay's keyboard focus currently lives: the results list (default, where
         // j/k select) or the file preview (where h/l/j/k/w/b/e/gg/G navigate the code read-only).
-        private enum FocusTarget { List, Preview }
-        private FocusTarget _focusTarget = FocusTarget.List;
+        // Pure state machine (unit-tested); the overlay only applies the resulting focus.
+        private readonly FocusTargetModel _focusTargetModel = new();
 
         public TelescopeOverlay(FzfFilter fzf)
         {
@@ -256,14 +251,17 @@ namespace Telescope
             _selectedIndex = 0;
             _keyHandler.Reset();
             _keyHandler.SetResults(_candidates.Count);
-            _focusTarget = FocusTarget.List;
+            _focusTargetModel.Reset();
             _previewNavigator.SetText(string.Empty);
             _promptBox.Text = string.Empty;
             UpdateModeLabel();
             RenderResults();
 
-            NeoVisualLog.Clear();
             TelescopeLog.Log($"open finder={finder.Name} candidates={_candidates.Count}");
+            if (!_fzf.IsAvailable())
+            {
+                TelescopeLog.Log("fzf unavailable — showing unfiltered list");
+            }
 
             // Own the dialog to the VS main window (the Code Search / InstaSearch pattern). A
             // modal dialog owned by VS is OS-guaranteed to be the focused window and disables the
@@ -295,18 +293,28 @@ namespace Telescope
             }
 
             IsOpen = true;
+            _showState.RequestShow();
 
             // Show as a modal dialog. Deferred out of the global keyboard hook callback
             // (leader-key path) to ApplicationIdle; the modal loop runs there while hook
             // callbacks stay fast. Do NOT pre-focus: ShowDialog() activates this window, firing
-            // the one-shot Activated handler, which focuses the prompt in insert mode.
-            Dispatcher.BeginInvoke(new Action(() => ShowDialog()), DispatcherPriority.ApplicationIdle);
+            // the one-shot Activated handler, which focuses the prompt in insert mode. Guard with
+            // the state (equivalent to IsOpen), NOT IsVisible — IsVisible is false at
+            // ApplicationIdle time, so an IsVisible guard would silently never open the overlay.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_showState.ShouldShowDialog())
+                {
+                    ShowDialog();
+                }
+            }), DispatcherPriority.ApplicationIdle);
         }
 
         public void CloseOverlay()
         {
             CancelFilter();
             IsOpen = false;
+            _showState.Close();
             try
             {
                 Close();
@@ -371,25 +379,36 @@ namespace Telescope
 
         private async Task FilterAndUpdateAsync(IReadOnlyList<FinderEntry> snapshot, string query, CancellationToken token)
         {
-            var matched = await _fzf.FilterAsync(snapshot.Select(x => x.Display), query, token);
-            if (token.IsCancellationRequested)
+            try
             {
-                return;
-            }
-
-            await Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-            {
+                var matched = await _fzf.FilterAsync(snapshot.Select(x => x.Display), query, token);
                 if (token.IsCancellationRequested)
                 {
                     return;
                 }
 
-                var items = ResultMapper.MapBack(matched, snapshot);
+                await Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+                {
+                    if (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
 
-                _results = items;
-                _keyHandler.SetResults(items.Count);
-                RenderResults();
-            }));
+                    var items = ResultMapper.MapBack(matched, snapshot);
+
+                    _results = items;
+                    _keyHandler.SetResults(items.Count);
+                    RenderResults();
+                }));
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                NeoVisualLog.Log(FilterFailureLog.Format(ex));
+            }
         }
 
         private void CancelFilter()
@@ -508,27 +527,20 @@ namespace Telescope
 
             string mode = _keyHandler.IsNormalMode ? "normal" : "insert";
 
-            // Ctrl+H / Ctrl+L move focus between the results list and the file preview.
-            if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && (e.Key == Key.H || e.Key == Key.L))
+            // Ctrl+H / Ctrl+L move focus between the results list and the file preview; Escape in
+            // the preview returns to the list. Delegated to the pure focus-target state machine.
+            var focusAction = _focusTargetModel.Handle(MapKey(e.Key));
+            if (focusAction != FocusTargetAction.None)
             {
                 e.Handled = true;
-                _focusTarget = e.Key == Key.H ? FocusTarget.List : FocusTarget.Preview;
-                TelescopeLog.Log($"focus target={_focusTarget}");
+                TelescopeLog.Log($"focus target={_focusTargetModel.Current}");
                 FocusTargetUi();
                 return;
             }
 
-            if (_focusTarget == FocusTarget.Preview)
+            if (_focusTargetModel.Current == FocusTarget.Preview)
             {
                 // Preview: vim motions navigate the code read-only; Escape returns to the list.
-                if (e.Key == Key.Escape)
-                {
-                    e.Handled = true;
-                    _focusTarget = FocusTarget.List;
-                    TelescopeLog.Log($"focus target={_focusTarget}");
-                    FocusTargetUi();
-                    return;
-                }
                 bool handled = HandlePreviewKey(e.Key);
                 if (handled)
                 {
@@ -569,16 +581,9 @@ namespace Telescope
             navigator.SetText(_promptBox.Text);
             navigator.MoveTo(_promptBox.CaretIndex);
 
-            switch (key)
+            if (!TryDispatch.Handle(key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0, navigator, out _))
             {
-                case Key.H: navigator.Left(); break;
-                case Key.L: navigator.Right(); break;
-                case Key.W: navigator.NextWord(); break;
-                case Key.B: navigator.PrevWord(); break;
-                case Key.E: navigator.EndWord(); break;
-                case Key.D0: navigator.LineStartHome(); break; // 0
-                case Key.D4 when (Keyboard.Modifiers & ModifierKeys.Shift) != 0: navigator.LineEnd(); break; // $
-                default: return false;
+                return false;
             }
 
             _promptBox.CaretIndex = navigator.Caret;
@@ -605,30 +610,7 @@ namespace Telescope
         /// <summary>Applies vim motions to the preview navigator for a list-mode key.</summary>
         private bool HandlePreviewKey(Key key)
         {
-            switch (key)
-            {
-                case Key.H: _previewNavigator.Left(); return true;
-                case Key.L: _previewNavigator.Right(); return true;
-                case Key.J: _previewNavigator.Down(); return true;
-                case Key.K: _previewNavigator.Up(); return true;
-                case Key.W: _previewNavigator.NextWord(); return true;
-                case Key.B: _previewNavigator.PrevWord(); return true;
-                case Key.E: _previewNavigator.EndWord(); return true;
-                case Key.D0: _previewNavigator.LineStartHome(); return true;
-                case Key.D4: _previewNavigator.LineEnd(); return true; // $ (Shift+4)
-                case Key.G:
-                    if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
-                    {
-                        _previewNavigator.Bottom();
-                    }
-                    else
-                    {
-                        _previewNavigator.Top();
-                    }
-                    return true;
-                default:
-                    return false;
-            }
+            return TryDispatch.Handle(key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0, _previewNavigator, out _);
         }
 
         private void ApplyPreviewCaret()
@@ -648,7 +630,7 @@ namespace Telescope
 
         private void FocusTargetUi()
         {
-            if (_focusTarget == FocusTarget.Preview)
+            if (_focusTargetModel.Current == FocusTarget.Preview)
             {
                 _previewBox.Focus();
                 ApplyPreviewCaret();
@@ -674,6 +656,8 @@ namespace Telescope
                     return (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? OverlayKey.ShiftG : OverlayKey.G;
                 case Key.I: return OverlayKey.I;
                 case Key.A: return OverlayKey.A;
+                case Key.H when (Keyboard.Modifiers & ModifierKeys.Control) != 0: return OverlayKey.CtrlH;
+                case Key.L when (Keyboard.Modifiers & ModifierKeys.Control) != 0: return OverlayKey.CtrlL;
                 default: return OverlayKey.Other;
             }
         }
@@ -743,7 +727,7 @@ namespace Telescope
                 }
                 catch (Exception ex)
                 {
-                    NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}OnSelected failed: {ex.Message}");
+                    TelescopeLog.Log($"OnSelected failed: {ex.Message}");
                 }
             }
         }

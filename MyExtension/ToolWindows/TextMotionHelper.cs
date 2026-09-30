@@ -36,7 +36,7 @@ namespace MyExtension
     internal static class TextMotionHelper
     {
         /// <summary>White block caret brush for WPF TextBoxes in normal mode (visible on dark themes).</summary>
-        public static readonly DrawingBrush BlockCaretBrush = CreateBlockBrush();
+        public static readonly DrawingBrush BlockCaretBrush = BlockCaretStyle.CreateBlockBrush();
 
         /// <summary>The WPF TextBox currently holding focus (walking the visual/logical tree), or null.
         /// Wrapped so it degrades to "no text box" on non-STA threads (hermetic unit tests run on
@@ -296,15 +296,6 @@ namespace MyExtension
             {
                 return null;
             }
-        }
-
-        private static DrawingBrush CreateBlockBrush()
-        {
-            var rect = new System.Windows.Rect(0, 0, 8, 16);
-            var drawing = new DrawingBrush(new GeometryDrawing(
-                Brushes.White, null, new RectangleGeometry(rect)));
-            drawing.Freeze();
-            return drawing;
         }
     }
 }

@@ -55,7 +55,7 @@ namespace CardinalNavigation
                 {
                     continue;
                 }
-                int adjacency = c.Adjacency(active, direction.Axis());
+                int adjacency = c.Adjacency(active, direction.PerpendicularAxis());
                 if (bestIndex == null || adjacency >= bestAdjacency)
                 {
                     bestIndex = i;

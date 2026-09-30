@@ -15,8 +15,8 @@ namespace Telescope
     /// </list>
     ///
     /// <para/>
-    /// <b>File per run:</b> call <see cref="Clear"/> at the start of each run (package init / overlay
-    /// open) so the file reflects only the current session — the solo harness
+    /// <b>File per run:</b> call <see cref="Clear"/> once per process (package init only) so the
+    /// file reflects only the current session — the solo harness
     /// (<c>tools/iterate-telescope.ps1</c>) clears it and greps it for assertions.
     ///
     /// <para/>
@@ -25,7 +25,9 @@ namespace Telescope
     /// </summary>
     public static class NeoVisualLog
     {
-        private static Guid PaneGuid = new Guid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
+        private static Guid PaneGuid = new Guid("0d4f65d8-2971-4c24-8e1d-6bafc905c97e");
+        private static readonly object PaneSync = new object();
+        private static readonly PaneFailureTracker _paneFailureTracker = new PaneFailureTracker();
         private static IVsOutputWindowPane? _pane;
         private static bool _paneInitTried;
 
@@ -46,8 +48,9 @@ namespace Telescope
         /// <summary>
         /// Points both per-run log files at <c>&lt;dir&gt;\&lt;runIndex&gt;-neovisual-&lt;main|exp&gt;.log</c>.
         /// The run index is the leading filename component so sorting by name groups the paired
-        /// main (debug output) and exp (NeoVisual log) files of each run together; the suffix
-        /// distinguishes the two streams. Never throws.
+        /// main (debug output) and exp (NeoVisual log) files of each run together. The suffix is
+        /// hardcoded here (NOT command-line-detected): <c>-exp.log</c> is the structured NeoVisual
+        /// log the harness asserts on, <c>-main.log</c> is the raw debug-output stream. Never throws.
         /// </summary>
         public static void ConfigureLogPath(string dir, string runIndex)
         {
@@ -68,15 +71,6 @@ namespace Telescope
 
         /// <summary>Truncates the log file (start of a run). Never throws.</summary>
         public static void Clear() => LogFileWriter.Clear();
-
-        /// <summary>
-        /// Writes a diagnostic line through the full facade pipeline (structured log file, debug
-        /// output, and the NeoVisual pane). A documented alias for <see cref="Log"/> — the Log body
-        /// already routes through <see cref="Debug.WriteLine"/> internally, so this must NOT call
-        /// <c>Debug.WriteLine</c> itself (that would double-write every message to the debug-output
-        /// file). The text of each line is byte-identical to the old <c>Debug.WriteLine</c> call.
-        /// </summary>
-        public static void Debug(string message) => Log(message);
 
         /// <summary>Flushes and closes the log writers (package shutdown). Never throws.</summary>
         public static void Close() => LogFileWriter.Close();
@@ -115,27 +109,43 @@ namespace Telescope
             try
             {
                 EnsurePane();
-                _pane?.OutputStringThreadSafe(message + Environment.NewLine);
+                IVsOutputWindowPane? pane;
+                lock (PaneSync)
+                {
+                    pane = _pane;
+                }
+                pane?.OutputStringThreadSafe(message + Environment.NewLine);
             }
             catch
             {
-                // pane unavailable — file/debug output still captured
+                // Pane unavailable — the file/debug output is still captured. Emit a one-time
+                // fallback line to the FILE only (never Log, which would re-enter WriteToPane).
+                if (_paneFailureTracker.ShouldEmit())
+                {
+                    LogFileWriter.Write(_paneFailureTracker.FallbackMessage("pane unavailable"));
+                }
             }
         }
 
         private static void EnsurePane()
         {
-            if (_pane != null || _paneInitTried)
+            lock (PaneSync)
             {
-                return;
+                if (_pane != null || _paneInitTried)
+                {
+                    return;
+                }
+                _paneInitTried = true;
             }
-            _paneInitTried = true;
 
             // Creating the pane requires the UI thread; if we're not on it yet, skip the pane
             // for this write (the file still gets the line) and let a later UI-thread call retry.
             if (!ThreadHelper.CheckAccess())
             {
-                _paneInitTried = false;
+                lock (PaneSync)
+                {
+                    _paneInitTried = false;
+                }
                 return;
             }
 
@@ -146,12 +156,19 @@ namespace Telescope
                 {
                     return;
                 }
-                outputWindow.CreatePane(ref PaneGuid, "NeoVisual", 1, 1);
-                outputWindow.GetPane(ref PaneGuid, out _pane);
+                outputWindow.CreatePane(ref PaneGuid, "NeoVisual", fInitVisible: 1, fClearWithSolution: 1);
+                outputWindow.GetPane(ref PaneGuid, out IVsOutputWindowPane? pane);
+                lock (PaneSync)
+                {
+                    _pane = pane;
+                }
             }
             catch
             {
-                _pane = null;
+                lock (PaneSync)
+                {
+                    _pane = null;
+                }
             }
         }
     }

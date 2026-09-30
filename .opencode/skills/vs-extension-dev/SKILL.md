@@ -38,7 +38,7 @@ Data flow (key press → window move):
 GlobalKeyboardHook (Win32 LL hook)
   → InputHandler.HandleKey(key, ctrl, shift, alt)
       → _bindings[sequence] → Navigate(direction)
-          → WindowMatrix.NavigateInDirection(direction)
+          → WindowMatrix.NavigateInDirection(Direction)
               → reduce/filter candidate windows
               → activate best match
 ```
@@ -143,7 +143,7 @@ action*, add a case in `ResolveAction` and a line in `default-keybindings.json`.
 
 ## The navigation algorithm (WindowNavigationEngine)
 
-`WindowMatrix.NavigateInDirection` snapshots the active window's rect and the
+`WindowMatrix.NavigateInDirection(Direction)` snapshots the active window's rect and the
 candidate rects, then delegates to the pure `WindowNavigationEngine.SelectTarget`
 (active, candidates, direction, settings) — a single O(n) pass over a
 `List<Func<RectCoordinate, RectCoordinate, Direction, bool>>` pipeline:
@@ -155,7 +155,7 @@ candidate rects, then delegates to the pure `WindowNavigationEngine.SelectTarget
 
 `SelectTarget` first finds the minimum gap (`c.GapTo(active, direction)`) among
 candidates passing the whole pipeline, then picks the candidate with the largest
-adjacency (`c.Adjacency(active, direction.Axis())`) within the divide window
+adjacency (`c.Adjacency(active, direction.PerpendicularAxis())`) within the divide window
 `[minGap, minGap + divide]` (`settings.YDivide` for Up/Down, `settings.XDivide`
 for Left/Right), breaking ties by last-in-list order. It returns the winning
 candidate's index, or `null` when no candidate qualifies.

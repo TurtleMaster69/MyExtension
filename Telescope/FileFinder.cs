@@ -58,19 +58,10 @@ namespace Telescope
             }
 
             var hits = new List<FileHit>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            DTE dte = _dteFactory();
-            if (dte?.Solution == null)
+            foreach (string path in ProjectFiles.Enumerate(_dteFactory()))
             {
-                return hits;
+                hits.Add(new FileHit(path, 0));
             }
-
-            foreach (Project project in dte.Solution.Projects)
-            {
-                CollectProjectFiles(project, hits, seen);
-            }
-
             return hits;
         }
 
@@ -99,81 +90,5 @@ namespace Telescope
         }
 
         protected override string OpenErrorNoun => "file";
-
-        private static void CollectProjectFiles(Project project, List<FileHit> hits, HashSet<string> seen)
-        {
-            try
-            {
-                if (project == null)
-                {
-                    return;
-                }
-
-                // Solution folders (kind "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}") have a
-                // SubProject per contained project; recurse into them.
-                if (project.ProjectItems != null && project.Kind != null &&
-                    project.Kind.Equals("{66A26720-8FB5-11D2-AA7E-00C04F688DDE}", StringComparison.OrdinalIgnoreCase))
-                {
-                    foreach (ProjectItem item in project.ProjectItems)
-                    {
-                        if (item.SubProject != null)
-                        {
-                            CollectProjectFiles(item.SubProject, hits, seen);
-                        }
-                    }
-                    return;
-                }
-
-                if (project.ProjectItems == null)
-                {
-                    return;
-                }
-
-                CollectItems(project.ProjectItems, hits, seen);
-            }
-            catch
-            {
-                // A single unreadable project shouldn't abort the whole finder.
-            }
-        }
-
-        private static void CollectItems(ProjectItems items, List<FileHit> hits, HashSet<string> seen)
-        {
-            if (items == null)
-            {
-                return;
-            }
-
-            foreach (ProjectItem item in items)
-            {
-                try
-                {
-                    // Item.FullPath is a design-time property on ProjectItem (VS 2013+).
-                    string? path = null;
-                    try
-                    {
-                        path = item.Properties?.Item("FullPath")?.Value as string;
-                    }
-                    catch
-                    {
-                        // property may be unavailable for some item kinds
-                    }
-
-                    if (!string.IsNullOrEmpty(path) && File.Exists(path) && seen.Add(path!))
-                    {
-                        hits.Add(new FileHit(path!, 0));
-                    }
-
-                    if (item.ProjectItems != null && item.ProjectItems.Count > 0)
-                    {
-                        CollectItems(item.ProjectItems, hits, seen);
-                    }
-                }
-                catch
-                {
-                    // skip items that can't be read
-                }
-            }
-        }
     }
 }

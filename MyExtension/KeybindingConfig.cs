@@ -84,7 +84,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to load built-in keybindings: {ex.Message}");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Failed to load built-in keybindings: {ex.Message}");
             }
 
             // Optional user overrides, used only when the file exists.
@@ -98,10 +98,10 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
             }
 
-            Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(File.Exists(path) ? path : "none")})");
+            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(File.Exists(path) ? path : "none")})");
 
 return new KeybindingConfig(leaderKey, bindings);
         }
@@ -116,6 +116,17 @@ return new KeybindingConfig(leaderKey, bindings);
             var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var leaderKey = Keys.Space;
             ApplyJson(json, ref leaderKey, bindings);
+            return new KeybindingConfig(leaderKey, bindings);
+        }
+
+        /// <summary>Test-only seam: builds a config from ONLY the embedded default-keybindings.json
+        /// (no user %APPDATA% file). Internal so the offline NeoVisual test project can assert the
+        /// shipped defaults hermetically.</summary>
+        internal static KeybindingConfig LoadDefaults()
+        {
+            var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var leaderKey = Keys.Space;
+            ApplyJson(ReadEmbeddedDefault(), ref leaderKey, bindings);
             return new KeybindingConfig(leaderKey, bindings);
         }
 

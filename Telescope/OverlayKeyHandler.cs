@@ -20,6 +20,8 @@ namespace Telescope
         ShiftG, // 'G' (move to last)
         I,
         A,
+        CtrlH, // Ctrl+H: move focus to the results list
+        CtrlL, // Ctrl+L: move focus to the file preview
     }
 
     /// <summary>

@@ -19,6 +19,21 @@ $script:VkEscape = 0x1B
 $script:VkSpace = 0x20
 $script:VkEnter = 0x0D
 $script:VkTab = 0x09
+$script:VkF = 0x46
+$script:VkT = 0x54
+$script:VkD = 0x44
+$script:VkR = 0x52
+$script:VkG = 0x47
+$script:VkI = 0x49
+$script:VkJ = 0x4A
+$script:VkK = 0x4B
+$script:VkL = 0x4C
+$script:VkH = 0x48
+$script:VkO = 0x4F
+$script:VkA = 0x41
+$script:VkM = 0x4D
+$script:VkW = 0x57
+$script:VkE = 0x45
 
 # Single source for log prefixes (regex-escaped) — keep in sync with
 # Telescope/DiagnosticLog.cs; pinned by unit test Run_LogPrefixes_Pinned.
@@ -31,6 +46,13 @@ function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Info($msg) { Write-Host "    $msg" }
 function Write-Pass($msg) { Write-Host "    PASS: $msg" -ForegroundColor Green }
 function Write-Fail($msg) { Write-Host "    FAIL: $msg" -ForegroundColor Red }
+
+function Assert-Budget([System.Diagnostics.Stopwatch]$Stopwatch, [int]$TimeoutSec) {
+    # M37: checkpoint stopwatch — throws when the elapsed time exceeds the budget. Parameterized so
+    # it is directly unit-testable (iterate-telescope.ps1 keeps its local no-arg Assert-Budget,
+    # which shadows this one — harmless).
+    if ($Stopwatch.Elapsed.TotalSeconds -gt $TimeoutSec) { throw "Timed out after $TimeoutSec s" }
+}
 
 function Update-LogCache([string]$logPath) {
     # F39: read ONLY the appended tail (bytes after $script:LogReadBytes) into the cumulative
@@ -64,6 +86,14 @@ function Update-LogCache([string]$logPath) {
 function Reset-LogBaseline([string]$logPath) {
     Update-LogCache $logPath
     $script:LogBaseline = $script:LogCache.Count
+}
+
+function Get-LogCacheIndex([string]$logPath) {
+    # m26/m28: cache-side snapshot of the log's current line count. Callers pass this to
+    # Wait-NewLogLineAfter as a cache offset — a fresh `Get-Content` count can exceed the cache and
+    # make the wait time out, or lag it and match stale lines.
+    Update-LogCache $logPath
+    return $script:LogCache.Count
 }
 
 function Send-Tap([int]$vk) { [KbInject]::TapVk([uint16]$vk) }
@@ -131,33 +161,13 @@ function Close-Telescope([object]$vs, [string]$logPath) {
     throw 'Telescope overlay did not close'
 }
 
-function Wait-NewLogLine([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
-    # Searches lines appended after the per-scenario baseline (does NOT advance — an assert may
-    # re-confirm a line another helper already saw). Returns true when the pattern matches.
-    # F39: reads only the appended tail via Update-LogCache; the per-call cursor starts at the fixed
-    # baseline and advances on READ only (never on match), so the whole post-baseline window is
-    # searched cumulatively in O(n) total.
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $searchedTo = $script:LogBaseline
-    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
-        Update-LogCache $logPath
-        if ($script:LogCache.Count -gt $searchedTo) {
-            $tail = ($script:LogCache.GetRange($searchedTo, $script:LogCache.Count - $searchedTo)) -join "`n"
-            if ($tail -match $pattern) { return $true }
-            $searchedTo = $script:LogCache.Count
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    return $false
-}
-
-function Wait-NewLogLineAfter([string]$logPath, [int]$fromIndex, [string]$pattern, [int]$maxMs = 3000) {
-    # POSITIVE bounded wait over lines appended AFTER a caller-supplied absolute line index (a
-    # snapshot taken immediately BEFORE the key under test). Unlike Wait-NewLogLine it excludes
-    # earlier lines, so it can attribute a new diagnostic (e.g. an editor-focus vim-mode=/editor-view
-    # line) to the key just pressed. Positive wait, NOT an absence assertion.
-    # F39: reads only the appended tail via Update-LogCache; the per-call cursor starts at the
-    # caller-supplied absolute index (a cache offset) and advances on READ only, never on match.
+function Wait-LogLine([string]$logPath, [string]$pattern, [int]$fromIndex, [int]$pollMs = 300, [int]$maxMs = 20000) {
+    # The single core wait (M28): searches $script:LogCache from -FromIndex (a fixed baseline/cursor
+    # that is NEVER advanced on match — an assert may re-confirm a line another helper already saw),
+    # polls every -PollMs, bounded by -MaxMs. Returns true when the pattern matches.
+    # F39: reads only the appended tail via Update-LogCache; the per-call cursor starts at -FromIndex
+    # and advances on READ only (never on match), so the whole window is searched cumulatively in
+    # O(n) total.
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $searchedTo = $fromIndex
     while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
@@ -167,27 +177,28 @@ function Wait-NewLogLineAfter([string]$logPath, [int]$fromIndex, [string]$patter
             if ($tail -match $pattern) { return $true }
             $searchedTo = $script:LogCache.Count
         }
-        Start-Sleep -Milliseconds 200
+        Start-Sleep -Milliseconds $pollMs
     }
     return $false
 }
 
+function Wait-NewLogLine([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
+    # Searches lines appended after the per-scenario baseline (does NOT advance — an assert may
+    # re-confirm a line another helper already saw). Returns true when the pattern matches.
+    return Wait-LogLine -LogPath $logPath -Pattern $pattern -FromIndex $script:LogBaseline -PollMs 300 -MaxMs $maxMs
+}
+
+function Wait-NewLogLineAfter([string]$logPath, [int]$fromIndex, [string]$pattern, [int]$maxMs = 3000) {
+    # POSITIVE bounded wait over lines appended AFTER a caller-supplied absolute line index (a
+    # snapshot taken immediately BEFORE the key under test). Unlike Wait-NewLogLine it excludes
+    # earlier lines, so it can attribute a new diagnostic (e.g. an editor-focus vim-mode=/editor-view
+    # line) to the key just pressed. Positive wait, NOT an absence assertion.
+    return Wait-LogLine -LogPath $logPath -Pattern $pattern -FromIndex $fromIndex -PollMs 200 -MaxMs $maxMs
+}
+
 function Wait-LogContains([string]$logPath, [string]$pattern, [int]$maxMs = 20000) {
     # Whole-file matcher (bootstrap/startup waits); does not use the scenario cursor.
-    # F39: reads only the appended tail via Update-LogCache; the per-call cursor starts at 0 (whole
-    # file) and advances on READ only, never on match.
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $searchedTo = 0
-    while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
-        Update-LogCache $logPath
-        if ($script:LogCache.Count -gt $searchedTo) {
-            $tail = ($script:LogCache.GetRange($searchedTo, $script:LogCache.Count - $searchedTo)) -join "`n"
-            if ($tail -match $pattern) { return $true }
-            $searchedTo = $script:LogCache.Count
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    return $false
+    return Wait-LogLine -LogPath $logPath -Pattern $pattern -FromIndex 0 -PollMs 300 -MaxMs $maxMs
 }
 
 function Assert-NewLogLine([string]$logPath, [string]$pattern, [string]$what, [int]$maxMs = 20000) {

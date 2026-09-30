@@ -2,7 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using EnvDTE80;
 using TestHarness;
+using static TestHarness.TestScaffold;
 
 namespace Telescope.Tests
 {
@@ -107,37 +112,75 @@ namespace Telescope.Tests
 
         public static void Run_LogFileWriter_WritesAndClearsFile()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_tests_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string debugPath = Path.Combine(dir, "neovisual-main.log");
-            string originalLog = LogFileWriter.LogPath;
-            string originalDebug = LogFileWriter.DebugLogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                LogFileWriter.DebugLogPath = debugPath;
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                string debugPath = Path.Combine(dir.Path, "neovisual-main.log");
+                WithLogPath(logPath, () =>
+                {
+                    WithDebugLogPath(debugPath, () =>
+                    {
 
-                LogFileWriter.Write("structured line");
-                LogFileWriter.WriteDebug("debug line");
-                // A4 (X1/BP-1): the buffered write is not on disk until Flush().
-                LogFileWriter.Flush();
-                Assert.True(ReadAllTextShared(logPath).Contains("structured line"), "structured log should contain the NeoVisual line");
-                Assert.True(ReadAllTextShared(debugPath).Contains("debug line"), "debug log should contain the debug line");
+                        LogFileWriter.Write("structured line");
+                        LogFileWriter.WriteDebug("debug line");
+                        // A4 (X1/BP-1): the buffered write is not on disk until Flush().
+                        LogFileWriter.Flush();
+                        Assert.True(ReadAllTextShared(logPath).Contains("structured line"), "structured log should contain the NeoVisual line");
+                        Assert.True(ReadAllTextShared(debugPath).Contains("debug line"), "debug log should contain the debug line");
 
-                // The two files are separate: the structured line is NOT in the debug file and
-                // the debug line is NOT in the structured file.
-                Assert.False(ReadAllTextShared(debugPath).Contains("structured line"), "debug file should not contain structured lines");
-                Assert.False(ReadAllTextShared(logPath).Contains("debug line"), "structured file should not contain debug lines");
+                        // The two files are separate: the structured line is NOT in the debug file and
+                        // the debug line is NOT in the structured file.
+                        Assert.False(ReadAllTextShared(debugPath).Contains("structured line"), "debug file should not contain structured lines");
+                        Assert.False(ReadAllTextShared(logPath).Contains("debug line"), "structured file should not contain debug lines");
 
-                LogFileWriter.Clear();
-                Assert.Equal(0, new FileInfo(logPath).Length);
-                Assert.Equal(0, new FileInfo(debugPath).Length);
+                        LogFileWriter.Clear();
+                        Assert.Equal(0, new FileInfo(logPath).Length);
+                        Assert.Equal(0, new FileInfo(debugPath).Length);
+                    });
+                });
             }
-            finally
+        }
+
+        public static void Run_LogFileWriter_ClearPerPath()
+        {
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = originalLog;
-                LogFileWriter.DebugLogPath = originalDebug;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                // Unique Guid paths so Clear() never touches the real %APPDATA% files.
+                string pathA = Path.Combine(dir.Path, Guid.NewGuid().ToString("N") + ".log");
+                string debugA = Path.Combine(dir.Path, Guid.NewGuid().ToString("N") + ".log");
+                string pathB = Path.Combine(dir.Path, Guid.NewGuid().ToString("N") + ".log");
+                string debugB = Path.Combine(dir.Path, Guid.NewGuid().ToString("N") + ".log");
+
+                WithLogPath(pathA, () =>
+                {
+                    WithDebugLogPath(debugA, () =>
+                    {
+                        LogFileWriter.Write("lineA");
+                        LogFileWriter.WriteDebug("debugA");
+                        LogFileWriter.Flush();
+                        Assert.True(ReadAllTextShared(pathA).Contains("lineA"), "pathA holds the first write");
+
+                        // First Clear() truncates pathA (and debugA).
+                        LogFileWriter.Clear();
+                        Assert.Equal(0, new FileInfo(pathA).Length);
+                        Assert.Equal(0, new FileInfo(debugA).Length);
+
+                        // Repoint both paths to pathB and write again.
+                        LogFileWriter.LogPath = pathB;
+                        LogFileWriter.DebugLogPath = debugB;
+                        LogFileWriter.Write("lineB");
+                        LogFileWriter.WriteDebug("debugB");
+                        LogFileWriter.Flush();
+                        Assert.True(ReadAllTextShared(pathB).Contains("lineB"), "pathB holds the second write");
+
+                        // Second Clear() must truncate pathB too — per-path idempotency.
+                        // RED today: the once-per-process `_clearedThisProcess` flag makes this
+                        // Clear() a no-op, so pathB is NOT empty.
+                        LogFileWriter.Clear();
+                        Assert.Equal(0, new FileInfo(pathB).Length);
+                        Assert.Equal(0, new FileInfo(debugB).Length);
+                    });
+                });
             }
         }
 
@@ -146,147 +189,286 @@ namespace Telescope.Tests
         // RED: `LogFileWriter.Flush()` / `LogFileWriter.Close()` do not exist
         //      yet -> compile error; `NotFlushedYet` fails because the current
         //      code writes immediately via File.AppendAllText.
-        // NOTE: these tests must NOT call Clear() — the once-per-process
-        //       `_clearedThisProcess` flag is consumed by
-        //       Run_LogFileWriter_WritesAndClearsFile.
+        // NOTE: Clear() is per-path idempotent — each unique Guid temp path
+        //       truncates on its first Clear regardless of test order.
         // ================================================================
 
         public static void Run_LogFileWriter_Buffered_NotFlushedYet()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_buffered_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                LogFileWriter.Write("x");
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    LogFileWriter.Write("x");
 
-                // The buffered write must NOT be on disk until Flush() — the file either does not
-                // exist yet or is empty. (Current code writes immediately, so this fails RED.)
-                string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
-                Assert.False(content.Contains("x"), "a buffered write must not hit disk until Flush()");
-            }
-            finally
-            {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                    // The buffered write must NOT be on disk until Flush() — the file either does not
+                    // exist yet or is empty. (Current code writes immediately, so this fails RED.)
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.False(content.Contains("x"), "a buffered write must not hit disk until Flush()");
+                });
             }
         }
 
         public static void Run_LogFileWriter_Buffered_FlushWritesToDisk()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_buffered_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                LogFileWriter.Write("x");
-                LogFileWriter.Flush();
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    LogFileWriter.Write("x");
+                    LogFileWriter.Flush();
 
-                Assert.True(ReadAllTextShared(logPath).Contains("x"), "Flush() writes the buffered line to disk");
-            }
-            finally
-            {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                    Assert.True(ReadAllTextShared(logPath).Contains("x"), "Flush() writes the buffered line to disk");
+                });
             }
         }
 
         public static void Run_LogFileWriter_Buffered_ContentIdenticalToAppend()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_buffered_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                LogFileWriter.Write("first");
-                LogFileWriter.Write("second");
-                LogFileWriter.Write("third");
-                LogFileWriter.Flush();
-
-                // The buffered output must be byte-identical to the per-call File.AppendAllText
-                // format: each line is "HH:mm:ss.fff <message>" + Environment.NewLine, in order.
-                string[] lines = ReadAllTextShared(logPath)
-                    .Split(new[] { Environment.NewLine }, StringSplitOptions.None);
-                // File.ReadAllLines drops the trailing empty element left by the final newline.
-                if (lines.Length > 0 && lines[lines.Length - 1].Length == 0)
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
                 {
-                    Array.Resize(ref lines, lines.Length - 1);
-                }
-                Assert.Equal(3, lines.Length);
-                Assert.True(IsTimestampedLine(lines[0]) && lines[0].EndsWith(" first"), $"line 1 is a timestamped 'first', got '{lines[0]}'");
-                Assert.True(IsTimestampedLine(lines[1]) && lines[1].EndsWith(" second"), $"line 2 is a timestamped 'second', got '{lines[1]}'");
-                Assert.True(IsTimestampedLine(lines[2]) && lines[2].EndsWith(" third"), $"line 3 is a timestamped 'third', got '{lines[2]}'");
-            }
-            finally
-            {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                    LogFileWriter.Write("first");
+                    LogFileWriter.Write("second");
+                    LogFileWriter.Write("third");
+                    LogFileWriter.Flush();
+
+                    // The buffered output must be byte-identical to the per-call File.AppendAllText
+                    // format: each line is "HH:mm:ss.fff <message>" + Environment.NewLine, in order.
+                    string[] lines = ReadAllTextShared(logPath)
+                        .Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    // File.ReadAllLines drops the trailing empty element left by the final newline.
+                    if (lines.Length > 0 && lines[lines.Length - 1].Length == 0)
+                    {
+                        Array.Resize(ref lines, lines.Length - 1);
+                    }
+                    Assert.Equal(3, lines.Length);
+                    Assert.True(IsTimestampedLine(lines[0]) && lines[0].EndsWith(" first"), $"line 1 is a timestamped 'first', got '{lines[0]}'");
+                    Assert.True(IsTimestampedLine(lines[1]) && lines[1].EndsWith(" second"), $"line 2 is a timestamped 'second', got '{lines[1]}'");
+                    Assert.True(IsTimestampedLine(lines[2]) && lines[2].EndsWith(" third"), $"line 3 is a timestamped 'third', got '{lines[2]}'");
+                });
             }
         }
 
         public static void Run_LogFileWriter_Buffered_FlushOnClose()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_buffered_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                LogFileWriter.Write("x");
-                LogFileWriter.Close();
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    LogFileWriter.Write("x");
+                    LogFileWriter.Close();
 
-                Assert.True(File.ReadAllText(logPath).Contains("x"), "Close() flushes the buffered line to disk");
-            }
-            finally
-            {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                    Assert.True(File.ReadAllText(logPath).Contains("x"), "Close() flushes the buffered line to disk");
+                });
             }
         }
 
         public static void Run_LogFileWriter_Buffered_PathChangeReopens()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_buffered_" + Guid.NewGuid().ToString("N"));
-            string pathA = Path.Combine(dir, "a.log");
-            string pathB = Path.Combine(dir, "b.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = pathA;
-                LogFileWriter.Write("line1");
-                LogFileWriter.Flush();
+                string pathA = Path.Combine(dir.Path, "a.log");
+                string pathB = Path.Combine(dir.Path, "b.log");
+                WithLogPath(pathA, () =>
+                {
+                    LogFileWriter.LogPath = pathA;
+                    LogFileWriter.Write("line1");
+                    LogFileWriter.Flush();
 
-                // Repointing LogPath must close the writer for A and reopen it for B, so the two
-                // files never share lines.
-                LogFileWriter.LogPath = pathB;
-                LogFileWriter.Write("line2");
-                LogFileWriter.Flush();
+                    // Repointing LogPath must close the writer for A and reopen it for B, so the two
+                    // files never share lines.
+                    LogFileWriter.LogPath = pathB;
+                    LogFileWriter.Write("line2");
+                    LogFileWriter.Flush();
 
-                string a = ReadAllTextShared(pathA);
-                string b = ReadAllTextShared(pathB);
-                Assert.True(a.Contains("line1"), "path A holds the first line");
-                Assert.False(a.Contains("line2"), "path A must not receive the second line (writer reopened)");
-                Assert.True(b.Contains("line2"), "path B holds the second line");
-                Assert.False(b.Contains("line1"), "path B must not receive the first line (writer reopened)");
+                    string a = ReadAllTextShared(pathA);
+                    string b = ReadAllTextShared(pathB);
+                    Assert.True(a.Contains("line1"), "path A holds the first line");
+                    Assert.False(a.Contains("line2"), "path A must not receive the second line (writer reopened)");
+                    Assert.True(b.Contains("line2"), "path B holds the second line");
+                    Assert.False(b.Contains("line1"), "path B must not receive the first line (writer reopened)");
+                });
             }
-            finally
+        }
+
+        // ================================================================
+        // LogFileWriter flush timer (BP-2/M43) — the ~200ms flush timer must be
+        // ONE-SHOT: it fires after a write and then sleeps, instead of firing
+        // every 200ms forever (5 wakeups/sec for the whole VS session).
+        // RED: `LogFileWriter.FlushCount` does not exist yet -> compile error
+        //      (CS0117). If it did exist, `IdleDoesNotFire` would fail at
+        //      runtime because the current periodic timer keeps climbing.
+        // NOTE: these tests must NOT call Clear() — Clear() is per-path idempotent
+        //       (each unique Guid temp path truncates on its first Clear), so a Clear()
+        //       here would consume the truncation for a path another test relies on.
+        // ================================================================
+
+        public static void Run_LogFileWriter_FlushTimer_OneShotFires()
+        {
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    int before = LogFileWriter.FlushCount;
+                    LogFileWriter.Write("x");
+
+                    // The one-shot timer must fire ~200ms after the write and flush once.
+                    // Poll up to ~1s (the first flush can be slow under load).
+                    int count = LogFileWriter.FlushCount;
+                    for (int i = 0; i < 20 && count <= before; i++)
+                    {
+                        System.Threading.Thread.Sleep(50);
+                        count = LogFileWriter.FlushCount;
+                    }
+                    Assert.True(count >= before + 1,
+                        $"expected FlushCount to advance after a write, before={before}, after={count}");
+                });
+            }
+        }
+
+        public static void Run_LogFileWriter_FlushTimer_IdleDoesNotFire()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    int before = LogFileWriter.FlushCount;
+                    LogFileWriter.Write("x");
+
+                    // Wait for the one-shot flush to land after the write.
+                    int count = LogFileWriter.FlushCount;
+                    for (int i = 0; i < 20 && count <= before; i++)
+                    {
+                        System.Threading.Thread.Sleep(50);
+                        count = LogFileWriter.FlushCount;
+                    }
+                    int afterFirstFlush = count;
+
+                    // With no further writes, the one-shot timer must NOT re-fire:
+                    // FlushCount stays put. (RED today: the periodic timer keeps
+                    // climbing during this idle wait.)
+                    System.Threading.Thread.Sleep(500);
+                    Assert.Equal(afterFirstFlush, LogFileWriter.FlushCount);
+                });
+            }
+        }
+
+        // ================================================================
+        // LogFileWriter write-failure count (BP-3/M35) — Write/WriteDebug
+        // swallow every exception, so the pipeline is undiagnosable when it
+        // fails. The fix exposes a `WriteFailureCount` seam.
+        // RED: `LogFileWriter.WriteFailureCount` does not exist yet -> compile
+        //      error (CS0117).
+        // NOTE: these tests must NOT call Clear() (per-path idempotent — a Clear() would
+        //       consume the truncation for a path another test relies on).
+        // ================================================================
+
+        public static void Run_LogFileWriter_WriteFailureCountIncrements()
+        {
+            using (var dir = new TempDir())
+            {
+                string blockerFile = Path.Combine(dir.Path, "blocker");
+                File.WriteAllText(blockerFile, "i am a file, not a directory");
+                // LogPath's parent is a FILE -> Directory.CreateDirectory / new StreamWriter throws.
+                string logPath = Path.Combine(blockerFile, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    int before = LogFileWriter.WriteFailureCount;
+
+                    // Must not throw (never-throw contract) and must increment the count.
+                    LogFileWriter.Write("x");
+
+                    Assert.Equal(before + 1, LogFileWriter.WriteFailureCount);
+                });
+            }
+        }
+
+        public static void Run_LogFileWriter_WriteDebugFailureCountIncrements()
+        {
+            using (var dir = new TempDir())
+            {
+                string blockerFile = Path.Combine(dir.Path, "blocker");
+                File.WriteAllText(blockerFile, "i am a file, not a directory");
+                // DebugLogPath's parent is a FILE -> Directory.CreateDirectory / new StreamWriter throws.
+                string debugPath = Path.Combine(blockerFile, "neovisual-main.log");
+                WithDebugLogPath(debugPath, () =>
+                {
+                    int before = LogFileWriter.WriteFailureCount;
+
+                    // Must not throw (never-throw contract) and must increment the count.
+                    LogFileWriter.WriteDebug("x");
+
+                    Assert.Equal(before + 1, LogFileWriter.WriteFailureCount);
+                });
+            }
+        }
+
+        // ================================================================
+        // PaneFailureTracker (BP-4/M18) — a pure one-time fallback for the
+        // NeoVisual Output pane: on the FIRST pane failure a single
+        // "[NeoVisual] output pane unavailable: <reason>" line is written to
+        // the FILE (never via NeoVisualLog.Log, which would re-enter
+        // WriteToPane -> recursion).
+        // RED: `PaneFailureTracker` does not exist yet -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_PaneFailureTracker_FallbackMessageFormat()
+        {
+            var tracker = new PaneFailureTracker();
+            Assert.Equal("[NeoVisual] output pane unavailable: pane create failed",
+                tracker.FallbackMessage("pane create failed"));
+        }
+
+        public static void Run_PaneFailureTracker_OneTimeFallback()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var tracker = new PaneFailureTracker();
+
+                    // Two pane failures: the fallback line is emitted only on the FIRST.
+                    if (tracker.ShouldEmit())
+                    {
+                        LogFileWriter.Write(tracker.FallbackMessage("pane create failed"));
+                    }
+                    if (tracker.ShouldEmit())
+                    {
+                        LogFileWriter.Write(tracker.FallbackMessage("pane create failed"));
+                    }
+                    LogFileWriter.Flush();
+
+                    string[] lines = ReadAllTextShared(logPath)
+                        .Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    if (lines.Length > 0 && lines[lines.Length - 1].Length == 0)
+                    {
+                        Array.Resize(ref lines, lines.Length - 1);
+                    }
+                    var fallbackLines = lines.Where(l => l.Contains("[NeoVisual] output pane unavailable:")).ToList();
+                    Assert.Equal(1, fallbackLines.Count);
+                    Assert.True(fallbackLines[0].Contains("[NeoVisual] output pane unavailable: pane create failed"),
+                        $"expected exactly one fallback line, got: {string.Join(" | ", fallbackLines)}");
+                });
             }
         }
 
         public static void Run_FzfFilter_FilterMatchesPrefix()
         {
-            // Guards: skip if fzf is not on PATH (so the suite passes without it).
+            // Fail-loud: this test genuinely requires fzf on PATH. A silent skip would let the
+            // suite pass without ever exercising the real filter (M20b).
             var fzf = new FzfFilter();
             if (!fzf.IsAvailable())
             {
-                Console.WriteLine("      (skipped: fzf not on PATH)");
-                return;
+                throw new Exception("fzf is not on PATH — this test requires fzf (fail-loud, not a silent skip)");
             }
 
             var matched = fzf.FilterAsync(
@@ -295,6 +477,83 @@ namespace Telescope.Tests
                 new System.Threading.CancellationToken()).GetAwaiter().GetResult();
 
             Assert.True(matched.Any(m => m.Contains("alpha")), "expected 'alpha' to match 'alp'");
+        }
+
+        // ================================================================
+        // FzfFilter injected-path seam (BP-3/M6a, BP-4/M6b, BP-5/M6c)
+        // RED: FilterTimeoutMs does not exist -> compile error (CS1061);
+        //      QuoteArg is private -> compile error (CS0122).
+        // ================================================================
+
+        public static void Run_FzfFilter_NonexistentPathFallsBackAndLogs()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+
+                    var fzf = new FzfFilter(Path.Combine(dir.Path, "missing-fzf.exe"));
+                    var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                    LogFileWriter.Flush();
+
+                    // A missing fzf must fall back to the full list AND log the failure (M6: today the
+                    // catch is silent — no [Telescope] line is emitted).
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha"), "fallback returns the full candidate list");
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.True(content.Contains("[Telescope] fzf filter failed:"),
+                        "the catch path must log '[Telescope] fzf filter failed:'");
+                });
+            }
+        }
+
+        public static void Run_FzfFilter_TimeoutKillsAndFallsBack()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    string cmdPath = Path.Combine(dir.Path, "hang.cmd");
+                    File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
+
+                    var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 200 };
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                    sw.Stop();
+                    LogFileWriter.Flush();
+
+                    // A hung fzf must be killed and the filter must fall back within a bounded wall
+                    // time (M6: today FilterAsync waits forever on a hung subprocess).
+                    Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"filter returned within 5s (took {sw.Elapsed})");
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha"), "timeout falls back to the full candidate list");
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.True(content.Contains("[Telescope] fzf filter failed: timeout"),
+                        "the timeout path must log '[Telescope] fzf filter failed: timeout'");
+                });
+            }
+        }
+
+        public static void Run_FzfFilter_QuoteArg_TrailingBackslash()
+        {
+            // M6b: a trailing backslash must be doubled before the closing quote so it does not
+            // escape the quote (today QuoteArg("foo\") returns "\"foo\"" — the backslash escapes
+            // the closing quote and corrupts the fzf argument).
+            Assert.Equal("\"foo\\\\\"", FzfFilter.QuoteArg("foo\\"));
+            Assert.Equal("\"foo\"", FzfFilter.QuoteArg("foo"));
+            Assert.Equal("\"a\\\"b\"", FzfFilter.QuoteArg("a\"b"));
+            Assert.Equal("\"\"", FzfFilter.QuoteArg(""));
+        }
+
+        public static void Run_FzfFilter_IsAvailableFalseForMissingPath()
+        {
+            using (var dir = new TempDir())
+            {
+                var fzf = new FzfFilter(Path.Combine(dir.Path, "missing-fzf.exe"));
+                Assert.False(fzf.IsAvailable(), "a missing fzf path must report unavailable");
+            }
         }
 
         // ================================================================
@@ -531,7 +790,7 @@ namespace Telescope.Tests
             n.MoveTo(4); // start of "def"
             n.LineEnd();
             Assert.Equal(7, n.Caret);
-            n.LineStartHome();
+            n.LineStart();
             Assert.Equal(4, n.Caret);
         }
 
@@ -579,6 +838,38 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // Preview/motion correctness (Phase 3 — M9/M10/M11).
+        // RED: M10's Up() calls LastIndexOf('\n', lineStart - 2) with
+        // lineStart - 2 == -1 on a leading blank line -> ArgumentOutOfRangeException.
+        // ================================================================
+
+        public static void Run_Preview_UpFromSecondLineWithLeadingBlankLine()
+        {
+            var n = new TextMotionNavigator();
+            n.SetText("\nabc");
+            n.MoveToLine(2);
+            n.Up();
+            Assert.Equal(2, n.LineNumber);
+        }
+
+        // ================================================================
+        // M11a — pure index -> (line, offset) mapping on the shared LineIndex
+        // (Phase 2 M7). A blank line must map to ITS OWN start (offset 0),
+        // not null and not the next line. LineIndex already exists from
+        // Phase 2, so this test may PASS before the fix — the real M11 gate
+        // is the WPF CaretToPointer blank-line fallback (BP-4, build-verified).
+        // ================================================================
+
+        public static void Run_Preview_CaretOnBlankLine()
+        {
+            var idx = new LineIndex("abc\n\nxyz");
+            Assert.Equal(2, idx.LineOf(4));
+            Assert.Equal(0, 4 - idx.LineStart(2));
+            Assert.Equal(3, idx.LineOf(5));
+            Assert.Equal(0, 5 - idx.LineStart(3));
+        }
+
+        // ================================================================
         // Prompt motions — normal-mode h/l/w/b/e/0/$ over the search box text
         // (mirrors the text-input tool-window motions)
         // ================================================================
@@ -616,7 +907,7 @@ namespace Telescope.Tests
             var n = new TextMotionNavigator();
             n.SetText("search text");
             n.MoveTo(4);
-            n.LineStartHome();
+            n.LineStart();
             Assert.Equal(0, n.Caret);
             n.LineEnd();
             Assert.Equal(11, n.Caret);
@@ -629,6 +920,207 @@ namespace Telescope.Tests
             n.MoveTo(0);
             n.EndWord();
             Assert.Equal(3, n.Caret);
+        }
+
+        // ================================================================
+        // TryDispatch — shared WPF-Key vim-motion dispatch (M24)
+        // RED: `TryDispatch` does not exist yet -> compile error (CS0246)
+        // The union h/l/j/k/w/b/e/0/$/gg/G + a/A/I. The $ drift fix: bare D4
+        // (no shift) is NOT a motion and must NOT LineEnd.
+        // ================================================================
+
+        public static void Run_TryDispatch_DollarWithoutShiftNotHandled()
+        {
+            // The $ drift fix: in the preview surface a bare D4 currently LineEnds; the shared
+            // dispatch must require Shift for $ (D4), so a bare D4 returns false and does nothing.
+            var n = new TextMotionNavigator();
+            n.SetText("abc\ndef");
+            n.MoveTo(0);
+            bool handled = TryDispatch.Handle(Key.D4, false, n, out _);
+            Assert.False(handled, "bare $ (D4 without shift) is not a motion");
+            Assert.Equal(0, n.Caret); // must NOT LineEnd
+        }
+
+        public static void Run_TryDispatch_DollarWithShiftLineEnds()
+        {
+            var n = new TextMotionNavigator();
+            n.SetText("abc\ndef");
+            n.MoveTo(0);
+            bool handled = TryDispatch.Handle(Key.D4, true, n, out _);
+            Assert.True(handled, "$ (D4 with shift) is handled");
+            Assert.Equal(3, n.Caret); // end of "abc"
+        }
+
+        public static void Run_TryDispatch_MotionsMapToNavigator()
+        {
+            // H -> Left
+            var n = new TextMotionNavigator();
+            n.SetText("hello");
+            n.MoveTo(2);
+            Assert.True(TryDispatch.Handle(Key.H, false, n, out _));
+            Assert.Equal(1, n.Caret);
+
+            // L -> Right
+            n.MoveTo(2);
+            Assert.True(TryDispatch.Handle(Key.L, false, n, out _));
+            Assert.Equal(3, n.Caret);
+
+            // W -> NextWord
+            n.SetText("one two");
+            n.MoveTo(0);
+            Assert.True(TryDispatch.Handle(Key.W, false, n, out _));
+            Assert.Equal(4, n.Caret);
+
+            // B -> PrevWord
+            n.MoveTo(4);
+            Assert.True(TryDispatch.Handle(Key.B, false, n, out _));
+            Assert.Equal(0, n.Caret);
+
+            // E -> EndWord
+            n.MoveTo(0);
+            Assert.True(TryDispatch.Handle(Key.E, false, n, out _));
+            Assert.Equal(3, n.Caret);
+
+            // J -> Down
+            n.SetText("a\nb");
+            n.MoveTo(0);
+            Assert.True(TryDispatch.Handle(Key.J, false, n, out _));
+            Assert.Equal(2, n.Caret);
+
+            // K -> Up
+            n.MoveTo(2);
+            Assert.True(TryDispatch.Handle(Key.K, false, n, out _));
+            Assert.Equal(0, n.Caret);
+
+            // D0 -> LineStartHome
+            n.SetText("abc\ndef");
+            n.MoveTo(5);
+            Assert.True(TryDispatch.Handle(Key.D0, false, n, out _));
+            Assert.Equal(4, n.Caret);
+
+            // G (bare) -> Top
+            n.MoveTo(5);
+            Assert.True(TryDispatch.Handle(Key.G, false, n, out _));
+            Assert.Equal(0, n.Caret);
+
+            // G (shift) -> Bottom
+            n.MoveTo(0);
+            Assert.True(TryDispatch.Handle(Key.G, true, n, out _));
+            Assert.Equal(7, n.Caret);
+        }
+
+        public static void Run_TryDispatch_InsertPlacements()
+        {
+            // A (bare) -> InsertAfter, placement Current.
+            var n = new TextMotionNavigator();
+            n.SetText("hello");
+            n.MoveTo(2);
+            CaretPlacement? placement;
+            Assert.True(TryDispatch.Handle(Key.A, false, n, out placement));
+            Assert.Equal(CaretPlacement.Current, placement);
+            Assert.Equal(3, n.Caret);
+
+            // A (shift) -> InsertEnd, placement End.
+            n.MoveTo(2);
+            Assert.True(TryDispatch.Handle(Key.A, true, n, out placement));
+            Assert.Equal(CaretPlacement.End, placement);
+            Assert.Equal(5, n.Caret);
+
+            // I (shift) -> InsertStart, placement Start.
+            n.MoveTo(2);
+            Assert.True(TryDispatch.Handle(Key.I, true, n, out placement));
+            Assert.Equal(CaretPlacement.Start, placement);
+            Assert.Equal(0, n.Caret);
+
+            // I (bare) -> not handled (generic insert lives in the overlay state machine).
+            n.MoveTo(2);
+            Assert.False(TryDispatch.Handle(Key.I, false, n, out placement));
+            Assert.Equal(2, n.Caret);
+        }
+
+        // ================================================================
+        // BlockCaretStyle — shared block-caret brush/geometry (M25)
+        // RED: `BlockCaretStyle` does not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_BlockCaretStyle_BrushFrozenWhite()
+        {
+            var brush = BlockCaretStyle.CreateBlockBrush();
+            Assert.True(brush.IsFrozen, "the shared block-caret brush is frozen");
+            Assert.Equal(Colors.White, BlockCaretStyle.WhiteFill);
+            Assert.Equal(Colors.Black, BlockCaretStyle.GlyphColor);
+            Assert.Equal(8.0, BlockCaretStyle.BlockRect.Width);
+            Assert.Equal(16.0, BlockCaretStyle.BlockRect.Height);
+        }
+
+        public static void Run_BlockCaretStyle_SingleSharedInstance()
+        {
+            // Every call must return the SAME frozen instance (single shared static brush).
+            var first = BlockCaretStyle.CreateBlockBrush();
+            var second = BlockCaretStyle.CreateBlockBrush();
+            Assert.True(ReferenceEquals(first, second), "CreateBlockBrush returns the SAME shared instance");
+        }
+
+        // ================================================================
+        // LineIndex (BP-6/M7a) — pure index -> (line, offset) mapping shared
+        // with M11 (Phase 3). LineOf MUST equal TextMotionNavigator.LineNumber
+        // semantics (count of '\n' in text[0..index) + 1).
+        // RED: LineIndex does not exist -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_LineIndex_LineOfMatchesNavigator()
+        {
+            string[] inputs =
+            {
+                "alpha\nbeta\ngamma",
+                "\nleading newline",
+                "trailing newline\n",
+                "a\n\nb",
+                "one\r\ntwo\r\nthree",
+                "single line",
+                "\n\n\n",
+            };
+            foreach (string text in inputs)
+            {
+                var index = new LineIndex(text);
+                var nav = new TextMotionNavigator();
+                nav.SetText(text);
+                for (int i = 0; i <= text.Length; i++)
+                {
+                    nav.MoveTo(i);
+                    Assert.Equal(nav.LineNumber, index.LineOf(i));
+                }
+            }
+        }
+
+        public static void Run_LineIndex_LineStartOffsets()
+        {
+            var index = new LineIndex("alpha\nbeta\ngamma");
+            Assert.Equal(0, index.LineStart(1));
+            Assert.Equal(6, index.LineStart(2)); // after the first '\n'
+            Assert.Equal(11, index.LineStart(3)); // after the second '\n'
+        }
+
+        public static void Run_LineIndex_EdgeCases()
+        {
+            // Empty text: a single line; LineOf(0) == 1.
+            var empty = new LineIndex("");
+            Assert.Equal(1, empty.LineOf(0));
+            Assert.Equal(1, empty.LineCount);
+
+            // Text ending in '\n': the trailing newline opens a final (empty) line.
+            var trailing = new LineIndex("a\n");
+            Assert.Equal(1, trailing.LineOf(0));
+            Assert.Equal(1, trailing.LineOf(1)); // the '\n' itself is still line 1
+            Assert.Equal(2, trailing.LineOf(2)); // past the '\n' -> line 2
+            Assert.Equal(2, trailing.LineCount);
+
+            // \r\n endings: only '\n' advances the line (the '\r' does not).
+            var crlf = new LineIndex("a\r\nb");
+            Assert.Equal(1, crlf.LineOf(0));
+            Assert.Equal(1, crlf.LineOf(2)); // the '\r' is still line 1
+            Assert.Equal(2, crlf.LineOf(3)); // the '\n' starts line 2
+            Assert.Equal(2, crlf.LineCount);
         }
 
         // ================================================================
@@ -712,6 +1204,61 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // HitOpener — shared open-at-line helper (M23)
+        // RED: `HitOpener` does not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_HitOpener_ExistingFileInvokesDelegate()
+        {
+            using (var dir = new TempDir())
+            {
+                string path = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(path, "// a");
+                string? openedPath = null;
+                int openedLine = -1;
+                HitOpener.OpenAtLine(new ReferenceHit(path, 7, 1, false, "X", "X = 1;"),
+                    (p, l) => { openedPath = p; openedLine = l; });
+                Assert.Equal(path, openedPath);
+                Assert.Equal(7, openedLine);
+            }
+        }
+
+        public static void Run_HitOpener_MissingFileDoesNotInvoke()
+        {
+            using (var dir = new TempDir())
+            {
+                string missing = Path.Combine(dir.Path, "Ghost.cs");
+                int invoked = 0;
+                HitOpener.OpenAtLine(new ReferenceHit(missing, 3, 1, false, "X", "X = 1;"),
+                    (p, l) => invoked++);
+                Assert.Equal(0, invoked);
+            }
+        }
+
+        public static void Run_HitOpener_ReferenceAndImplementationFlowThrough()
+        {
+            using (var dir = new TempDir())
+            {
+                string refPath = Path.Combine(dir.Path, "Ref.cs");
+                string implPath = Path.Combine(dir.Path, "Impl.cs");
+                File.WriteAllText(refPath, "// r");
+                File.WriteAllText(implPath, "// i");
+
+                var opened = new List<(string, int)>();
+                HitOpener.OpenAtLine(new ReferenceHit(refPath, 5, 1, true, "X", "X = 1;"),
+                    (p, l) => opened.Add((p, l)));
+                HitOpener.OpenAtLine(new ImplementationHit(implPath, 9, "X", "Method"),
+                    (p, l) => opened.Add((p, l)));
+
+                Assert.Equal(2, opened.Count);
+                Assert.Equal(refPath, opened[0].Item1);
+                Assert.Equal(5, opened[0].Item2);
+                Assert.Equal(implPath, opened[1].Item1);
+                Assert.Equal(9, opened[1].Item2);
+            }
+        }
+
+        // ================================================================
         // FinderBase<THit> (BP-2/L2) — the shared finder skeleton
         // RED: FinderBase<THit> does not exist yet -> compile error
         // ================================================================
@@ -769,14 +1316,79 @@ namespace Telescope.Tests
             Assert.Equal(0, opened);
         }
 
+        // ================================================================
+        // FinderBase error logging (BP-5/m13/m20) — finder errors must be
+        // routed through TelescopeLog.Log (which adds the [Telescope] prefix)
+        // and each failure must emit EXACTLY ONE line.
+        // RED: `Run_FinderBase_OpenErrorSingleLog` fails at runtime — today
+        //      OnSelected double-logs (TelescopeLog.Log + NeoVisualLog.Debug),
+        //      so the file holds 2 [Telescope] lines.
+        //      `Run_FinderBase_GatherErrorPrefixed` pins the single-prefix
+        //      contract (a naive fix that wraps the already-prefixed
+        //      GatherErrorLiteral in TelescopeLog.Log would double-prefix).
+        // ================================================================
+
+        public static void Run_FinderBase_OpenErrorSingleLog()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var hit = new TestHit(@"C:\p\A.cs", 1);
+                    var finder = new TestFinder(() => new[] { hit }, _ => throw new InvalidOperationException("open boom"));
+
+                    finder.OnSelected(new FinderEntry("A.cs", hit));
+                    LogFileWriter.Flush();
+
+                    string[] lines = ReadAllTextShared(logPath)
+                        .Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    if (lines.Length > 0 && lines[lines.Length - 1].Length == 0)
+                    {
+                        Array.Resize(ref lines, lines.Length - 1);
+                    }
+                    var telescopeLines = lines.Where(l => l.Contains("[Telescope] ")).ToList();
+                    Assert.Equal(1, telescopeLines.Count);
+                    Assert.True(telescopeLines[0].Contains("[Telescope] open item failed: open boom"),
+                        $"expected exactly one '[Telescope] open item failed: open boom' line, got: {string.Join(" | ", telescopeLines)}");
+                });
+            }
+        }
+
+        public static void Run_FinderBase_GatherErrorPrefixed()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var finder = new TestFinder(() => throw new InvalidOperationException("gather boom"));
+
+                    finder.GetCandidates();
+                    LogFileWriter.Flush();
+
+                    string[] lines = ReadAllTextShared(logPath)
+                        .Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    if (lines.Length > 0 && lines[lines.Length - 1].Length == 0)
+                    {
+                        Array.Resize(ref lines, lines.Length - 1);
+                    }
+                    var telescopeLines = lines.Where(l => l.Contains("[Telescope] ")).ToList();
+                    Assert.Equal(1, telescopeLines.Count);
+                    // File lines are timestamped ("HH:mm:ss.fff <message>"), so the prefix check is
+                    // a Contains (matching Run_TelescopeLog_Prefix), not a StartsWith.
+                    Assert.True(telescopeLines[0].Contains("[Telescope] TestFinder failed to enumerate: gather boom"),
+                        $"expected '[Telescope] TestFinder failed to enumerate: gather boom', got: {string.Join(" | ", telescopeLines)}");
+                });
+            }
+        }
+
         public static void Run_FileFinder_EnumeratesCandidates()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_files_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "Alpha.cs");
-                string b = Path.Combine(dir, "Beta.cs");
+                string a = Path.Combine(dir.Path, "Alpha.cs");
+                string b = Path.Combine(dir.Path, "Beta.cs");
                 File.WriteAllText(a, "// a");
                 File.WriteAllText(b, "// b");
 
@@ -788,19 +1400,13 @@ namespace Telescope.Tests
                 Assert.Equal(a, (entries[0].Payload as FileHit)?.FilePath);
                 Assert.Equal("Beta.cs", entries[1].Display);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_FileFinder_OpenSelectedCallsOpener()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_files_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "Alpha.cs");
+                string a = Path.Combine(dir.Path, "Alpha.cs");
                 File.WriteAllText(a, "// a");
                 string? opened = null;
                 var finder = new FileFinder(() => new[] { a }, p => opened = p);
@@ -808,29 +1414,146 @@ namespace Telescope.Tests
                 finder.OnSelected(new FinderEntry("Alpha.cs", new FileHit(a, 0)));
                 Assert.Equal(a, opened);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_FileFinder_OpenMissingFileIsNoOp()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_files_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string missing = Path.Combine(dir, "Ghost.cs");
+                string missing = Path.Combine(dir.Path, "Ghost.cs");
                 int opened = 0;
                 var finder = new FileFinder(() => new[] { missing }, _ => opened++);
 
                 finder.OnSelected(new FinderEntry("Ghost.cs", new FileHit(missing, 0)));
                 Assert.Equal(0, opened);
             }
-            finally
+        }
+
+        // ================================================================
+        // HierarchyWalker — pure DTE-tree walker (M22)
+        // RED: `HierarchyWalker` / `IHierarchyNode` do not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        private sealed class FakeNode : IHierarchyNode
+        {
+            public FakeNode(string? path, params IHierarchyNode[] children)
             {
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                Path = path;
+                Children = children;
             }
+
+            public IEnumerable<IHierarchyNode> Children { get; }
+            public string? Path { get; }
+        }
+
+        public static void Run_HierarchyWalker_SolutionFolderRecursion()
+        {
+            // A solution folder (no path) contains a sub-project whose items are enumerated.
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                string b = Path.Combine(dir.Path, "B.cs");
+                File.WriteAllText(a, "// a");
+                File.WriteAllText(b, "// b");
+
+                var root = new FakeNode(null,
+                    new FakeNode(null, // solution folder
+                        new FakeNode(null, // sub-project
+                            new FakeNode(a),
+                            new FakeNode(b))));
+
+                var files = HierarchyWalker.EnumerateFiles(new[] { root });
+                Assert.Equal(2, files.Count);
+                Assert.Equal(a, files[0]);
+                Assert.Equal(b, files[1]);
+            }
+        }
+
+        public static void Run_HierarchyWalker_NestedItemRecursion()
+        {
+            // An item with nested children (a folder item) recurses into them.
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                string nested = Path.Combine(dir.Path, "Nested.cs");
+                File.WriteAllText(a, "// a");
+                File.WriteAllText(nested, "// n");
+
+                var root = new FakeNode(null,
+                    new FakeNode(a,
+                        new FakeNode(nested)));
+
+                var files = HierarchyWalker.EnumerateFiles(new[] { root });
+                Assert.Equal(2, files.Count);
+                Assert.Equal(a, files[0]);
+                Assert.Equal(nested, files[1]);
+            }
+        }
+
+        public static void Run_HierarchyWalker_Dedup()
+        {
+            // The same path reached twice must be enumerated once (OrdinalIgnoreCase dedup).
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// a");
+
+                var root = new FakeNode(null,
+                    new FakeNode(a),
+                    new FakeNode(a));
+
+                var files = HierarchyWalker.EnumerateFiles(new[] { root });
+                Assert.Equal(1, files.Count);
+                Assert.Equal(a, files[0]);
+            }
+        }
+
+        public static void Run_HierarchyWalker_FileExistsFiltering()
+        {
+            // A path that does not exist on disk must be dropped.
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                string ghost = Path.Combine(dir.Path, "Ghost.cs");
+                File.WriteAllText(a, "// a");
+
+                var root = new FakeNode(null,
+                    new FakeNode(a),
+                    new FakeNode(ghost));
+
+                var files = HierarchyWalker.EnumerateFiles(new[] { root });
+                Assert.Equal(1, files.Count);
+                Assert.Equal(a, files[0]);
+            }
+        }
+
+        public static void Run_HierarchyWalker_FirstFileEndingWith()
+        {
+            // FirstFileEndingWith returns the first matching file in tree order, and the
+            // extension comparison is OrdinalIgnoreCase (".CS" uppercase matches ".cs").
+            using (var dir = new TempDir())
+            {
+                string txt = Path.Combine(dir.Path, "B.txt");
+                string a = Path.Combine(dir.Path, "A.cs");
+                string c = Path.Combine(dir.Path, "C.CS");
+                File.WriteAllText(txt, "// t");
+                File.WriteAllText(a, "// a");
+                File.WriteAllText(c, "// c");
+
+                var root = new FakeNode(null,
+                    new FakeNode(txt),
+                    new FakeNode(a),
+                    new FakeNode(c));
+
+                Assert.Equal(a, HierarchyWalker.FirstFileEndingWith(new[] { root }, ".cs"));
+            }
+        }
+
+        public static void Run_HierarchyWalker_EmptyTree()
+        {
+            var files = HierarchyWalker.EnumerateFiles(new FakeNode[0]);
+            Assert.Equal(0, files.Count);
+            Assert.Equal(null, HierarchyWalker.FirstFileEndingWith(new FakeNode[0], ".cs"));
         }
 
         // ================================================================
@@ -839,7 +1562,7 @@ namespace Telescope.Tests
 
         public static void Run_Syntax_KeywordsAndIdentifiers()
         {
-            var segs = SyntaxHighlighter.Segment("public class Foo { }");
+            var segs = SyntaxHighlighter.Tokenize("public class Foo { }");
             var pairs = segs.Select(s => (s.Text, s.Category)).ToList();
             Assert.True(pairs.Any(p => p.Text == "public" && p.Category == SyntaxCategory.Keyword), "public is a keyword");
             Assert.True(pairs.Any(p => p.Text == "class" && p.Category == SyntaxCategory.Keyword), "class is a keyword");
@@ -849,14 +1572,14 @@ namespace Telescope.Tests
 
         public static void Run_Syntax_LineComment()
         {
-            var segs = SyntaxHighlighter.Segment("int x = 1; // hello");
+            var segs = SyntaxHighlighter.Tokenize("int x = 1; // hello");
             var comment = segs.FirstOrDefault(s => s.Category == SyntaxCategory.Comment);
             Assert.True(comment.Text == "// hello", $"line comment captured, got '{comment.Text}'");
         }
 
         public static void Run_Syntax_BlockCommentSpansLines()
         {
-            var segs = SyntaxHighlighter.Segment("a /* one\ntwo */ b");
+            var segs = SyntaxHighlighter.Tokenize("a /* one\ntwo */ b");
             var comment = segs.FirstOrDefault(s => s.Category == SyntaxCategory.Comment);
             Assert.True(comment.Text.Contains('\n'), "block comment spans lines");
             Assert.True(comment.Text.StartsWith("/*") && comment.Text.EndsWith("*/"), "block comment includes delimiters");
@@ -864,14 +1587,14 @@ namespace Telescope.Tests
 
         public static void Run_Syntax_Strings()
         {
-            var segs = SyntaxHighlighter.Segment("var s = \"hi \\\"there\\\"\";");
+            var segs = SyntaxHighlighter.Tokenize("var s = \"hi \\\"there\\\"\";");
             var str = segs.FirstOrDefault(s => s.Category == SyntaxCategory.String);
             Assert.True(str.Text == "\"hi \\\"there\\\"\"", $"string captured with escapes, got '{str.Text}'");
         }
 
         public static void Run_Syntax_VerbatimStringSpansLines()
         {
-            var segs = SyntaxHighlighter.Segment("var s = @\"line1\nline2\"\"quote\";");
+            var segs = SyntaxHighlighter.Tokenize("var s = @\"line1\nline2\"\"quote\";");
             var str = segs.FirstOrDefault(s => s.Category == SyntaxCategory.String);
             Assert.True(str.Text.StartsWith("@\""), "verbatim string captured");
             Assert.True(str.Text.Contains("line1"), "verbatim string spans lines");
@@ -879,7 +1602,7 @@ namespace Telescope.Tests
 
         public static void Run_Syntax_Numbers()
         {
-            var segs = SyntaxHighlighter.Segment("var x = 42; var y = 0xFF; var z = 1.5e3; var f = 100L;");
+            var segs = SyntaxHighlighter.Tokenize("var x = 42; var y = 0xFF; var z = 1.5e3; var f = 100L;");
             var nums = segs.Where(s => s.Category == SyntaxCategory.Number).Select(s => s.Text).ToList();
             Assert.True(nums.Contains("42"), "decimal literal");
             Assert.True(nums.Contains("0xFF"), "hex literal");
@@ -890,7 +1613,22 @@ namespace Telescope.Tests
         public static void Run_Syntax_RoundTripsText()
         {
             const string code = "using System;\n\npublic class Probe\n{\n    // note\n    static int X = 42;\n    string s = \"hello\";\n}";
-            var segs = SyntaxHighlighter.Segment(code);
+            var segs = SyntaxHighlighter.Tokenize(code);
+            var rebuilt = string.Concat(segs.Select(s => s.Text));
+            Assert.Equal(code, rebuilt);
+        }
+
+        // ================================================================
+        // Preview/motion correctness (Phase 3 — M9). RED: ReadQuoted's
+        // `i += 2` escape advance pushes i past text.Length on an unterminated
+        // string ending in a backslash -> ArgumentOutOfRangeException from
+        // text.Substring(start, i - start).
+        // ================================================================
+
+        public static void Run_Syntax_UnterminatedStringEndingInBackslash()
+        {
+            const string code = "var s = \"abc\\";
+            var segs = SyntaxHighlighter.Tokenize(code);
             var rebuilt = string.Concat(segs.Select(s => s.Text));
             Assert.Equal(code, rebuilt);
         }
@@ -901,13 +1639,11 @@ namespace Telescope.Tests
 
         public static void Run_Issues_TodoScanFindsMarkers()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_issues_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "class A\n{\n    // TODO: fix this\n    // FIXME: and this\n    int x;\n}");
-                string b = Path.Combine(dir, "B.cs");
+                string b = Path.Combine(dir.Path, "B.cs");
                 File.WriteAllText(b, "// nothing here\n");
 
                 var finder = new CodeIssuesFinder(() => new[] { a, b }, _ => { });
@@ -918,37 +1654,25 @@ namespace Telescope.Tests
                 Assert.True(entries[1].Display.StartsWith("[TODO] line 4:"), $"fixme on line 4, got '{entries[1].Display}'");
                 Assert.True(entries[0].Display.Contains("A.cs"), "display names the file");
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_Issues_NoFalsePositiveOnTodoWord()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_issues_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "var todoList = new List<int>();\nint total = 1;\n");
 
                 var finder = new CodeIssuesFinder(() => new[] { a }, _ => { });
                 Assert.Equal(0, finder.GetCandidates().Count);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_Issues_OnSelectedReportsPathAndLine()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_issues_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "line one\n// TODO: here\n");
 
                 CodeIssue? opened = null;
@@ -961,10 +1685,27 @@ namespace Telescope.Tests
                 Assert.Equal(2, opened!.LineNumber);
                 Assert.Equal(CodeIssueKind.Todo, opened!.Kind);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
+        }
+
+        public static void Run_Issues_SeverityMediumMapsToWarning()
+        {
+            // A warning whose message contains "error" must still be Warning: classification is
+            // severity-based (ErrorItem.ErrorLevel), not description-based (the old Classify(string)
+            // guessed by substring on the message).
+            Assert.Equal(CodeIssueKind.Warning,
+                CodeIssuesFinder.ClassifySeverity(vsBuildErrorLevel.vsBuildErrorLevelMedium));
+        }
+
+        public static void Run_Issues_SeverityHighMapsToError()
+        {
+            Assert.Equal(CodeIssueKind.Error,
+                CodeIssuesFinder.ClassifySeverity(vsBuildErrorLevel.vsBuildErrorLevelHigh));
+        }
+
+        public static void Run_Issues_SeverityLowMapsToInfo()
+        {
+            Assert.Equal(CodeIssueKind.Info,
+                CodeIssuesFinder.ClassifySeverity(vsBuildErrorLevel.vsBuildErrorLevelLow));
         }
 
         // ================================================================
@@ -1107,31 +1848,23 @@ namespace Telescope.Tests
 
         public static void Run_GrepFinder_EmptyQueryReturnsZeroCandidates()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// NEEDLE here\n");
 
                 var finder = new GrepFinder(() => new[] { a }, _ => { });
                 Assert.Equal(0, finder.GetCandidates("").Count);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GrepFinder_LineScanMatchesCaseInsensitive()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
-                string b = Path.Combine(dir, "B.cs");
+                string b = Path.Combine(dir.Path, "B.cs");
                 File.WriteAllText(b, "// nothing here\n");
 
                 var finder = new GrepFinder(() => new[] { a, b }, _ => { });
@@ -1142,19 +1875,13 @@ namespace Telescope.Tests
                 Assert.Equal(2, entries.Count);
                 Assert.True(entries.All(e => e.Display.Contains("A.cs")), "only A.cs contains matches");
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GrepFinder_DisplayIsFileNameLineText()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "first\nNEEDLE here\n");
 
                 var finder = new GrepFinder(() => new[] { a }, _ => { });
@@ -1162,19 +1889,13 @@ namespace Telescope.Tests
                 // Deterministic {fileName}:{line}: {lineText} display (1-based line, fileName only).
                 Assert.Equal("A.cs:2: NEEDLE here", entry.Display);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GrepFinder_PayloadRoundTripsGrepHit()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "x\n// NEEDLE x\n");
 
                 var finder = new GrepFinder(() => new[] { a }, _ => { });
@@ -1187,19 +1908,13 @@ namespace Telescope.Tests
                 Assert.Equal(2, payload.LineNumber);
                 Assert.Equal("// NEEDLE x", payload.LineText);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GrepFinder_OnSelectedOpensHitAtLine()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "first\n// NEEDLE x\n");
 
                 GrepHit? opened = null;
@@ -1212,19 +1927,13 @@ namespace Telescope.Tests
                 Assert.Equal(2, opened.LineNumber);
                 Assert.Equal("// NEEDLE x", opened.LineText);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GrepFinder_HitCapBounded()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_grep_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 var sb = new System.Text.StringBuilder();
                 for (int i = 0; i < 500; i++) { sb.AppendLine("NEEDLE " + i); }
                 File.WriteAllText(a, sb.ToString());
@@ -1234,10 +1943,97 @@ namespace Telescope.Tests
                 Assert.True(entries.Count > 0, "hits are still returned up to the cap");
                 Assert.True(entries.Count <= 200, $"hit cap bounds the result set (got {entries.Count})");
             }
-            finally
+        }
+
+        // ================================================================
+        // GrepFinder + ProjectFileCache (BP-1/M5a) — the shared cache is injected
+        // so the DTE solution-tree walk runs ONCE across queries (M5: the
+        // per-keystroke walk is the stall being amortized).
+        // RED: the GrepFinder(ProjectFileCache, Func<IReadOnlyList<string>>,
+        //      Action<GrepHit>) ctor does not exist -> compile error (CS1729).
+        // ================================================================
+
+        public static void Run_GrepFinder_CacheEnumeratesOnce()
+        {
+            using (var dir = new TempDir())
             {
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// NEEDLE here\n");
+
+                int count = 0;
+                var cache = new ProjectFileCache();
+                var finder = new GrepFinder(cache, () => { count++; return new[] { a }; }, _ => { });
+
+                finder.GetCandidates("NEEDLE");
+                finder.GetCandidates("NEEDLE2");
+
+                // The enumerate delegate must run ONCE across two queries — the cache serves the
+                // second GetCandidates (today GrepFinder re-walks the solution per query).
+                Assert.Equal(1, count);
             }
+        }
+
+        // ================================================================
+        // GrepFinder.GatherHits (M41, BP-5) — the base-class gather stub must be a loud
+        // failure, not a silent empty. GrepFinder is query-driven (GetCandidates(query)),
+        // so the parameterless GatherHits() must throw NotSupportedException. GrepFinder is
+        // sealed, so the protected override is reached via reflection.
+        // RED: today GatherHits() returns Array.Empty<GrepHit>() (no throw) -> runtime failure.
+        // ================================================================
+
+        public static void Run_GrepFinder_GatherHitsThrowsNotSupported()
+        {
+            var finder = new GrepFinder(() => new[] { "a" }, _ => { });
+            var method = typeof(GrepFinder).GetMethod("GatherHits",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(method != null, "GatherHits must be discoverable via reflection (protected override)");
+
+            try
+            {
+                method!.Invoke(finder, null);
+                Assert.True(false, "GatherHits() must throw NotSupportedException (GrepFinder is query-driven; call GetCandidates(query))");
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                Assert.True(tie.InnerException is NotSupportedException,
+                    $"expected NotSupportedException from GatherHits(), got {tie.InnerException?.GetType().Name}");
+            }
+        }
+
+        // ================================================================
+        // FileContentCache (BP-2/M5b) — per-file content cache keyed by
+        // LastWriteTimeUtc, so ScanFile stops re-reading every file per query.
+        // RED: FileContentCache does not exist -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_FileContentCache_CachedRead()
+        {
+            int reads = 0;
+            var cache = new FileContentCache(
+                timestamp: _ => DateTime.UtcNow,
+                reader: _ => { reads++; return new[] { "line" }; });
+
+            cache.GetLines("a");
+            cache.GetLines("a");
+
+            // The injected reader must run exactly once for two GetLines on an unchanged file.
+            Assert.Equal(1, reads);
+        }
+
+        public static void Run_FileContentCache_InvalidatesOnTimestampChange()
+        {
+            var timestamps = new Dictionary<string, DateTime> { ["a"] = DateTime.UtcNow };
+            int reads = 0;
+            var cache = new FileContentCache(
+                timestamp: p => timestamps[p],
+                reader: _ => { reads++; return new[] { "line" }; });
+
+            cache.GetLines("a");
+            timestamps["a"] = timestamps["a"].AddSeconds(1);
+            cache.GetLines("a");
+
+            // A changed LastWriteTimeUtc must force a re-read (reader invoked twice).
+            Assert.Equal(2, reads);
         }
 
         // ================================================================
@@ -1248,12 +2044,10 @@ namespace Telescope.Tests
 
         public static void Run_GetCandidates_DefaultQuery_MatchesNoArg()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_fold_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "Alpha.cs");
-                string b = Path.Combine(dir, "Beta.cs");
+                string a = Path.Combine(dir.Path, "Alpha.cs");
+                string b = Path.Combine(dir.Path, "Beta.cs");
                 File.WriteAllText(a, "// a");
                 File.WriteAllText(b, "// b");
 
@@ -1265,19 +2059,13 @@ namespace Telescope.Tests
                 Assert.Equal(noArg[0].Display, emptyArg[0].Display);
                 Assert.Equal(noArg[1].Display, emptyArg[1].Display);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GetCandidates_DefaultQuery_GrepEmpty()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_fold_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// NEEDLE here\n");
 
                 // Written against IFinder so the test pins the NEW interface contract: before the
@@ -1289,19 +2077,13 @@ namespace Telescope.Tests
                 Assert.Equal(0, noArg.Count);
                 Assert.Equal(0, emptyArg.Count);
             }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
         }
 
         public static void Run_GetCandidates_IsQueryDriven()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_fold_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            try
+            using (var dir = new TempDir())
             {
-                string a = Path.Combine(dir, "A.cs");
+                string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// x\n");
 
                 IFinder grep = new GrepFinder(() => new[] { a }, _ => { });
@@ -1309,10 +2091,6 @@ namespace Telescope.Tests
 
                 Assert.True(grep.IsQueryDriven, "GrepFinder is query-driven");
                 Assert.False(files.IsQueryDriven, "FileFinder is not query-driven");
-            }
-            finally
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { }
             }
         }
 
@@ -1337,44 +2115,46 @@ namespace Telescope.Tests
 
         public static void Run_TelescopeLog_Prefix()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_telescopelog_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                TelescopeLog.Log("hello");
-                // F3 (X1/BP-1): under buffering the write is not on disk until Flush().
-                LogFileWriter.Flush();
-                Assert.True(ReadAllTextShared(logPath).Contains("[Telescope] hello"),
-                    "TelescopeLog prefixes the message with [Telescope] ");
-            }
-            finally
-            {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    TelescopeLog.Log("hello");
+                    // F3 (X1/BP-1): under buffering the write is not on disk until Flush().
+                    LogFileWriter.Flush();
+                    Assert.True(ReadAllTextShared(logPath).Contains("[Telescope] hello"),
+                        "TelescopeLog prefixes the message with [Telescope] ");
+                });
             }
         }
 
         public static void Run_TelescopeLog_EmptyMessage()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "neovisual_telescopelog_" + Guid.NewGuid().ToString("N"));
-            string logPath = Path.Combine(dir, "neovisual-exp.log");
-            string originalLog = LogFileWriter.LogPath;
-            try
+            using (var dir = new TempDir())
             {
-                LogFileWriter.LogPath = logPath;
-                TelescopeLog.Log("");
-                // F3 (X1/BP-1): under buffering the write is not on disk until Flush().
-                LogFileWriter.Flush();
-                Assert.True(ReadAllTextShared(logPath).Contains("[Telescope] "),
-                    "an empty message still emits the [Telescope] prefix");
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    TelescopeLog.Log("");
+                    // F3 (X1/BP-1): under buffering the write is not on disk until Flush().
+                    LogFileWriter.Flush();
+                    Assert.True(ReadAllTextShared(logPath).Contains("[Telescope] "),
+                        "an empty message still emits the [Telescope] prefix");
+                });
             }
-            finally
-            {
-                LogFileWriter.LogPath = originalLog;
-                try { Directory.Delete(dir, recursive: true); } catch { }
-            }
+        }
+
+        // ================================================================
+        // FilterFailureLog (BP-8/M8) — the exact "[Telescope] filter failed: "
+        // line format the overlay's FilterAndUpdateAsync catch emits (M8: today
+        // a faulting FilterAsync escapes unobserved with no diagnostic).
+        // RED: FilterFailureLog does not exist -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_FilterFailureLog_Format()
+        {
+            Assert.Equal("[Telescope] filter failed: boom", FilterFailureLog.Format(new Exception("boom")));
         }
 
         // ================================================================
@@ -1508,6 +2288,97 @@ namespace Telescope.Tests
             Assert.Equal(0, first.Count);
             Assert.Equal(0, second.Count);
             Assert.Equal(1, count);
+        }
+
+        // ================================================================
+        // OverlayShowState — state-based guard for the deferred ShowDialog (CR3, BP-5)
+        // RED: `OverlayShowState` does not exist yet -> compile error
+        // The overlay defers ShowDialog() to ApplicationIdle (fire-and-forget); if CloseOverlay()
+        // runs first, the pending ShowDialog fires on an already-closed window. The guard must be
+        // STATE-based (RequestShow/Close flags), NOT visibility-based (IsVisible is false at
+        // ApplicationIdle time, so a visibility guard would silently never open the overlay).
+        // ================================================================
+
+        public static void Run_OverlayShowState_RequestThenClose_ShouldNotShow()
+        {
+            var s = new OverlayShowState();
+            s.RequestShow();
+            s.Close();
+            Assert.False(s.ShouldShowDialog(), "Close() after RequestShow() must suppress the dialog");
+        }
+
+        public static void Run_OverlayShowState_RequestOnly_ShouldShow()
+        {
+            var s = new OverlayShowState();
+            s.RequestShow();
+            Assert.True(s.ShouldShowDialog(), "RequestShow() alone must show the dialog");
+        }
+
+        public static void Run_OverlayShowState_StateBasedNotVisibilityBased()
+        {
+            // The decision is STATE-based, not visibility-based: RequestShow() flips a flag with no
+            // WPF visibility involved, and Close() flips it back. This pins the state contract so a
+            // future IsVisible-based guard (which would be false at ApplicationIdle time and silently
+            // never open the overlay) cannot be introduced.
+            var s = new OverlayShowState();
+            s.RequestShow();
+            Assert.True(s.ShouldShowDialog(), "RequestShow() alone must show the dialog (state-based, no visibility involved)");
+            s.Close();
+            Assert.False(s.ShouldShowDialog(), "Close() must suppress the dialog (state-based)");
+        }
+
+        // ================================================================
+        // FocusTargetModel — pure focus-target state machine (M34)
+        // RED: `FocusTargetModel`/`FocusTarget`/`FocusTargetAction` + `OverlayKey.CtrlH`/`CtrlL`
+        // don't exist -> compile error (CS0246/CS0103/CS0117)
+        // ================================================================
+
+        public static void Run_FocusTarget_StartsWithList()
+        {
+            var model = new FocusTargetModel();
+            Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        public static void Run_FocusTarget_CtrlLMovesToPreview()
+        {
+            var model = new FocusTargetModel();
+            var action = model.Handle(OverlayKey.CtrlL);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
+        }
+
+        public static void Run_FocusTarget_CtrlHReturnsToList()
+        {
+            var model = new FocusTargetModel();
+            model.Handle(OverlayKey.CtrlL); // move to Preview first
+            var action = model.Handle(OverlayKey.CtrlH);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        public static void Run_FocusTarget_EscapeInPreviewReturnsToList()
+        {
+            var model = new FocusTargetModel();
+            model.Handle(OverlayKey.CtrlL); // move to Preview first
+            var action = model.Handle(OverlayKey.Escape);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        public static void Run_FocusTarget_EscapeInListUnchanged()
+        {
+            var model = new FocusTargetModel();
+            var action = model.Handle(OverlayKey.Escape);
+            Assert.Equal(FocusTargetAction.None, action);
+            Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        public static void Run_FocusTarget_ResetOnOpen()
+        {
+            var model = new FocusTargetModel();
+            model.Handle(OverlayKey.CtrlL); // move to Preview
+            model.Reset();
+            Assert.Equal(FocusTarget.List, model.Current);
         }
     }
 }

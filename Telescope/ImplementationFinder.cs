@@ -58,6 +58,6 @@ namespace Telescope
 
         protected override string OpenErrorNoun => "implementation";
 
-        protected override string GatherErrorLiteral(Exception ex) => $"{Telescope.DiagnosticLog.Telescope}implementations gather failed: {ex.Message}";
+        protected override string GatherErrorLiteral(Exception ex) => $"implementations gather failed: {ex.Message}";
     }
 }

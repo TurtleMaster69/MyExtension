@@ -76,18 +76,29 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   pure state machine), file search (`FzfFilter`), file open (`FileFinder`
   hermetic seam), results formatting, log writer (buffered `LogFileWriter`),
   the preview-pane vim motions (`TextMotionNavigator`), the finder base
-  (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models).
-  `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf` run subsets.
-  Currently **77 tests, all passing**.
+  (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models),
+  the shared preview index (`LineIndex`), the focus-target state machine
+  (`FocusTargetModel`), the shared vim-motion dispatch (`TryDispatch`), the
+  syntax tokenizer (`SyntaxHighlighter.Tokenize`), and the pane-failure
+  fallback (`PaneFailureTracker`).
+  `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TryDispatch`,
+  `-- LineIndex`, `-- FocusTarget`, `-- Syntax` run subsets.
+  Currently **135 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
   the injected-key re-entry guard (`InjectedKeyGuard`), the shared vim-motion
   engine (`TextMotionHelper`), the action-table controllers (`ActionKeys`),
-  the focus guard (`FocusGuard`), and the navigation engine
-  (`RectCoordinate`, `NavigationSettings`, `WindowNavigationEngine`).
-  `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`, etc.
-  run subsets. Currently **74 tests, all passing**.
+  the focus guard (`FocusGuard`), the navigation engine
+  (`RectCoordinate`, `NavigationSettings`, `WindowNavigationEngine`), the
+  leader/shortcut matchers (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`),
+  the vim-mode classifier (`VimModeClassifier` + `IVimModeSource`), the
+  init orchestrator (`InitSteps`), the navigation snapshot (`NavigationSnapshot`),
+  and the focus-keeper schedule (`FocusKeeperSchedule`).
+  `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
+  `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
+  `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
+  run subsets. Currently **130 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -196,7 +207,16 @@ Key facts that make this reliable:
   `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
   (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
   `[Telescope] focus target=List|Preview`, `[Telescope] preview caret=... line=...`,
-  `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions).
+  `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions),
+  `[NeoVisual] stale-toolwindow sentinel active` (M3 — the injected stale-frame fault is
+  active, not skipped), `[NeoVisual] leader-binding failed: {seq}: {msg}` /
+  `[NeoVisual] shortcut-binding failed: {simple}: {msg}` (M15 — binding action exceptions
+  are caught and logged, never escaping the hook path), `[NeoVisual] output pane unavailable: {reason}`
+  (M18 — one-time fallback when the VS Output pane cannot be created), `[MyExtension] init <step> ok/failed: {msg}`
+  (M33 — per-step package-init orchestration; `[MyExtension] init failed: {ex}` is the last-resort net),
+  `[Telescope] fzf filter failed: {msg}` / `[Telescope] fzf filter failed: timeout after {ms}ms` (M6),
+  `[Telescope] fzf unavailable — showing unfiltered list` (M6 — once at overlay open when fzf is missing),
+  `[Telescope] filter failed: {msg}` (M8 — `FilterAndUpdateAsync` fault path).
 
 ## Feature status / roadmap (work in progress)
 

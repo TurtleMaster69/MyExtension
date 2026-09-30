@@ -287,7 +287,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 | F19 | minor | `MyExtension/CardinalMovment/WindowMatrix.cs:161` | Sort comparer allocates rects per comparison; distance computed twice per candidate |
 | F20 | minor | `MyExtension/CardinalMovment/WindowMatrix.cs:202` | Missing `ThrowIfNotOnUIThread()` in several predicates + `WindowManager` ctor + `SolutionExplorerController.ExecuteCommand` |
 | F21 | minor | `MyExtension/CardinalMovment/WindowMatrix.cs:213` | Edge/emptiness rect math inline ~15 sites; `RectCoordinate` is a bare field holder |
-| F22 | minor | `MyExtension/InputHandler.cs:210` | Leader state machine + `BuildSimpleKey` not extracted → core routing untestable offline |
+| F22 | minor | `MyExtension/InputHandler.cs:210` | Leader state machine + `KeyNameBuilder` not extracted → core routing untestable offline |
 | F23 | minor | `MyExtension/GlobalKeyboardHook.cs:175` | Ctrl-key pre-filter cases dead; AGENTS.md "completion swallow" claim not implemented |
 | F24 | minor | `MyExtension/GlobalKeyboardHook.cs:170` | h/j/k/l/i unconditionally interesting → full `HandleKey` per editor keystroke |
 | F25 | minor | `Telescope/TelescopeOverlay.cs:467` | Prompt caret always placed at end; 'I' start-insert path dead |
@@ -363,7 +363,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 - **Fix:** Call `IsAvailable()` once at controller construction and log `[Telescope] fzf unavailable — filtering disabled`; log the fallback in the catch too.
 
 ### F10 (major) — Preview reload + re-tokenize per selection change
-- **Where:** `Telescope/TelescopeOverlay.cs:402` (`LoadPreviewForSelection` on every `RenderResults` — every j/k move and every filter keystroke: `File.ReadAllText`, `SyntaxHighlighter.Segment`, full `FlowDocument` rebuild, caret reset to top).
+- **Where:** `Telescope/TelescopeOverlay.cs:402` (`LoadPreviewForSelection` on every `RenderResults` — every j/k move and every filter keystroke: `File.ReadAllText`, `SyntaxHighlighter.Tokenize`, full `FlowDocument` rebuild, caret reset to top).
 - **Why it bites:** Real-sized files freeze the overlay per keystroke; the user's preview scroll/caret is destroyed just by moving list selection. e2e passes only because scratch files are tiny.
 - **Fix:** Cache the last preview payload (path + content hash + segments + navigator text) and skip rebuild when unchanged.
 
@@ -401,7 +401,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 
 - **F18/F19/F21** — `WindowMatrix` carried dead code (the unused RemoveWindowsNotAdjacent filter, the private ActivateWindow wrapper, unused ctor/field), redundant re-filter passes (:294 re-runs wrong-direction/not-aligned filters already applied), comparer-time rect allocation, double distance evaluation, and ~15 inline edge/emptiness computations while `RectCoordinate` was a bare field holder. Consolidate on `RectCoordinate` helpers (`Right`/`Bottom`/`IsEmpty`/`Intersects`) and single-pass filtering — done by N3.
 - **F20** — UI-thread guards are missing in several `WindowMatrix` predicates, `WindowManager`'s ctor (`RefreshCurrentWindow`), and `SolutionExplorerController.ExecuteCommand`; today they're only transitively on the UI thread. Add `ThreadHelper.ThrowIfNotOnUIThread()` per convention before a background-thread caller appears.
-- **F22** — the leader state machine, `BuildSimpleKey`, and sequence-prefix matching are private inside `InputHandler` (needs AsyncPackage + MEF + WindowManager to construct). Extract a pure `LeaderSequenceMatcher`/`SimpleKeyBuilder` so the core routing is unit-testable like `OverlayKeyHandler`.
+- **F22** — the leader state machine, `KeyNameBuilder`, and sequence-prefix matching are private inside `InputHandler` (needs AsyncPackage + MEF + WindowManager to construct). Extract a pure `LeaderSequenceMatcher`/`SimpleKeyBuilder` so the core routing is unit-testable like `OverlayKeyHandler`.
 - **F23/F24** — the `IsInteresting` pre-filter has dead Ctrl-key cases (the documented completion-swallow is not implemented) and treats h/j/k/l/i as unconditionally interesting, so a vim user's most-typed letters each run a full `HandleKey` (allocations, dictionary lookups) that always returns false. Gate on `IsToolWindow` (cheap cached bool); fix the stale AGENTS.md claim.
 - **F25/F26/F27** — overlay code-behind: 'I' start-insert is dead (`FocusPrompt` forces caret to end), `IsOpen=true` is set before the deferred `ShowDialog` (keys in the gap reach the editor; open-then-close in one dispatcher cycle throws), and the fire-and-forget `FilterAndUpdateAsync` has no try/catch. All three are small, deterministic fixes with unit-testable seams.
 - **F28/F29/F45** — logging hygiene: `LogFileWriter.Clear()` is once-per-process so logs accumulate across overlay opens (contradicts the "current session" doc); ad-hoc `Debug.WriteLine` bypasses the shared `NeoVisualLog` path in `TelescopeController.cs:56`, `TelescopeOverlay.cs:857`, and all `VimModeTracker` reflection failures; the `[Telescope]`/`[NeoVisual]` prefix contract is asserted only in ~30 copy-pasted e2e patterns, never centralized. Centralize prefix constants and route every diagnostic through `NeoVisualLog`.

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -26,11 +27,18 @@ namespace Telescope
     internal static class LogFileWriter
     {
         private static readonly object Sync = new object();
-        private static bool _clearedThisProcess;
+        private static readonly HashSet<string> _clearedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static bool _failureMarkerWritten;
 
         private static StreamWriter? _logWriter;
         private static StreamWriter? _debugWriter;
         private static Timer? _flushTimer;
+
+        /// <summary>Number of times the buffered writers have been flushed (test seam for the one-shot timer).</summary>
+        internal static int FlushCount;
+
+        /// <summary>Number of write failures swallowed by the never-throw contract (test seam).</summary>
+        internal static int WriteFailureCount;
 
         private static string _logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -81,54 +89,46 @@ namespace Telescope
         /// <summary>Truncates both log files. Never throws.</summary>
         public static void Clear()
         {
-            // Only truncate once per process — a package re-init (background load etc.) must not
-            // wipe the lines already captured for this run.
+            // Per-path idempotent: each unique path truncates on its first Clear() for that
+            // path, so a package re-init (background load etc.) never wipes the lines already
+            // captured for this run, while tests can Clear() distinct temp paths in any order.
             lock (Sync)
             {
-                if (_clearedThisProcess)
-                {
-                    return;
-                }
-                _clearedThisProcess = true;
-
                 FlushLocked();
                 CloseWriter(ref _logWriter);
                 CloseWriter(ref _debugWriter);
-                ClearFile(LogPath);
-                ClearFile(DebugLogPath);
+                ClearFileOnce(LogPath);
+                ClearFileOnce(DebugLogPath);
+            }
+        }
+
+        private static void ClearFileOnce(string path)
+        {
+            if (_clearedPaths.Add(path))
+            {
+                ClearFile(path);
             }
         }
 
         /// <summary>Appends a timestamped line to the NeoVisual structured log. Never throws.</summary>
-        public static void Write(string message)
-        {
-            string line = FormatLine(message);
-            lock (Sync)
-            {
-                try
-                {
-                    GetWriter(ref _logWriter, LogPath).Write(line + Environment.NewLine);
-                }
-                catch
-                {
-                    // never let logging break the extension
-                }
-            }
-        }
+        public static void Write(string message) => WriteTo(ref _logWriter, LogPath, message);
 
         /// <summary>Appends a timestamped line to the debug-output log. Never throws.</summary>
-        public static void WriteDebug(string message)
+        public static void WriteDebug(string message) => WriteTo(ref _debugWriter, DebugLogPath, message);
+
+        private static void WriteTo(ref StreamWriter? writer, string path, string message)
         {
             string line = FormatLine(message);
             lock (Sync)
             {
                 try
                 {
-                    GetWriter(ref _debugWriter, DebugLogPath).Write(line + Environment.NewLine);
+                    GetWriter(ref writer, path).Write(line + Environment.NewLine);
                 }
                 catch
                 {
-                    // never let logging break the extension
+                    WriteFailureCount++;
+                    WriteFailureMarker();
                 }
             }
         }
@@ -169,6 +169,7 @@ namespace Telescope
 
         private static void FlushLocked()
         {
+            FlushCount++;
             try
             {
                 _logWriter?.Flush();
@@ -194,6 +195,7 @@ namespace Telescope
                     new UTF8Encoding(false));
                 EnsureTimer();
             }
+            _flushTimer?.Change(200, Timeout.Infinite);
             return writer;
         }
 
@@ -203,7 +205,28 @@ namespace Telescope
             {
                 return;
             }
-            _flushTimer = new Timer(_ => Flush(), null, 200, 200);
+            _flushTimer = new Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
+        }
+
+        private static void WriteFailureMarker()
+        {
+            if (_failureMarkerWritten)
+            {
+                return;
+            }
+            _failureMarkerWritten = true;
+            try
+            {
+                string dir = Path.GetDirectoryName(LogPath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    File.WriteAllText(Path.Combine(dir, "neovisual-write-failed"), "write failed");
+                }
+            }
+            catch
+            {
+                // never let logging break the extension
+            }
         }
 
         private static void CloseWriter(ref StreamWriter? writer)

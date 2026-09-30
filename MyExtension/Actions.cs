@@ -13,19 +13,31 @@ namespace MyExtension
     internal static class Actions
     {
         internal static readonly IReadOnlyDictionary<string, Func<InputHandler, TelescopeLauncher, Action>> Registry =
-            new Dictionary<string, Func<InputHandler, TelescopeLauncher, Action>>(StringComparer.OrdinalIgnoreCase)
+            BuildRegistry();
+
+        private static IReadOnlyDictionary<string, Func<InputHandler, TelescopeLauncher, Action>> BuildRegistry()
+        {
+            var registry = new Dictionary<string, Func<InputHandler, TelescopeLauncher, Action>>(StringComparer.OrdinalIgnoreCase)
             {
-                ["navigate-left"] = (h, _) => () => h.Navigate(CardinalNavigationConstants.LEFT),
-                ["navigate-right"] = (h, _) => () => h.Navigate(CardinalNavigationConstants.RIGHT),
-                ["navigate-up"] = (h, _) => () => h.Navigate(CardinalNavigationConstants.UP),
-                ["navigate-down"] = (h, _) => () => h.Navigate(CardinalNavigationConstants.DOWN),
-                ["telescope"] = (_, l) => () => l.Open(TelescopeLauncher.FinderNames["telescope"]),
-                ["telescope-issues"] = (_, l) => () => l.Open(TelescopeLauncher.FinderNames["telescope-issues"]),
-                ["telescope-references"] = (_, l) => () => l.Open(TelescopeLauncher.FinderNames["telescope-references"]),
-                ["telescope-implementation"] = (_, l) => () => l.Open(TelescopeLauncher.FinderNames["telescope-implementation"]),
-                ["telescope-grep"] = (_, l) => () => l.Open(TelescopeLauncher.FinderNames["telescope-grep"]),
+                ["navigate-left"] = (h, _) => () => h.Navigate(Direction.Left),
+                ["navigate-right"] = (h, _) => () => h.Navigate(Direction.Right),
+                ["navigate-up"] = (h, _) => () => h.Navigate(Direction.Up),
+                ["navigate-down"] = (h, _) => () => h.Navigate(Direction.Down),
                 ["toggle-solution-explorer"] = (h, _) => () => h.ToggleSolutionExplorer(),
             };
+
+            // The telescope entries are derived from TelescopeLauncher.FinderNames (the single
+            // source of truth): a 6th telescope action added there is automatically a Registry
+            // entry, so the hook path can never throw KeyNotFoundException on a telescope name.
+            foreach (var kvp in TelescopeLauncher.FinderNames)
+            {
+                string actionName = kvp.Key;
+                string finderName = kvp.Value;
+                registry[actionName] = (_, l) => () => l.Open(finderName);
+            }
+
+            return registry;
+        }
 
         internal static Action? Resolve(string lowerName, InputHandler handler, TelescopeLauncher launcher)
             => Registry.TryGetValue(lowerName, out var f) ? f(handler, launcher) : null;

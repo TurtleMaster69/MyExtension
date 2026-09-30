@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -14,6 +15,11 @@ namespace Telescope
     /// </summary>
     internal static class PreviewRenderer
     {
+        // Per-content line index + one TextPointer per line start, built in SetContent so
+        // CaretToPointer can binary-search the line and walk only that paragraph's runs (M7).
+        private static LineIndex? _lineIndex;
+        private static TextPointer[]? _linePointers;
+
         public static void Show(RichTextBox previewBox, TextMotionNavigator navigator, IFileLocation location)
         {
             if (!System.IO.File.Exists(location.FilePath))
@@ -53,28 +59,49 @@ namespace Telescope
                 Background = new SolidColorBrush(Color.FromRgb(0x10, 0x14, 0x18)),
             };
 
-            var segments = SyntaxHighlighter.Segment(content);
+            var segments = SyntaxHighlighter.Tokenize(content);
             var para = NewPreviewParagraph();
             foreach (var segment in segments)
             {
-                string[] lines = segment.Text.Split('\n');
-                for (int k = 0; k < lines.Length; k++)
+                string text = segment.Text;
+                int start = 0;
+                int k = 0;
+                while (true)
                 {
+                    int nl = text.IndexOf('\n', start);
+                    string line = nl < 0 ? text.Substring(start) : text.Substring(start, nl - start);
                     if (k > 0)
                     {
                         doc.Blocks.Add(para);
                         para = NewPreviewParagraph();
                     }
-                    if (lines[k].Length > 0)
+                    if (line.Length > 0)
                     {
-                        para.Inlines.Add(new Run(lines[k])
+                        para.Inlines.Add(new Run(line)
                         {
                             Foreground = ColorFor(segment.Category),
                         });
                     }
+                    if (nl < 0)
+                    {
+                        break;
+                    }
+                    start = nl + 1;
+                    k++;
                 }
             }
             doc.Blocks.Add(para);
+
+            _lineIndex = new LineIndex(content);
+            var pointers = new List<TextPointer>();
+            foreach (var block in doc.Blocks)
+            {
+                if (block is Paragraph p)
+                {
+                    pointers.Add(p.ContentStart);
+                }
+            }
+            _linePointers = pointers.ToArray();
 
             previewBox.Document = doc;
             previewBox.CaretPosition = doc.ContentStart;
@@ -122,35 +149,45 @@ namespace Telescope
         private static TextPointer CaretToPointer(RichTextBox previewBox, int index)
         {
             FlowDocument doc = previewBox.Document;
-            int plain = 0;
-            int blockCount = doc.Blocks.Count;
-            int blockIndex = 0;
-
-            foreach (var block in doc.Blocks)
+            if (_lineIndex == null || _linePointers == null)
             {
-                bool lastBlock = ++blockIndex == blockCount;
-                if (block is Paragraph para)
+                return doc.ContentEnd;
+            }
+
+            int line = _lineIndex.LineOf(index);
+            if (line < 1 || line > _linePointers.Length)
+            {
+                return doc.ContentEnd;
+            }
+
+            TextPointer lineStart = _linePointers[line - 1];
+            int offset = index - _lineIndex.LineStart(line);
+            if (offset < 0)
+            {
+                offset = 0;
+            }
+
+            if (lineStart.Paragraph is Paragraph para)
+            {
+                int plain = 0;
+                if (offset == plain) return para.ContentStart;
+                foreach (var inline in para.Inlines)
                 {
-                    foreach (var inline in para.Inlines)
+                    if (inline is Run run)
                     {
-                        if (inline is Run run)
+                        int len = run.Text.Length;
+                        if (offset <= plain + len)
                         {
-                            int len = run.Text.Length;
-                            if (index <= plain + len)
-                            {
-                                return run.ContentStart.GetPositionAtOffset(index - plain, LogicalDirection.Forward);
-                            }
-                            plain += len;
+                            return run.ContentStart.GetPositionAtOffset(offset - plain, LogicalDirection.Forward);
                         }
+                        plain += len;
                     }
-                }
-                if (!lastBlock)
-                {
-                    plain += 1; // the '\n' separating this line from the next
                 }
             }
 
-            return doc.ContentEnd;
+            // Offset past the paragraph's runs (e.g. an index at a '\n' or an empty line): land at
+            // the end of the line, matching the current behavior.
+            return lineStart.Paragraph?.ContentEnd ?? doc.ContentEnd;
         }
     }
 }

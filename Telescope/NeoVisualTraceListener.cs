@@ -23,12 +23,6 @@ namespace Telescope
             }
         }
 
-        public override void WriteLine(string? message)
-        {
-            if (!string.IsNullOrEmpty(message))
-            {
-                LogFileWriter.WriteDebug(message);
-            }
-        }
+        public override void WriteLine(string? message) => Write(message);
     }
 }

@@ -2,10 +2,11 @@
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using MyExtension;
 using System;
 using System.Collections.Generic;
 
+namespace MyExtension
+{
 public sealed class WindowManager : IDisposable
 {
     private readonly IVsMonitorSelection _monitorSelection;
@@ -28,6 +29,7 @@ public sealed class WindowManager : IDisposable
     // sentinel-aware public members below so the test-only stale-focus fault can be injected.
     private bool _isToolWindow;
     private ToolWindowType _type;
+    private bool _isTextInputType;
 
     // Test-only fault injection: when the harness creates a 'stale-toolwindow' sentinel file under
     // NEOVISUAL_LOG_DIR, report the Solution Explorer frame as current even when it is not — the
@@ -41,12 +43,105 @@ public sealed class WindowManager : IDisposable
         return string.IsNullOrEmpty(dir) ? null : System.IO.Path.Combine(dir, "stale-toolwindow");
     }
 
-    private static bool IsTestStaleInjected() =>
-        TestStaleSentinelPath != null && System.IO.File.Exists(TestStaleSentinelPath);
+    private readonly StaleToolWindowSentinel _sentinel = new(TestStaleSentinelPath);
+
+    private bool IsTestStaleInjected() => _sentinel.IsStale;
+
+    /// <summary>
+    /// Re-stats the sentinel file (once per key-down, from <see cref="InputHandler.IsKeyOfInterest"/>)
+    /// and logs the positive diagnostic on the false→true transition so the harness can assert the
+    /// fault is active. Exactly one line per activation; re-arms on removal.
+    /// </summary>
+    public void RefreshStaleSentinel()
+    {
+        if (_sentinel.Refresh() && _sentinel.IsStale)
+        {
+            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}stale-toolwindow sentinel active");
+        }
+    }
 
     public bool IsToolWindow => _isToolWindow || IsTestStaleInjected();
 
     public ToolWindowType Type => IsTestStaleInjected() ? ToolWindowType.SolutionExplorer : _type;
+
+    /// <summary>
+    /// Whether the current tool-window type is a text-input surface, cached on focus change.
+    /// Sentinel-aware: a forced stale Solution Explorer frame must never classify as text-input
+    /// (SolutionExplorer is never text-input), keeping the FocusGuard veto correct under the fault.
+    /// </summary>
+    public bool IsTextInputType => IsTestStaleInjected() ? false : _isTextInputType;
+
+    /// <summary>
+    /// True when the current tool window genuinely holds WPF keyboard focus: the focused element
+    /// (or one of its visual/logical ancestors) is inside the tool-window frame's WPF content.
+    /// The frame-derived tool-window flag can lag behind real WPF focus, so this is the raw
+    /// "the tool window owns the keyboard" fact the FocusGuard ANDs with the text-input type.
+    /// UI thread only.
+    /// </summary>
+    public bool TextInputSurfaceFocused
+    {
+        get
+        {
+            Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+            if (!IsToolWindow || CurrentWindow == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out object docViewObj);
+                if (!(docViewObj is System.Windows.FrameworkElement frameContent))
+                {
+                    return false;
+                }
+
+                var focused = System.Windows.Input.Keyboard.FocusedElement as System.Windows.DependencyObject;
+                if (focused == null)
+                {
+                    return false;
+                }
+
+                for (var current = focused; current != null; current = GetParent(current))
+                {
+                    if (ReferenceEquals(current, frameContent))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+    }
+
+    private static System.Windows.DependencyObject? GetParent(System.Windows.DependencyObject child)
+    {
+        try
+        {
+            var visual = System.Windows.Media.VisualTreeHelper.GetParent(child);
+            if (visual != null)
+            {
+                return visual;
+            }
+        }
+        catch
+        {
+            // not a visual — try the logical tree
+        }
+        try
+        {
+            return System.Windows.LogicalTreeHelper.GetParent(child);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// The controller driving the currently focused tool window, or null when focus is not in a
@@ -66,6 +161,7 @@ public sealed class WindowManager : IDisposable
         // Initialize the current window (and its classification) once so InputHandler has
         // correct state immediately, not only after the first focus-change event.
         RefreshCurrentWindow();
+        _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
     }
 
     /// <summary>
@@ -82,6 +178,22 @@ public sealed class WindowManager : IDisposable
     {
         // Return a stable per-type controller so mode is remembered per window type.
         return _controllers.TryGetValue(type, out var registered) ? registered : _defaultController;
+    }
+
+    /// <summary>
+    /// The default controller for a tool-window type, or null when the type has no default
+    /// (SolutionExplorer is driven by the specialized SolutionExplorerController registered by the
+    /// package; Unknown has no window to drive). Pure static factory — no VS API.
+    /// </summary>
+    public static IToolWindowController? DefaultControllerFor(ToolWindowType type)
+    {
+        if (type == ToolWindowType.SolutionExplorer || type == ToolWindowType.Unknown)
+        {
+            return null;
+        }
+        return GeneralToolWindowController.IsTextInputType(type)
+            ? new TextInputToolWindowController(type)
+            : new GeneralToolWindowController(type);
     }
 
     /// <summary>
@@ -130,12 +242,14 @@ public sealed class WindowManager : IDisposable
             {
                 _type = ToolWindowType.Unknown;
             }
+            _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
 
         }
         else
         {
             _isToolWindow = false;
             _type = ToolWindowType.Unknown;
+            _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
         }
     }
     public void Dispose()
@@ -192,4 +306,5 @@ public sealed class WindowManager : IDisposable
             return VSConstants.S_OK;
         }
     }
+}
 }

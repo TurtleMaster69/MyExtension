@@ -121,8 +121,6 @@ namespace MyExtension
                 {
                     bool handled = false;
 
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.Hook}key={key} ctrl={ctrl} shift={shift} alt={alt} leader={_inputHandler.IsLeaderActive}");
-
                     // The hook is installed on the main thread, so HandleKey normally runs
                     // directly here. The else is defensive only; its wait must stay bounded
                     // (Windows removes low-level hooks whose callbacks block too long).
@@ -198,7 +196,7 @@ namespace MyExtension
         private void Log(string message)
         {
             string fullMessage = $"{Telescope.DiagnosticLog.Hook}{DateTime.Now:HH:mm:ss.fff}  {message}";
-            Telescope.NeoVisualLog.Debug(fullMessage);
+            Telescope.NeoVisualLog.Log(fullMessage);
         }
 
         public void Dispose()

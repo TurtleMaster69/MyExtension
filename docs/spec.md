@@ -190,23 +190,30 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **77 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **135 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
-  syntax highlighting (`SyntaxHighlighter`), prompt motions, references finder
+  syntax highlighting (`SyntaxHighlighter.Tokenize`), prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
   implementation finder (`ImplementationFinder`/`ImplementationHit`), the finder
-  base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`).
-- `dotnet run --project tests/NeoVisual.Tests` — **74 tests**. Keybinding parsing
+  base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`),
+  the shared preview index (`LineIndex`), the focus-target state machine
+  (`FocusTargetModel`), the shared vim-motion dispatch (`TryDispatch`), and the
+  pane-failure fallback (`PaneFailureTracker`).
+- `dotnet run --project tests/NeoVisual.Tests` — **130 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
   re-entry guard (`InjectedKeyGuard`), the pure Explorer tree-walk seam
   (`HierarchyResolver`), `DistinctBy`, the shared vim-motion engine
   (`TextMotionHelper`), the action-table controllers (`ActionKeys`), the focus
-  guard (`FocusGuard`), and the navigation engine (`RectCoordinate`,
-  `NavigationSettings`, `WindowNavigationEngine`).
+  guard (`FocusGuard`), the navigation engine (`RectCoordinate`,
+  `NavigationSettings`, `WindowNavigationEngine`), the leader/shortcut matchers
+  (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`), the vim-mode classifier
+  (`VimModeClassifier` + `IVimModeSource`), the init orchestrator (`InitSteps`),
+  the navigation snapshot (`NavigationSnapshot`), and the focus-keeper schedule
+  (`FocusKeeperSchedule`).
 
 `InternalsVisibleTo` is set for these assemblies. Extract pure logic into
 dependency-free classes (the `OverlayKeyHandler` / `TextMotionNavigator` pattern) so

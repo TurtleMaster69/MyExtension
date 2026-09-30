@@ -37,7 +37,8 @@ Classification of a backticked token:
 #>
 [CmdletBinding()]
 param(
-    [string[]]$Docs = $null
+    [string[]]$Docs = $null,
+    [switch]$SelfCheck
 )
 
 $ErrorActionPreference = 'Continue'
@@ -88,7 +89,10 @@ $externalAllowlist = @(
     'IsCompletionActive', 'IsEmpty', 'Intersects', 'HashCode', 'MaxBy', 'MinBy',
     # Trailmark graph-export docs (W23) cite the Python builtin exceptions raised by
     # the wrong to_json() usage — external runtime names, not C# symbols.
-    'TypeError', 'KeyError'
+    'TypeError', 'KeyError',
+    # .NET BCL interop types cited by the code-review-hub / code-review-worker agent
+    # docs (2026-09-29) in the P/Invoke review context — external runtime types.
+    'SafeHandle'
 )
 
 # File paths the docs mention that are intentionally absent (documented-absent).
@@ -127,6 +131,7 @@ $bareNameAllowlist = @(
 # harness module). When the item lands, the real name must replace the proposal.
 $proposedSymbols = @(
     'LeaderSequenceMatcher', 'SimpleKeyBuilder'          # F22 — proposed extraction
+    'FzfFinder', 'FocusKeeper'                          # code-review backlog — proposed finder / M26 helper
 )
 $proposedPaths = @(
     'tools/harness-common.ps1'                           # F37 — proposed shared module
@@ -152,6 +157,8 @@ $templatePaths = @(
     '.opencode/workspaces',                             # hub workspaces root (created at runtime)
     '.opencode/plugin/compaction.ts',                   # optional compaction plugin hook (knowledge-base §6)
     '.opencode/workspaces/<hub>/sessions/<session-id>', # session-scoped workspace template (§9)
+    '.opencode/workspaces/code-review-hub/sessions/<session-id>',       # concrete hub workspace template (code-review-hub agent docs)
+    '.opencode/workspaces/neovim-planning-hub/sessions/<session-id>',   # concrete hub workspace template (neovim-planning-hub agent docs)
     '.opencode/skills/<name>'                           # skill discovery-path template
 )
 
@@ -162,6 +169,7 @@ $verbNounRegex = [regex]'^[A-Z][a-z]+-[A-Z][a-zA-Z]*$'
 $pathSuffixRe  = [regex]'\.(cs|json|ps1|slnx|md)$'
 
 $issues = @()
+$warnings = @()
 $refCount = 0
 
 function Test-SymbolExists([string]$token) {
@@ -171,7 +179,11 @@ function Test-SymbolExists([string]$token) {
 function Test-ToolFunctionExists([string]$token) {
     if (Get-Command -Name $token -ErrorAction SilentlyContinue) { return $true }  # built-in cmdlet
     foreach ($f in Get-ChildItem (Join-Path $repoRoot 'tools') -Filter '*.ps1') {
-        if ([regex]::IsMatch([System.IO.File]::ReadAllText($f.FullName), "\b$([regex]::Escape($token))\b")) {
+        # m27: definition-anchored match — `(?m)^function\s+<token>\b` resolves only a real function
+        # definition at a line start, not any whole-file occurrence of the token. MUST use (?m)
+        # (Multiline) so ^ anchors at line starts; without it ^ anchors at string start and nothing
+        # resolves.
+        if ([regex]::IsMatch([System.IO.File]::ReadAllText($f.FullName), "(?m)^function\s+$([regex]::Escape($token))\b")) {
             return $true
         }
     }
@@ -196,9 +208,55 @@ function Test-PathRef([string]$token) {
     return [bool]$hit
 }
 
+if ($SelfCheck) {
+    # No-VS seam (m27): prove the lint catches a deleted-function reference (exit 1 + issue line)
+    # and warns non-fatally on a missing doc (exit 0), WITHOUT touching the real doc set. Re-invokes
+    # this script as a child process against temp docs so the stderr diagnostics are captured.
+    try {
+        Write-Host '==> SelfCheck (no VS)' -ForegroundColor Cyan
+        $tmpDir = Join-Path $env:TEMP ("docrefs_selfcheck_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+        try {
+            # (1) deleted-function doc -> exit 1 + the issue line.
+            $badDoc = Join-Path $tmpDir 'bad.md'
+            [System.IO.File]::WriteAllText($badDoc, "This references ``Some-DeletedFunction`` which does not exist.`n")
+            $out = & (Join-Path $PSHOME 'pwsh.exe') -NoProfile -File $PSCommandPath -Docs $badDoc 2>&1
+            $code = $LASTEXITCODE
+            $joined = ($out | Out-String)
+            if ($code -ne 1) { throw "SelfCheck: deleted-function doc exited $code (expected 1)" }
+            if ($joined -notmatch 'no such PowerShell function/cmdlet in tools/') { throw 'SelfCheck: deleted-function issue line missing' }
+            Write-Host '    PASS: SelfCheck: deleted-function doc fails with the expected issue line' -ForegroundColor Green
+
+            # (2) nonexistent doc path -> warning line + exit 0.
+            $missingDoc = Join-Path $tmpDir 'does-not-exist.md'
+            $out2 = & (Join-Path $PSHOME 'pwsh.exe') -NoProfile -File $PSCommandPath -Docs $missingDoc 2>&1
+            $code2 = $LASTEXITCODE
+            $joined2 = ($out2 | Out-String)
+            if ($code2 -ne 0) { throw "SelfCheck: missing-doc run exited $code2 (expected 0)" }
+            if ($joined2 -notmatch 'WARNING: .*doc file not found \(skipped\)') { throw 'SelfCheck: missing-doc warning line missing' }
+            Write-Host '    PASS: SelfCheck: missing-doc warning emitted and exit stays 0' -ForegroundColor Green
+        } finally {
+            if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+        Write-Host 'SELFTEST PASS' -ForegroundColor Green
+        exit 0
+    } catch {
+        Write-Host "SELFTEST FAIL: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
+
 foreach ($docRel in $Docs) {
-    $docPath = Join-Path $repoRoot $docRel
-    if (-not (Test-Path -LiteralPath $docPath)) { continue }   # doc may legitimately not exist yet
+    # m27/BP-16: accept an absolute doc path (the -SelfCheck temp docs live in %TEMP%);
+    # Join-Path would concatenate a rooted path onto $repoRoot into a garbage path.
+    $docPath = if ([System.IO.Path]::IsPathRooted($docRel)) { $docRel } else { Join-Path $repoRoot $docRel }
+    if (-not (Test-Path -LiteralPath $docPath)) {
+        # m27: a missing doc is tolerated (it may legitimately not exist yet) but no longer silent —
+        # emit a non-fatal warning. Exit code stays 0 when only warnings exist.
+        $warnings += $docRel
+        [Console]::Error.WriteLine("WARNING: $docRel — doc file not found (skipped)")
+        continue
+    }
     $text = [System.IO.File]::ReadAllText($docPath)
     foreach ($m in $tokenRegex.Matches($text)) {
         $token = $m.Value.Trim()

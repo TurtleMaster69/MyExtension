@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using CardinalNavigation;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text.Editor;
 using MyExtension;
 using TestHarness;
+using static TestHarness.TestScaffold;
 
 namespace NeoVisual.Tests
 {
@@ -20,6 +23,18 @@ namespace NeoVisual.Tests
 
     internal static class Tests
     {
+        // Reads a file with FileShare.ReadWrite so it can be read while the buffered
+        // LogFileWriter still holds it open (File.ReadAllText uses FileShare.Read, which
+        // conflicts with the writer's existing FileAccess.Write -> sharing violation).
+        private static string ReadAllTextShared(string path)
+        {
+            using (var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+            using (var sr = new System.IO.StreamReader(fs))
+            {
+                return sr.ReadToEnd();
+            }
+        }
+
         // ================================================================
         // KeybindingConfig — leader key + binding parsing
         // ================================================================
@@ -75,13 +90,59 @@ namespace NeoVisual.Tests
         {
             // Sanity check the shipped defaults: the leader binding for Telescope and the four
             // cardinal nav shortcuts must survive a full Load() (embedded resource present).
-            var cfg = KeybindingConfig.Load();
+            // embedded defaults only (hermetic — never reads the user's %APPDATA% file)
+            var cfg = KeybindingConfig.LoadDefaults();
             Assert.True(cfg.Bindings.ContainsKey("F,T"), "F,T -> telescope binding present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+H"), "Ctrl+H -> navigate-left present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+J"), "Ctrl+J -> navigate-down present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+K"), "Ctrl+K -> navigate-up present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+L"), "Ctrl+L -> navigate-right present");
             Assert.Equal(Keys.Space, cfg.LeaderKey);
+        }
+
+        // ================================================================
+        // KeyNames — shared printable-key mapping (M21)
+        // RED: `KeyNames` does not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_KeyNames_PrintableMappings()
+        {
+            // The printable-key contract shared by the leader and shortcut paths: the "/" key
+            // (Keys.OemQuestion) must map to "/", "+" (Oemplus) to "+", "-" (OemMinus) to "-",
+            // and a plain letter to its enum name.
+            Assert.Equal("/", KeyNames.ToString(Keys.OemQuestion));
+            Assert.Equal("+", KeyNames.ToString(Keys.Oemplus));
+            Assert.Equal("-", KeyNames.ToString(Keys.OemMinus));
+            Assert.Equal("F", KeyNames.ToString(Keys.F));
+        }
+
+        public static void Run_KeyNames_RoundTrip_LeaderSequence()
+        {
+            // The shipped "/" leader binding must round-trip: bind "/" -> action, drive Space then
+            // the physical "/" key (Keys.OemQuestion) through the leader matcher, and the matched
+            // sequence must be the printable "/" (not "OemQuestion").
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["/"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var result = matcher.HandleKey(Keys.OemQuestion, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.Execute, result.Kind);
+            Assert.Equal<string?>("/", result.Sequence);
+            Assert.Equal(1, executed);
+        }
+
+        public static void Run_KeyNames_RoundTrip_SimpleShortcut()
+        {
+            // The "Ctrl+/" config key must survive parsing, and KeyNames.ToString(Keys.OemQuestion)
+            // must produce the "/" that makes the Ctrl+/ config key match (the round-trip contract).
+            var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"Ctrl+/\":\"navigate-left\"}}");
+            Assert.True(cfg.Bindings.ContainsKey("Ctrl+/"), "the Ctrl+/ config key is preserved");
+            Assert.Equal("Ctrl+/", "Ctrl+" + KeyNames.ToString(Keys.OemQuestion));
         }
 
         // ================================================================
@@ -106,7 +167,7 @@ namespace NeoVisual.Tests
         // GeneralToolWindowController — text-input classification (default mode)
         // ================================================================
 
-        public static void Run_ToolWindowMode_TextInputTypesStartInInsert()
+        public static void Run_ToolWindowMode_TextInputTypesClassified()
         {
             Assert.True(GeneralToolWindowController.IsTextInputType(ToolWindowType.CommandWindow), "CommandWindow is text input");
             Assert.True(GeneralToolWindowController.IsTextInputType(ToolWindowType.ImmediateWindow), "ImmediateWindow is text input");
@@ -114,7 +175,7 @@ namespace NeoVisual.Tests
             Assert.True(GeneralToolWindowController.IsTextInputType(ToolWindowType.WebBrowserWindow), "WebBrowserWindow is text input");
         }
 
-        public static void Run_ToolWindowMode_NavigationTypesStartInNormal()
+        public static void Run_ToolWindowMode_NavigationTypesClassified()
         {
             Assert.False(GeneralToolWindowController.IsTextInputType(ToolWindowType.SolutionExplorer), "SolutionExplorer is navigation");
             Assert.False(GeneralToolWindowController.IsTextInputType(ToolWindowType.OutputWindow), "OutputWindow is navigation");
@@ -158,6 +219,29 @@ namespace NeoVisual.Tests
         {
             var controller = new GeneralToolWindowController(ToolWindowType.Toolbox);
             Assert.Equal(0, controller.ActionKeys.Count);
+        }
+
+        // ================================================================
+        // WindowManager.DefaultControllerFor — CR1 static pure factory (BP-1)
+        // RED: `WindowManager.DefaultControllerFor` does not exist yet -> compile error
+        // The existing controller tests construct controllers directly and never construct a
+        // WindowManager, so they give false confidence and cannot catch the per-type loop
+        // overwriting the SolutionExplorerController. This pins the factory contract instead.
+        // ================================================================
+
+        public static void Run_WindowManager_DefaultControllerFor()
+        {
+            // SolutionExplorer and Unknown have NO default controller (the specialized
+            // SolutionExplorerController is registered separately by the package); CommandWindow is
+            // a text-input surface; Toolbox is a plain navigation surface.
+            Assert.True(WindowManager.DefaultControllerFor(ToolWindowType.SolutionExplorer) == null,
+                "SolutionExplorer has no default controller (the specialized one is registered separately)");
+            Assert.True(WindowManager.DefaultControllerFor(ToolWindowType.Unknown) == null,
+                "Unknown has no default controller");
+            Assert.True(WindowManager.DefaultControllerFor(ToolWindowType.CommandWindow) is TextInputToolWindowController,
+                "CommandWindow defaults to a TextInputToolWindowController");
+            Assert.True(WindowManager.DefaultControllerFor(ToolWindowType.Toolbox) is GeneralToolWindowController,
+                "Toolbox defaults to a GeneralToolWindowController");
         }
 
         // ================================================================
@@ -249,6 +333,104 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // HierarchyForestBuilder — pure forest builder over HierarchyItemInfo DTOs
+        // (M14: extract the DTE-coupled BuildForest recursion into a testable seam)
+        // ================================================================
+
+        public static void Run_HierarchyForestBuilder_NestedFoldersProduceNestedChildren()
+        {
+            // folder -> folder -> file: the builder recurses physical folders and nests the
+            // file node under the inner folder node.
+            var items = new[]
+            {
+                new HierarchyItemInfo(
+                    HierarchyResolver.PhysicalFolderKind, "Models", "",
+                    new[]
+                    {
+                        new HierarchyItemInfo(
+                            HierarchyResolver.PhysicalFolderKind, "Sub", "",
+                            new[]
+                            {
+                                new HierarchyItemInfo(
+                                    HierarchyResolver.PhysicalFileKind, "User.cs", @"C:\p\Models\Sub\User.cs", null),
+                            }),
+                    }),
+            };
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var forest = HierarchyForestBuilder.Build(items, map);
+
+            Assert.Equal(1, forest.Count);
+            Assert.Equal(HierarchyResolver.PhysicalFolderKind, forest[0].Kind);
+            Assert.Equal(1, forest[0].Children!.Count);
+            Assert.Equal(HierarchyResolver.PhysicalFolderKind, forest[0].Children![0].Kind);
+            Assert.Equal(1, forest[0].Children![0].Children!.Count);
+            Assert.Equal(HierarchyResolver.PhysicalFileKind, forest[0].Children![0].Children![0].Kind);
+        }
+
+        public static void Run_HierarchyForestBuilder_CsFilterCaseInsensitive()
+        {
+            // The .cs filter is OrdinalIgnoreCase: an uppercase-extension Program.CS is included,
+            // a non-.cs App.config is not.
+            var items = new[]
+            {
+                new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Program.CS", @"C:\p\Program.CS", null),
+                new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "App.config", @"C:\p\App.config", null),
+            };
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var forest = HierarchyForestBuilder.Build(items, map);
+
+            Assert.Equal(1, forest.Count);
+            Assert.Equal("Program.CS", forest[0].Name);
+            Assert.Equal(HierarchyResolver.PhysicalFileKind, forest[0].Kind);
+        }
+
+        public static void Run_HierarchyForestBuilder_FullPathFlowsThroughAndPathMap()
+        {
+            // The file's FullPath lands in HierarchyNode.FilePath AND is recorded in the passed
+            // pathToItem map (path -> path identity; the DTE adapter owns the real path->item map).
+            const string fullPath = @"C:\p\Alpha.cs";
+            var items = new[]
+            {
+                new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Alpha.cs", fullPath, null),
+            };
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var forest = HierarchyForestBuilder.Build(items, map);
+
+            Assert.Equal(1, forest.Count);
+            Assert.Equal(fullPath, forest[0].FilePath);
+            Assert.True(map.ContainsKey(fullPath), "pathToItem records the added .cs file");
+            Assert.Equal(fullPath, map[fullPath]);
+        }
+
+        public static void Run_HierarchyForestBuilder_NonFolderNonFileKindsSkipped()
+        {
+            // An unknown Kind GUID is skipped: not recursed (its .cs child must not appear) and
+            // not added to the forest.
+            var items = new[]
+            {
+                new HierarchyItemInfo("{00000000-0000-0000-0000-000000000000}", "Dependencies", "",
+                    new[]
+                    {
+                        new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Hidden.cs", @"C:\p\Hidden.cs", null),
+                    }),
+            };
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var forest = HierarchyForestBuilder.Build(items, map);
+
+            Assert.Equal(0, forest.Count);
+            Assert.False(map.ContainsKey(@"C:\p\Hidden.cs"), "unknown-kind children are not recursed");
+        }
+
+        public static void Run_HierarchyForestBuilder_EmptyChildrenEmptyForest()
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var forest = HierarchyForestBuilder.Build(new HierarchyItemInfo[0], map);
+
+            Assert.True(forest != null, "Build returns a list");
+            Assert.Equal(0, forest.Count);
+        }
+
+        // ================================================================
         // TextInputToolWindowController — vim text motions in text-input windows
         // ================================================================
 
@@ -257,26 +439,6 @@ namespace NeoVisual.Tests
             var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
             Assert.True(controller.IsInputMode, "text-input windows start in insert mode");
             Assert.False(controller.ActionKeys.Count == 0, "text-input controller exposes action keys");
-        }
-
-        public static void Run_TextInput_MapMotions()
-        {
-            Assert.Equal(TextMotion.Left, TextMotionHelper.MapMotion(Keys.H, false));
-            Assert.Equal(TextMotion.Right, TextMotionHelper.MapMotion(Keys.L, false));
-            Assert.Equal(TextMotion.NextWord, TextMotionHelper.MapMotion(Keys.W, false));
-            Assert.Equal(TextMotion.PrevWord, TextMotionHelper.MapMotion(Keys.B, false));
-            Assert.Equal(TextMotion.EndWord, TextMotionHelper.MapMotion(Keys.E, false));
-        }
-
-        public static void Run_TextInput_MapInsertMotions()
-        {
-            // A (Shift+a) = insert at end; a = insert after caret; I (Shift+i) = insert at start.
-            Assert.Equal(TextMotion.InsertEnd, TextMotionHelper.MapMotion(Keys.A, true));
-            Assert.Equal(TextMotion.InsertAfter, TextMotionHelper.MapMotion(Keys.A, false));
-            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
-            // A bare i (no shift) is the generic insert handled by InputHandler, not a motion.
-            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.I, false));
-            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.X, false));
         }
 
         // ================================================================
@@ -457,26 +619,29 @@ namespace NeoVisual.Tests
         // FocusGuard — tool-window routing decision (pure seam)
         // ================================================================
 
+        // Guard only checks > 0 — any positive action-key count behaves identically.
+        private const int PositiveActionKeyCount = 5;
+
         public static void Run_FocusGuard_EditorFocusedBlocksRouting()
         {
             // The leak: with stale tool-window state but an editor focused, routing must be off.
             Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused tool window must not route keys");
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true, isTextInputSurface: false),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused action keys must not be interesting");
         }
 
         public static void Run_FocusGuard_TreeFocusedAllowsRouting()
         {
             Assert.True(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "tree-focused tool window routes keys");
             Assert.True(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: false, isTextInputSurface: false),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "tree-focused action keys are interesting");
         }
 
@@ -484,7 +649,7 @@ namespace NeoVisual.Tests
         {
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: true, actionKeyCount: 5, editorFocused: false, isTextInputSurface: false),
+                    isToolWindow: true, isInputMode: true, actionKeyCount: PositiveActionKeyCount, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "input-mode tool window has no action-key pre-filter");
         }
 
@@ -492,7 +657,7 @@ namespace NeoVisual.Tests
         {
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 0, editorFocused: false, isTextInputSurface: false),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 0, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "zero action keys is never interesting");
         }
 
@@ -500,10 +665,10 @@ namespace NeoVisual.Tests
         {
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: false, isInputMode: false, actionKeyCount: 5, editorFocused: false, isTextInputSurface: false),
+                    isToolWindow: false, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "non-tool-window has no action-key pre-filter");
             Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "non-tool-window routes nothing");
         }
 
@@ -517,43 +682,70 @@ namespace NeoVisual.Tests
             // A text-input surface (Command Window) owns the keyboard even when the editor flag
             // is stale — the exception that keeps text-input routing alive.
             Assert.True(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
                 "a text-input surface routes keys despite the stale editor flag");
         }
 
         public static void Run_FocusGuard_TruthTable_InputModeOwnsKeyboard()
         {
             Assert.True(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: true, isTextInputSurface: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: true, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "input-mode tool window routes keys despite the stale editor flag");
         }
 
         public static void Run_FocusGuard_TruthTable_EditorVetoesNavigation()
         {
             Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused navigation tool window must not route keys");
         }
 
         public static void Run_FocusGuard_TruthTable_NonToolWindowNeverRoutes()
         {
             Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "non-tool-window never routes");
         }
 
         public static void Run_FocusGuard_TruthTable_ActionKeysTextInputSurface()
         {
             Assert.True(
-                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true, isTextInputSurface: true),
+                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: true),
                 "text-input-surface action keys are interesting despite the stale editor flag");
         }
 
         public static void Run_FocusGuard_TruthTable_ActionKeysEditorVeto()
         {
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: 5, editorFocused: true, isTextInputSurface: false),
+                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused action keys are not interesting");
+        }
+
+        public static void Run_FocusGuard_TextInputSurfaceFocused_EditorFocusedNotFocusedSurface()
+        {
+            // M16: a text-input surface only owns the keyboard when it genuinely holds focus.
+            // With the editor focused and the text-input surface NOT focused, routing must be off
+            // (the current isTextInputSurface exemption leaks — it returns TRUE here).
+            Assert.False(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 6, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: false),
+                "editor-focused, non-focused text-input surface must not expose action keys");
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: false),
+                "editor-focused, non-focused text-input surface must not route keys");
+        }
+
+        public static void Run_FocusGuard_TextInputSurfaceFocused_GenuinelyFocusedOwnsKeyboard()
+        {
+            // D4 preservation: a text-input surface that genuinely holds focus owns the keyboard
+            // even when the editor-focus flag is stale.
+            Assert.True(
+                FocusGuard.HasToolWindowActionKeys(
+                    isToolWindow: true, isInputMode: false, actionKeyCount: 6, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: true),
+                "genuinely-focused text-input surface action keys are interesting");
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
+                "genuinely-focused text-input surface routes keys");
         }
 
         public static void Run_FocusGuard_IsTypingTruthTable()
@@ -578,6 +770,181 @@ namespace NeoVisual.Tests
             Assert.False(
                 FocusGuard.IsTyping(isToolWindow: true, isInputMode: false, editorFocused: false, editorInTypingMode: false),
                 "tool-window normal mode is not typing");
+        }
+
+        // ================================================================
+        // FocusKeeperSchedule — pure focus-keeper tick decision (M26)
+        // RED: `FocusKeeperSchedule` does not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_FocusKeeperSchedule_TruthTable()
+        {
+            // The pure decision the focus-keeper timer tick makes each 100ms:
+            //   - search box focused + escape attempts < 4  -> inject Escape
+            //   - elapsed >= duration                        -> stop (elapsed wins)
+            //   - otherwise                                  -> re-assert the selection
+            Assert.Equal(FocusKeeperSchedule.Decision.InjectEscape, FocusKeeperSchedule.Decide(true, 0, 0, 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Reassert, FocusKeeperSchedule.Decide(true, 0, 4, 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Reassert, FocusKeeperSchedule.Decide(false, 0, 0, 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(false, 1500, 0, 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 1500, 0, 1500));
+        }
+
+        // ================================================================
+        // VimModeState — pure owner of typing/mode state + focus guards + resolution latch (M17)
+        // RED: `VimModeState` does not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_VimModeState_OutOfOrderLostFocusKeepsTyping()
+        {
+            // M17: an out-of-order LostFocus from a non-focused view must not clear the typing
+            // flag (VimModeTracker.cs:189 currently clears _cachedTyping unconditionally).
+            var state = new VimModeState();
+            state.SetMode(VimModeState.Insert);
+            state.OnViewLostFocus(isFocusedView: false);
+            Assert.True(state.IsTyping, "out-of-order LostFocus must not clear typing");
+        }
+
+        public static void Run_VimModeState_ClosedNonFocusedKeepsTyping()
+        {
+            // M17: a Closed event from a non-focused view must not clear the typing flag
+            // (VimModeTracker.cs:209 currently clears _cachedTyping unconditionally).
+            var state = new VimModeState();
+            state.SetMode(VimModeState.Insert);
+            state.OnViewClosed(isFocusedView: false);
+            Assert.True(state.IsTyping, "non-focused Closed must not clear typing");
+        }
+
+        public static void Run_VimModeState_ClassificationTruthTable()
+        {
+            // Pins the vim-mode= name contract: Normal/Insert/Replace/Unknown + the typing flag.
+            var state = new VimModeState();
+            state.SetMode(VimModeState.Normal);
+            Assert.False(state.IsTyping, "Normal is not typing");
+            Assert.Equal("Normal", state.ModeName);
+            state.SetMode(VimModeState.Insert);
+            Assert.True(state.IsTyping, "Insert is typing");
+            Assert.Equal("Insert", state.ModeName);
+            state.SetMode(VimModeState.Replace);
+            Assert.True(state.IsTyping, "Replace is typing");
+            Assert.Equal("Replace", state.ModeName);
+            state.SetMode(null);
+            Assert.False(state.IsTyping, "null mode is not typing");
+            Assert.Equal("Unknown", state.ModeName);
+        }
+
+        public static void Run_VimModeState_ResolutionRetriesAfterFailure()
+        {
+            // M17: a failed VsVim resolution must not latch (VimModeTracker.cs:488 sets
+            // _resolved = true before the try) — the next call retries the resolver.
+            var state = new VimModeState();
+            int failures = 0;
+            int resolves = 0;
+
+            object? first = state.ResolveOnce(
+                () => throw new InvalidOperationException("MEF down"),
+                _ => failures++);
+            Assert.True(first == null, "failed resolution returns null");
+            Assert.Equal(1, failures);
+
+            object? second = state.ResolveOnce(
+                () => { resolves++; return "vim"; },
+                _ => failures++);
+            Assert.Equal("vim", second);
+            Assert.Equal(1, resolves);
+            Assert.Equal(1, failures);
+
+            object? third = state.ResolveOnce(
+                () => { resolves++; return "vim"; },
+                _ => failures++);
+            Assert.Equal("vim", third);
+            Assert.Equal(1, resolves);
+            Assert.Equal(1, failures);
+        }
+
+        // ================================================================
+        // VimModeClassifier — pure vim-mode classification (M32)
+        // RED: `VimModeClassifier`/`IVimModeSource` don't exist -> compile error (CS0246/CS0103)
+        // ================================================================
+
+        public static void Run_VimModeClassifier_InsertIsTyping()
+        {
+            Assert.True(VimModeClassifier.Classify(2).IsTyping, "Insert (2) is typing");
+        }
+
+        public static void Run_VimModeClassifier_ReplaceIsTyping()
+        {
+            Assert.True(VimModeClassifier.Classify(7).IsTyping, "Replace (7) is typing");
+        }
+
+        public static void Run_VimModeClassifier_NormalNotTyping()
+        {
+            Assert.False(VimModeClassifier.Classify(1).IsTyping, "Normal (1) is not typing");
+        }
+
+        public static void Run_VimModeClassifier_NullNotTyping()
+        {
+            Assert.False(VimModeClassifier.Classify(null).IsTyping, "null mode is not typing");
+        }
+
+        public static void Run_VimModeClassifier_Names()
+        {
+            // Pins the vim-mode= name contract: Normal/Insert/Replace/Unknown + the numeric
+            // fallback for an unknown mode.
+            Assert.Equal("Normal", VimModeClassifier.Classify(1).Name);
+            Assert.Equal("Insert", VimModeClassifier.Classify(2).Name);
+            Assert.Equal("Replace", VimModeClassifier.Classify(7).Name);
+            Assert.Equal("99", VimModeClassifier.Classify(99).Name);
+            Assert.Equal("Unknown", VimModeClassifier.Classify(null).Name);
+        }
+
+        // ================================================================
+        // VimModeSource — IVimModeSource fake drives the tracker (M32)
+        // RED: `IVimModeSource` doesn't exist -> compile error (CS0246);
+        //       `new VimModeTracker(source)` has no ctor taking IVimModeSource -> CS1729
+        // ================================================================
+
+        public static void Run_VimModeSource_FakeDrivesTypingFlag()
+        {
+            var source = new FakeVimModeSource();
+            var tracker = new VimModeTracker(source);
+
+            source.Mode = 2;
+            source.RaiseModeChanged();
+            Assert.True(tracker.IsInTypingMode, "Insert (2) drives IsInTypingMode true");
+
+            source.Mode = 1;
+            source.RaiseModeChanged();
+            Assert.False(tracker.IsInTypingMode, "Normal (1) drives IsInTypingMode false");
+        }
+
+        public static void Run_VimModeSource_FakeLogsVimMode()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = System.IO.Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var source = new FakeVimModeSource();
+                    var tracker = new VimModeTracker(source);
+
+                    source.Mode = 2;
+                    source.RaiseModeChanged();
+                    Telescope.LogFileWriter.Flush();
+
+                    string content = ReadAllTextShared(logPath);
+                    Assert.True(content.Contains("[NeoVisual] vim-mode=Insert"),
+                        "Insert mode logs vim-mode=Insert");
+
+                    source.Mode = 1;
+                    source.RaiseModeChanged();
+                    Telescope.LogFileWriter.Flush();
+
+                    content = ReadAllTextShared(logPath);
+                    Assert.True(content.Contains("[NeoVisual] vim-mode=Normal"),
+                        "Normal mode logs vim-mode=Normal");
+                });
+            }
         }
 
         // ================================================================
@@ -621,12 +988,34 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionsRegistry_TelescopeMapsToFinder()
         {
-            // The 5 telescope action names map to the finder names the launcher opens.
-            Assert.Equal("Files", TelescopeLauncher.FinderNames["telescope"]);
-            Assert.Equal("Issues", TelescopeLauncher.FinderNames["telescope-issues"]);
-            Assert.Equal("References", TelescopeLauncher.FinderNames["telescope-references"]);
-            Assert.Equal("Implementation", TelescopeLauncher.FinderNames["telescope-implementation"]);
-            Assert.Equal("Grep", TelescopeLauncher.FinderNames["telescope-grep"]);
+            // M30: every telescope action in the Registry must resolve to a finder name in
+            // TelescopeLauncher.FinderNames (the single source of truth) — set-equality of the two
+            // key sets, and each telescope action maps to a non-empty finder name. A telescope
+            // action with no FinderNames entry would throw KeyNotFoundException in the hook path.
+            var registryTelescopeKeys = Actions.Registry.Keys
+                .Where(k => k.StartsWith("telescope", StringComparison.OrdinalIgnoreCase))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var finderNamesKeys = TelescopeLauncher.FinderNames.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.True(registryTelescopeKeys.SetEquals(finderNamesKeys),
+                "telescope action keys must exactly match FinderNames keys");
+            foreach (string key in registryTelescopeKeys)
+            {
+                string finder = TelescopeLauncher.FinderNames[key];
+                Assert.True(!string.IsNullOrEmpty(finder), $"telescope action '{key}' must map to a finder name");
+            }
+        }
+
+        public static void Run_ActionsRegistry_TelescopeKeysMatchFinderNames()
+        {
+            // M30: the telescope action names in Actions.Registry must EXACTLY match the keys of
+            // TelescopeLauncher.FinderNames (the single source of truth). A 6th telescope action
+            // added to one map but not the other would throw KeyNotFoundException in the hook path.
+            var registryTelescopeKeys = Actions.Registry.Keys
+                .Where(k => k.StartsWith("telescope", StringComparison.OrdinalIgnoreCase))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var finderNamesKeys = TelescopeLauncher.FinderNames.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.True(registryTelescopeKeys.SetEquals(finderNamesKeys),
+                "Actions.Registry telescope keys must exactly match TelescopeLauncher.FinderNames keys");
         }
 
         // ================================================================
@@ -825,6 +1214,81 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // DirectionExtensions.ToChar (M40, BP-3) — the single-char token contract.
+        // InputHandler logs `navigate direction={direction.ToChar()}` and the harness asserts
+        // `navigate direction=L/R/D/U` — the emitted token MUST be byte-identical single-char.
+        // RED: `ToChar` does not exist yet -> compile error (CS1061).
+        // ================================================================
+
+        public static void Run_Direction_ToChar()
+        {
+            Assert.Equal('L', Direction.Left.ToChar());
+            Assert.Equal('R', Direction.Right.ToChar());
+            Assert.Equal('U', Direction.Up.ToChar());
+            Assert.Equal('D', Direction.Down.ToChar());
+        }
+
+        // ================================================================
+        // NavigationSnapshot — single-pass rect snapshot (M2, BP-1)
+        // RED: `NavigationSnapshot` doesn't exist -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_NavigationSnapshot_ActiveComesFromSnapshot()
+        {
+            // M2 (BP-1): the active rect is derived from the snapshot's candidate list
+            // (single-pass — no separate m_activeWindow.Rect re-fetch / N+1).
+            var rects = new[]
+            {
+                new RectCoordinate(0, 0, 100, 100),
+                new RectCoordinate(200, 0, 100, 100),
+            };
+            var snapshot = NavigationSnapshot.Capture(rects, 1);
+            Assert.Equal(snapshot.Candidates[1], snapshot.Active);
+        }
+
+        public static void Run_NavigationSnapshot_ActiveIndexOutOfRange_ReturnsNull()
+        {
+            // M2 (BP-1): an out-of-range active index (IndexOf returns -1, or the active
+            // window is not in the list) must no-op — Capture returns null so the caller
+            // returns without indexing Candidates[ActiveIndex] out of range.
+            var rects = new[]
+            {
+                new RectCoordinate(0, 0, 100, 100),
+                new RectCoordinate(200, 0, 100, 100),
+            };
+            Assert.Equal(null, NavigationSnapshot.Capture(rects, -1));
+            Assert.Equal(null, NavigationSnapshot.Capture(rects, rects.Length));
+        }
+
+        // ================================================================
+        // WindowAdapter.TryGetScreenRect — M12 null-frame + Empty fallback (BP-4)
+        // RED: `WindowAdapter.TryGetScreenRect` doesn't exist -> compile error (CS0117)
+        // ================================================================
+
+        public static void Run_WindowAdapter_TryGetScreenRect_NullFrameReturnsNull()
+        {
+            // M12 (BP-4): a null IVsWindowFrame4 must yield null (the old code path
+            // `(IVsWindowFrame4)_frame` throws InvalidCastException on a non-conforming frame).
+            Assert.Equal(null, WindowAdapter.TryGetScreenRect(null));
+        }
+
+        public static void Run_WindowAdapter_TryGetScreenRect_EmptyRectExcludedBySelectTarget()
+        {
+            // M12 (BP-4): RefreshRect falls back to RectCoordinate.Empty (BP-4 adds the
+            // constant) when the frame4 cast/rect fetch fails; SelectTarget must exclude
+            // that (0,0,0,0) entry and return the real candidate — mirrors
+            // Run_WindowNavigationEngine_HiddenZeroRect_Excluded above.
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new RectCoordinate(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new RectCoordinate(0, 0, 0, 0),        // RectCoordinate.Empty fallback (BP-4 adds the constant)
+                new RectCoordinate(100, 0, 100, 50),  // the only real candidate
+            };
+            Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        // ================================================================
         // LeaderSequenceMatcher — pure leader state machine (F22)
         // RED: `LeaderSequenceMatcher`/`LeaderResult`/`LeaderResultKind` don't exist -> compile error
         // ================================================================
@@ -951,5 +1415,326 @@ namespace NeoVisual.Tests
             Assert.False(matcher.IsActive, "inactive matcher stays inactive");
             Assert.Equal(0, executed);
         }
+
+        public static void Run_LeaderMatcher_ThrowingActionIsCaught()
+        {
+            // M15: a binding handler that throws must not escape the hook path. The matcher
+            // returns a Failed result carrying the handler's message and clears its state.
+            // RED today: `action()` at LeaderSequenceMatcher.cs:63 throws and the exception
+            // escapes HandleKey (and this test). The Failed seam does not exist yet.
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => throw new KeyNotFoundException("bad finder"),
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var result = matcher.HandleKey(Keys.F, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.Failed, result.Kind);
+            Assert.Equal<string?>("F", result.Sequence);
+            Assert.True(result.ErrorMessage != null && result.ErrorMessage.Contains("bad finder"),
+                "ErrorMessage carries the handler's message");
+            Assert.False(matcher.IsActive, "a failed execution still ends the sequence");
+        }
+
+        // ================================================================
+        // SimpleShortcutMatcher — pure simple-shortcut state machine (M31)
+        // RED: `SimpleShortcutMatcher`/`SimpleShortcutResult`/`SimpleShortcutResultKind` don't
+        // exist -> compile error (CS0246/CS0103)
+        // ================================================================
+
+        public static void Run_SimpleShortcutMatcher_CtrlHExecutes()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Ctrl+H"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var result = matcher.HandleKey(Keys.H, true, false, false);
+
+            Assert.Equal(SimpleShortcutResultKind.Execute, result.Kind);
+            Assert.Equal<string?>("Ctrl+H", result.Sequence);
+            Assert.Equal(1, executed);
+        }
+
+        public static void Run_SimpleShortcutMatcher_NoModifierPassesThrough()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Ctrl+H"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var result = matcher.HandleKey(Keys.A, false, false, false);
+
+            Assert.Equal(SimpleShortcutResultKind.PassThrough, result.Kind);
+            Assert.Equal(0, executed);
+        }
+
+        public static void Run_SimpleShortcutMatcher_UnboundChordPassesThrough()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Ctrl+J"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var result = matcher.HandleKey(Keys.H, true, false, false);
+
+            Assert.Equal(SimpleShortcutResultKind.PassThrough, result.Kind);
+            Assert.Equal(0, executed);
+        }
+
+        public static void Run_SimpleShortcutMatcher_ModifierOrderShiftF4()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Shift+F4"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var result = matcher.HandleKey(Keys.F4, false, true, false);
+
+            Assert.Equal(SimpleShortcutResultKind.Execute, result.Kind);
+            Assert.Equal<string?>("Shift+F4", result.Sequence);
+            Assert.Equal(1, executed);
+        }
+
+        public static void Run_SimpleShortcutMatcher_PrintableKeys()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["/"] = () => executed++,
+                ["+"] = () => executed++,
+                ["-"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var slash = matcher.HandleKey(Keys.OemQuestion, false, false, false);
+            Assert.Equal(SimpleShortcutResultKind.Execute, slash.Kind);
+            Assert.Equal<string?>("/", slash.Sequence);
+
+            var plus = matcher.HandleKey(Keys.Oemplus, false, false, false);
+            Assert.Equal(SimpleShortcutResultKind.Execute, plus.Kind);
+            Assert.Equal<string?>("+", plus.Sequence);
+
+            var minus = matcher.HandleKey(Keys.OemMinus, false, false, false);
+            Assert.Equal(SimpleShortcutResultKind.Execute, minus.Kind);
+            Assert.Equal<string?>("-", minus.Sequence);
+
+            Assert.Equal(3, executed);
+        }
+
+        public static void Run_SimpleShortcutMatcher_CaseInsensitiveMatch()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ctrl+h"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var result = matcher.HandleKey(Keys.H, true, false, false);
+
+            Assert.Equal(SimpleShortcutResultKind.Execute, result.Kind);
+            Assert.Equal(1, executed);
+        }
+
+        public static void Run_SimpleShortcutMatcher_AltX()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Alt+X"] = () => executed++,
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            var result = matcher.HandleKey(Keys.X, false, false, true);
+
+            Assert.Equal(SimpleShortcutResultKind.Execute, result.Kind);
+            Assert.Equal<string?>("Alt+X", result.Sequence);
+            Assert.Equal(1, executed);
+        }
+
+        // ================================================================
+        // StaleToolWindowSentinel — M3 sentinel cache (BP-2)
+        // RED: `StaleToolWindowSentinel` does not exist yet -> compile error
+        // ================================================================
+
+        public static void Run_StaleToolWindowSentinel_FileExistsAfterRefresh()
+        {
+            using (var dir = new TempDir())
+            {
+                string path = System.IO.Path.Combine(dir.Path, "sentinel");
+                System.IO.File.WriteAllText(path, "");
+                var sentinel = new StaleToolWindowSentinel(path);
+                sentinel.Refresh();
+                Assert.True(sentinel.IsStale, "a file that exists is stale after Refresh");
+            }
+        }
+
+        public static void Run_StaleToolWindowSentinel_DeletedAfterRefresh()
+        {
+            using (var dir = new TempDir())
+            {
+                string path = System.IO.Path.Combine(dir.Path, "sentinel");
+                System.IO.File.WriteAllText(path, "");
+                var sentinel = new StaleToolWindowSentinel(path);
+                sentinel.Refresh();
+                Assert.True(sentinel.IsStale, "precondition: an existing file is stale after Refresh");
+                System.IO.File.Delete(path);
+                sentinel.Refresh();
+                Assert.False(sentinel.IsStale, "after the file is deleted and Refresh runs, IsStale is false");
+            }
+        }
+
+        public static void Run_StaleToolWindowSentinel_CachedWithoutRefresh()
+        {
+            using (var dir = new TempDir())
+            {
+                string path = System.IO.Path.Combine(dir.Path, "sentinel");
+                System.IO.File.WriteAllText(path, "");
+                var sentinel = new StaleToolWindowSentinel(path);
+                sentinel.Refresh();
+                Assert.True(sentinel.IsStale, "precondition: an existing file is stale after Refresh");
+                System.IO.File.Delete(path);
+                // NO Refresh() — the cached value must persist until the next refresh.
+                Assert.True(sentinel.IsStale, "IsStale is cached: deleting the file without Refresh keeps IsStale true");
+            }
+        }
+
+        public static void Run_StaleToolWindowSentinel_RefreshReportsChange()
+        {
+            using (var dir = new TempDir())
+            {
+                string path = System.IO.Path.Combine(dir.Path, "sentinel");
+                var sentinel = new StaleToolWindowSentinel(path);
+                System.IO.File.WriteAllText(path, "");
+                Assert.True(sentinel.Refresh(), "create -> Refresh reports a change (false->true)");
+                Assert.False(sentinel.Refresh(), "Refresh again with no change reports false");
+                System.IO.File.Delete(path);
+                Assert.True(sentinel.Refresh(), "delete -> Refresh reports a change (true->false)");
+            }
+        }
+
+        public static void Run_StaleToolWindowSentinel_NullPathNeverStale()
+        {
+            var sentinel = new StaleToolWindowSentinel(null);
+            sentinel.Refresh();
+            Assert.False(sentinel.IsStale, "a null path is never stale (production no-op when NEOVISUAL_LOG_DIR is unset)");
+        }
+
+        // ================================================================
+        // KeyNameBuilder — m1 StringBuilder key-name builder (BP-5)
+        // RED: `KeyNameBuilder` does not exist yet -> compile error
+        // ================================================================
+
+        public static void Run_KeyNameBuilder_CtrlH()
+        {
+            Assert.Equal("Ctrl+H", KeyNameBuilder.Build(Keys.H, true, false, false));
+        }
+
+        public static void Run_KeyNameBuilder_ShiftF4()
+        {
+            Assert.Equal("Shift+F4", KeyNameBuilder.Build(Keys.F4, false, true, false));
+        }
+
+        public static void Run_KeyNameBuilder_AltX()
+        {
+            Assert.Equal("Alt+X", KeyNameBuilder.Build(Keys.X, false, false, true));
+        }
+
+        public static void Run_KeyNameBuilder_CtrlShiftAltDelete()
+        {
+            Assert.Equal("Ctrl+Shift+Alt+Delete", KeyNameBuilder.Build(Keys.Delete, true, true, true));
+        }
+
+        public static void Run_KeyNameBuilder_NoModifiers()
+        {
+            Assert.Equal("A", KeyNameBuilder.Build(Keys.A, false, false, false));
+        }
+
+        public static void Run_KeyNameBuilder_PrintableKeys()
+        {
+            Assert.Equal("/", KeyNameBuilder.Build(Keys.OemQuestion, false, false, false));
+        }
+
+        // ================================================================
+        // InitSteps — per-step init diagnostics + named-step orchestration (M33)
+        // RED: `InitSteps` doesn't exist -> compile error (CS0246/CS0103)
+        // ================================================================
+
+        public static void Run_InitSteps_SuccessLogsOk()
+        {
+            var sink = new List<string>();
+            var steps = new InitSteps(sink.Add);
+            Func<Task> ok = () => Task.CompletedTask;
+
+            steps.RunAsync(new (string Name, Func<Task> Step)[]
+            {
+                ("telescope", ok),
+                ("hook", ok),
+            }).GetAwaiter().GetResult();
+
+            Assert.True(sink.Contains("[MyExtension] init telescope ok"), "telescope step logs ok");
+            Assert.True(sink.Contains("[MyExtension] init hook ok"), "hook step logs ok");
+        }
+
+        public static void Run_InitSteps_FailingStepLogsOwnDiagnosticAndContinues()
+        {
+            var sink = new List<string>();
+            var steps = new InitSteps(sink.Add);
+            Func<Task> ok = () => Task.CompletedTask;
+
+            steps.RunAsync(new (string Name, Func<Task> Step)[]
+            {
+                ("telescope", ok),
+                ("finders", () => throw new InvalidOperationException("boom")),
+                ("hook", ok),
+            }).GetAwaiter().GetResult();
+
+            Assert.True(sink.Contains("[MyExtension] init telescope ok"), "telescope step logs ok");
+            Assert.True(sink.Contains("[MyExtension] init finders failed: boom"),
+                "the failing finders step logs its own diagnostic");
+            Assert.True(sink.Contains("[MyExtension] init hook ok"),
+                "hook step still runs after a failure (orchestration continues)");
+        }
+
+        public static void Run_InitSteps_DiagnosticNamesTheStep()
+        {
+            var sink = new List<string>();
+            var steps = new InitSteps(sink.Add);
+
+            steps.RunAsync(new (string Name, Func<Task> Step)[]
+            {
+                ("window-manager", () => throw new InvalidOperationException("wm down")),
+            }).GetAwaiter().GetResult();
+
+            Assert.True(sink.Any(l => l.StartsWith("[MyExtension] init window-manager failed: ", StringComparison.Ordinal)),
+                "the diagnostic text names the failing step");
+        }
+    }
+
+    /// <summary>
+    /// Test-local IVimModeSource fake (M32): a settable Mode, a GetModeKind that ignores the
+    /// view, no-op Attach/Detach, and a RaiseModeChanged that fires ModeChanged. Declared
+    /// top-level (not nested in Tests) so an unresolvable IVimModeSource base does not suppress
+    /// the compiler's diagnostics for the rest of the Tests type.
+    /// </summary>
+    internal sealed class FakeVimModeSource : IVimModeSource
+    {
+        public int? Mode { get; set; }
+        public event Action<int?>? ModeChanged;
+        public int? GetModeKind(ITextView view) => Mode;
+        public void Attach(ITextView view) { }
+        public void Detach(ITextView view) { }
+        public void RaiseModeChanged() => ModeChanged?.Invoke(Mode);
     }
 }

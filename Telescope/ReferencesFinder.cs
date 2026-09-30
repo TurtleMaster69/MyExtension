@@ -60,6 +60,6 @@ namespace Telescope
 
         protected override string OpenErrorNoun => "reference";
 
-        protected override string GatherErrorLiteral(Exception ex) => $"{Telescope.DiagnosticLog.Telescope}references gather failed: {ex.Message}";
+        protected override string GatherErrorLiteral(Exception ex) => $"references gather failed: {ex.Message}";
     }
 }

@@ -51,6 +51,10 @@ namespace MyExtension
         // building, binding match, prefix detection, and abort.
         private readonly LeaderSequenceMatcher _leaderMatcher;
 
+        // Simple-shortcut matcher (pure, unit-tested): builds the canonical shortcut string
+        // (e.g. "Ctrl+H") from a key + modifiers and looks it up in the simple bindings.
+        private readonly SimpleShortcutMatcher _simpleMatcher;
+
         /// <summary>
         /// Snapshot of whether a leader sequence is in progress. Read only by the hook thread's
         /// cheap pre-filter: while true, every key must marshal to the UI thread so the sequence
@@ -73,7 +77,8 @@ namespace MyExtension
                     c?.IsInputMode == true,
                     c?.ActionKeys.Count ?? 0,
                     _vsVim.IsEditorFocused,
-                    GeneralToolWindowController.IsTextInputType(_windowManager.Type));
+                    _windowManager.IsTextInputType,
+                    _windowManager.TextInputSurfaceFocused);
             }
         }
 
@@ -90,7 +95,7 @@ namespace MyExtension
         private bool EditorFocusedVeto =>
             _vsVim.IsEditorFocused
             && _windowManager.CurrentController?.IsInputMode != true
-            && !GeneralToolWindowController.IsTextInputType(_windowManager.Type);
+            && !(GeneralToolWindowController.IsTextInputType(_windowManager.Type) && _windowManager.TextInputSurfaceFocused);
 
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
@@ -119,6 +124,7 @@ namespace MyExtension
             _leaderKey = config.LeaderKey;
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
             _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
+            _simpleMatcher = new SimpleShortcutMatcher(_simpleBindings);
         }
 
         /// <summary>
@@ -136,7 +142,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Failed to resolve VimModeTracker: {ex.Message}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Failed to resolve VimModeTracker: {ex.Message}");
                 return new VimModeTracker();
             }
         }
@@ -157,7 +163,7 @@ namespace MyExtension
                 var action = ResolveAction(pair.Value);
                 if (action == null)
                 {
-                    NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Unknown action '{pair.Value}' for binding '{pair.Key}' - ignored.");
                     continue;
                 }
 
@@ -230,7 +236,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
 
@@ -280,7 +286,7 @@ namespace MyExtension
             // tool window actually holds keyboard focus. VS's frame-selection state can lag behind
             // real WPF focus, so when an editor is focused the key must fall through to VS instead
             // of being consumed by the (stale) tool-window controller.
-            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, GeneralToolWindowController.IsTextInputType(_windowManager.Type)))
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, _windowManager.IsTextInputType, _windowManager.TextInputSurfaceFocused))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller != null)
@@ -338,20 +344,25 @@ namespace MyExtension
                 case LeaderResultKind.Execute:
                     NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding executed: {result.Sequence}");
                     return true;
+                case LeaderResultKind.Failed:
+                    NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}leader-binding failed: {result.Sequence}: {result.ErrorMessage}");
+                    return true;
                 case LeaderResultKind.Abort:
                     return false;
             }
 
             // 3. Simple modifier shortcut (e.g. Ctrl+H), matched directly against the key name.
-            string simple = BuildSimpleKey(key, ctrl, shift, alt);
-
-            if (_simpleBindings.TryGetValue(simple, out var simpleAction))
+            var simpleResult = _simpleMatcher.HandleKey(key, ctrl, shift, alt);
+            if (simpleResult.Kind == SimpleShortcutResultKind.Execute)
             {
-                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}shortcut-binding executed: {simple}");
-                simpleAction();
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}shortcut-binding executed: {simpleResult.Sequence}");
                 return true;
             }
-
+            if (simpleResult.Kind == SimpleShortcutResultKind.Failed)
+            {
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}shortcut-binding failed: {simpleResult.Sequence}: {simpleResult.ErrorMessage}");
+                return true;
+            }
             return false;
         }
 
@@ -363,6 +374,12 @@ namespace MyExtension
         /// </summary>
         public bool IsKeyOfInterest(Keys key, bool ctrl, bool shift, bool alt)
         {
+            // Per-key entry: re-stat the stale-toolwindow sentinel once per key-down so the
+            // test-only fault toggles without a focus change (the harness creates/removes the
+            // sentinel file between scenarios). HandleKey is always preceded by this, so it is
+            // NOT refreshed there too (that would double the syscall).
+            _windowManager.RefreshStaleSentinel();
+
             // Any modifier chord is a candidate simple shortcut (Ctrl+H, ...), and while a leader
             // sequence is in progress ANY key can extend or break it — both handled.
             if (IsLeaderActive || ctrl || shift || alt)
@@ -393,7 +410,8 @@ namespace MyExtension
                     _windowManager.IsToolWindow,
                     _vsVim.IsEditorFocused,
                     _windowManager.CurrentController?.IsInputMode == true,
-                    GeneralToolWindowController.IsTextInputType(_windowManager.Type)))
+                    _windowManager.IsTextInputType,
+                    _windowManager.TextInputSurfaceFocused))
             {
                 var c = _windowManager.CurrentController;
                 if (c != null && !c.IsInputMode && (DefaultControllerKeys.Contains(key) || c.ActionKeys.Contains(key)))
@@ -420,7 +438,7 @@ namespace MyExtension
             // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
             // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
             // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
-            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, GeneralToolWindowController.IsTextInputType(_windowManager.Type)))
+            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, _windowManager.IsTextInputType, _windowManager.TextInputSurfaceFocused))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)
@@ -447,40 +465,10 @@ namespace MyExtension
                 _vsVim.IsInTypingMode);
         }
 
-        /// <summary>Builds the canonical shortcut string, e.g. Ctrl+H, Shift+F4, Alt+X.</summary>
-        private string BuildSimpleKey(Keys key, bool ctrl, bool shift, bool alt)
-        {
-            var parts = new List<string>();
-
-            if (ctrl) parts.Add("Ctrl");
-            if (shift) parts.Add("Shift");
-            if (alt) parts.Add("Alt");
-            parts.Add(KeyToString(key));
-
-            return string.Join("+", parts);
-        }
-
-        /// <summary>
-        /// Friendly, stable key name used in the config file. A few non-alphanumeric keys have
-        /// awkward enum names (e.g. the "/" key maps to <c>Keys.OemQuestion</c>/<c>Oem2</c>,
-        /// "+" to <c>Keys.Oemplus</c>), so we map those to their printable character for a
-        /// readable default config.
-        /// </summary>
-        private static string KeyToString(Keys key)
-        {
-            switch (key)
-            {
-                case Keys.OemQuestion: return "/";   // 191, same value as Keys.Oem2
-                case Keys.Oemplus: return "+";       // 187
-                case Keys.OemMinus: return "-";      // 189
-                default: return key.ToString();
-            }
-        }
-
         /// <summary>Performs Cardinal window navigation in a compass direction (see WindowMatrix).</summary>
-        internal void Navigate(char direction)
+        internal void Navigate(Direction direction)
         {
-            NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}navigate direction={direction}");
+            NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}navigate direction={direction.ToChar()}");
             // Rebuild the window matrix each navigation (windows can be resized/opened/closed),
             // but source the active window from WindowManager's cached frame rather than re-deriving
             // it from DTE. The frame enumeration itself is cached by WindowManager and invalidated
@@ -514,7 +502,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
+                NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
             }
         }
     }

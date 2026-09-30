@@ -31,15 +31,17 @@ namespace Telescope
         private readonly Func<IReadOnlyList<string>>? _testFileSource;
         private readonly Action<CodeIssue>? _testOpener;
 
-        private readonly ProjectFileCache _fileCache = new ProjectFileCache();
+        private ProjectFileCache _fileCache;
         private string? _cachedSolutionName;
 
         public override string Name => "Issues";
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
-        public CodeIssuesFinder(Func<DTE> dteFactory)
+        /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
+        internal CodeIssuesFinder(Func<DTE> dteFactory, ProjectFileCache fileCache)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
+            _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
         }
 
         /// <summary>Test-only constructor: scans the given files for TODO markers and reports opens without DTE.</summary>
@@ -169,7 +171,7 @@ namespace Telescope
                         {
                             continue;
                         }
-                        issues.Add(new CodeIssue(Classify(item.Description), fileName, item.Line, item.Description ?? string.Empty));
+                        issues.Add(new CodeIssue(ClassifySeverity(item.ErrorLevel), fileName, item.Line, item.Description ?? string.Empty));
                     }
                     catch
                     {
@@ -179,22 +181,19 @@ namespace Telescope
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}Error List read failed: {ex.Message}");
+                TelescopeLog.Log($"Error List read failed: {ex.Message}");
             }
         }
 
-        private static CodeIssueKind Classify(string description)
+        internal static CodeIssueKind ClassifySeverity(vsBuildErrorLevel severity)
         {
-            string d = (description ?? string.Empty).ToLowerInvariant();
-            if (d.IndexOf("error", StringComparison.Ordinal) >= 0)
+            return severity switch
             {
-                return CodeIssueKind.Error;
-            }
-            if (d.IndexOf("warning", StringComparison.Ordinal) >= 0)
-            {
-                return CodeIssueKind.Warning;
-            }
-            return CodeIssueKind.Info;
+                vsBuildErrorLevel.vsBuildErrorLevelHigh => CodeIssueKind.Error,
+                vsBuildErrorLevel.vsBuildErrorLevelMedium => CodeIssueKind.Warning,
+                vsBuildErrorLevel.vsBuildErrorLevelLow => CodeIssueKind.Info,
+                _ => CodeIssueKind.Info,
+            };
         }
     }
 }

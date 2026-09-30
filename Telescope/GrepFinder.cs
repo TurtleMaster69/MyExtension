@@ -23,9 +23,12 @@ namespace Telescope
         private const int HitCap = 200;
 
         private readonly Func<DTE> _dteFactory;
+        private readonly ProjectFileCache _fileCache;
+        private readonly FileContentCache _contentCache = new FileContentCache();
+        private string? _cachedSolutionName;
 
         // Hermetic-test seams: when set, candidate gathering and opening bypass DTE entirely.
-        private readonly Func<IReadOnlyList<string>>? _testFileSource;
+        private readonly Func<IReadOnlyList<string>>? _testEnumerate;
         private readonly Action<GrepHit>? _testOpener;
 
         public override string Name => "Grep";
@@ -33,20 +36,29 @@ namespace Telescope
         public override bool IsQueryDriven => true;
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
-        public GrepFinder(Func<DTE> dteFactory)
+        /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
+        internal GrepFinder(Func<DTE> dteFactory, ProjectFileCache fileCache)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
+            _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
         }
 
         /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
         internal GrepFinder(Func<IReadOnlyList<string>> fileSource, Action<GrepHit> opener)
+            : this(new ProjectFileCache(), fileSource, opener)
         {
-            _testFileSource = fileSource;
+        }
+
+        /// <summary>Test-only constructor: routes the enumerate delegate through the shared cache (BP-1/M5a).</summary>
+        internal GrepFinder(ProjectFileCache cache, Func<IReadOnlyList<string>> enumerate, Action<GrepHit> opener)
+        {
+            _fileCache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _testEnumerate = enumerate;
             _testOpener = opener;
             _dteFactory = () => null!;
         }
 
-        protected override IReadOnlyList<GrepHit> GatherHits() => Array.Empty<GrepHit>();
+        protected override IReadOnlyList<GrepHit> GatherHits() => throw new NotSupportedException("GrepFinder is query-driven; call GetCandidates(query)");
 
         public override IReadOnlyList<FinderEntry> GetCandidates(string query)
         {
@@ -59,12 +71,17 @@ namespace Telescope
 
             var hits = new List<GrepHit>();
 
-            if (_testFileSource != null)
+            if (_testEnumerate != null)
             {
-                // Hermetic test path: no VS thread affinity.
-                foreach (string path in _testFileSource())
+                // Hermetic test path: no VS thread affinity; the shared cache serves the enumerate
+                // delegate once across queries.
+                foreach (string path in _fileCache.Get(_testEnumerate))
                 {
                     ScanFile(path, query, hits);
+                    if (hits.Count >= HitCap)
+                    {
+                        break;
+                    }
                 }
                 TelescopeLog.Log($"grep hits={hits.Count}");
                 return hits.Select(ToEntry).ToList();
@@ -77,7 +94,13 @@ namespace Telescope
                 DTE dte = _dteFactory();
                 if (dte?.Solution != null)
                 {
-                    foreach (string path in ProjectFiles.Enumerate(dte))
+                    string? solutionName = dte?.Solution?.FullName;
+                    if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _fileCache.Invalidate();
+                        _cachedSolutionName = solutionName;
+                    }
+                    foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
                     {
                         ScanFile(path, query, hits);
                         if (hits.Count >= HitCap)
@@ -89,7 +112,7 @@ namespace Telescope
             }
             catch (Exception ex)
             {
-                NeoVisualLog.Debug($"{Telescope.DiagnosticLog.Telescope}GrepFinder failed to enumerate: {ex.Message}");
+                TelescopeLog.Log($"GrepFinder failed to enumerate: {ex.Message}");
             }
 
             TelescopeLog.Log($"grep hits={hits.Count}");
@@ -123,11 +146,11 @@ namespace Telescope
 
         protected override string OpenErrorNoun => "grep";
 
-        private static void ScanFile(string path, string query, List<GrepHit> hits)
+        private void ScanFile(string path, string query, List<GrepHit> hits)
         {
             try
             {
-                string[] lines = File.ReadAllLines(path);
+                string[] lines = _contentCache.GetLines(path);
                 for (int i = 0; i < lines.Length; i++)
                 {
                     if (hits.Count >= HitCap)

@@ -41,8 +41,8 @@ namespace MyExtension
                 [Keys.G] = () => { SelectFirstSourceFile(); return true; },
                 [Keys.H] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(KeyInjection.VK_LEFT); return true; },
                 [Keys.L] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(KeyInjection.VK_RIGHT); return true; },
-                [Keys.J] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=J -> arrow vk=40"); KeyInjection.Press(KeyInjection.VK_DOWN); return true; },
-                [Keys.K] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=K -> arrow vk=38"); KeyInjection.Press(KeyInjection.VK_UP); return true; },
+                [Keys.J] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=J -> arrow vk={(int)KeyInjection.VK_DOWN}"); KeyInjection.Press(KeyInjection.VK_DOWN); return true; },
+                [Keys.K] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=K -> arrow vk={(int)KeyInjection.VK_UP}"); KeyInjection.Press(KeyInjection.VK_UP); return true; },
                 [Keys.W] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.W, ref _isInputMode),
                 [Keys.B] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.B, ref _isInputMode),
                 [Keys.E] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.E, ref _isInputMode),
@@ -76,7 +76,7 @@ namespace MyExtension
         /// whose name matches the captured search-box <paramref name="query"/>. VS's native search
         /// filter does NOT select the matching item, so the query is resolved through
         /// <see cref="HierarchyResolver.FirstPathMatching"/> over the project's
-        /// <see cref="HierarchyNode"/> forest (<see cref="FindFirstProjectNode"/> + <see cref="BuildForest"/>).
+        /// <see cref="HierarchyNode"/> forest (<see cref="FindFirstProjectNode"/> + <see cref="HierarchyForestBuilder"/>).
         /// A first injected Escape clears the query; a <see cref="System.Windows.Threading.DispatcherTimer"/>
         /// keeper observes the real focus state and injects further bounded Escapes while the search box
         /// still has focus (Escape #2 is what actually moves focus to the tree), then re-<c>Select</c>s
@@ -111,43 +111,31 @@ namespace MyExtension
 
                 // Hover-preview / async-focus robustness: re-assert tree focus + the matched selection
                 // on a ~100ms DispatcherTimer for ~1.5s, like SelectFirstSourceFile.
-                var keeper = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Normal);
-                keeper.Interval = System.TimeSpan.FromMilliseconds(100);
-                System.Windows.Threading.DispatcherTimer keeperRef = keeper;
-                var keeperStops = System.Environment.TickCount + 1500;
                 int escapeAttempts = 0;
-                keeper.Tick += (_, _) =>
+                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), 1500, elapsed =>
                 {
-                    try
+                    var decision = FocusKeeperSchedule.Decide(
+                        TextMotionHelper.FindFocusedTextBox() != null, elapsed, escapeAttempts, 1500);
+                    if (decision == FocusKeeperSchedule.Decision.InjectEscape)
                     {
-                        if (TextMotionHelper.FindFocusedTextBox() != null && escapeAttempts < 4)
-                        {
-                            // Focus has NOT left the search box yet — Escape #2 is what actually moves
-                            // focus to the tree; the counter bounds the loop.
-                            escapeAttempts++;
-                            KeyInjection.Press(KeyInjection.VK_ESCAPE);
-                            return;
-                        }
+                        // Focus has NOT left the search box yet — Escape #2 is what actually moves
+                        // focus to the tree; the counter bounds the loop.
+                        escapeAttempts++;
+                        KeyInjection.Press(KeyInjection.VK_ESCAPE);
+                    }
+                    else if (decision == FocusKeeperSchedule.Decision.Reassert)
+                    {
                         target?.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
                         ExecuteCommand("View.SolutionExplorer");
                     }
-                    catch
-                    {
-                        // selection/focus re-assert must never break the handler
-                    }
-                    if (System.Environment.TickCount >= keeperStops)
-                    {
-                        keeperRef.Stop();
-                    }
-                };
-                keeper.Start();
+                });
             }
             catch (Exception ex)
             {
                 // Debug aid ONLY — OUTSIDE the M-M7 diagnostic contract (never asserted by the harness;
                 // M-M7 covers only the [NeoVisual]/[Telescope] LOG lines emitted via NeoVisualLog/Log).
                 // Mirrors the established SelectFirstSourceFile catch.
-                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
             }
         }
 
@@ -238,28 +226,12 @@ namespace MyExtension
                 // editor and steals focus — re-selecting + re-focusing defeats it so the harness's
                 // `o` still reaches the controller. (No per-tick document open: that would spam
                 // editor-view-opened; we emitted exactly one above.)
-                var keeper = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Normal);
-                keeper.Interval = System.TimeSpan.FromMilliseconds(100);
-                System.Windows.Threading.DispatcherTimer keeperRef = keeper;
-                var keeperStops = System.Environment.TickCount + 1500;
                 EnvDTE.UIHierarchyItem keepItem = item!;
-                keeper.Tick += (_, _) =>
+                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), 1500, _ =>
                 {
-                    try
-                    {
-                        keepItem.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
-                        ExecuteCommand("View.SolutionExplorer");
-                    }
-                    catch
-                    {
-                        // selection/focus re-assert must never break the handler
-                    }
-                    if (System.Environment.TickCount >= keeperStops)
-                    {
-                        keeperRef.Stop();
-                    }
-                };
-                keeper.Start();
+                    keepItem.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
+                    ExecuteCommand("View.SolutionExplorer");
+                });
 
                 // Emit editor-view-opened for the file we just opened/activated — this is the SAME
                 // diagnostic/format VimModeTracker.TextViewCreated emits, but it is produced here
@@ -271,7 +243,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
             }
         }
 
@@ -293,9 +265,9 @@ namespace MyExtension
             var projectNode = FindFirstProjectNode(solutionNode);
             if (projectNode == null) return (null, null);
             projectNode.UIHierarchyItems.Expanded = true;
-            var forest = new System.Collections.Generic.List<HierarchyNode>();
             var pathToItem = new System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem>(StringComparer.OrdinalIgnoreCase);
-            BuildForest(projectNode, forest, pathToItem);
+            var items = MapChildren(projectNode, pathToItem);
+            var forest = HierarchyForestBuilder.Build(items, new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
             string? path = pick(forest);
             if (path == null) return (null, null);
             return (pathToItem.TryGetValue(path, out var t) ? t : null, path);
@@ -325,18 +297,20 @@ namespace MyExtension
         }
 
         /// <summary>
-        /// Recurses a project node's tree into a pure <see cref="HierarchyNode"/> forest plus a
-        /// full-path → <see cref="EnvDTE.UIHierarchyItem"/> map. The caller must expand the node's
-        /// <c>UIHierarchyItems</c> first (a collapsed node's children are not enumerated). Physical
-        /// folders recurse; physical files are added ONLY when their name ends with <c>.cs</c>
-        /// (non-.cs files such as .csproj/.json are never added, so the seam cannot return them);
-        /// everything else (virtual folders, references, sub-projects) is skipped.
+        /// DTE adapter: recurses a project node's tree into pure <see cref="HierarchyItemInfo"/>
+        /// DTOs plus a full-path → <see cref="EnvDTE.UIHierarchyItem"/> map. This is the ONLY place
+        /// <c>pi.Kind</c> / <c>pi.Name</c> / <c>pi.FileNames[FileCount]</c> are read. The caller
+        /// must expand the node's <c>UIHierarchyItems</c> first (a collapsed node's children are
+        /// not enumerated). Physical folders recurse; physical files are added ONLY when their name
+        /// ends with <c>.cs</c> (non-.cs files such as .csproj/.json are never added, so the seam
+        /// cannot return them); everything else (virtual folders, references, sub-projects) is
+        /// skipped.
         /// </summary>
-        private static void BuildForest(
+        private static System.Collections.Generic.List<HierarchyItemInfo> MapChildren(
             EnvDTE.UIHierarchyItem item,
-            System.Collections.Generic.List<HierarchyNode> forest,
             System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem> pathToItem)
         {
+            var result = new System.Collections.Generic.List<HierarchyItemInfo>();
             foreach (EnvDTE.UIHierarchyItem child in item.UIHierarchyItems)
             {
                 if (child.Object is EnvDTE.ProjectItem pi)
@@ -344,9 +318,8 @@ namespace MyExtension
                     string kind = pi.Kind;
                     if (kind == HierarchyResolver.PhysicalFolderKind)
                     {
-                        var children = new System.Collections.Generic.List<HierarchyNode>();
-                        BuildForest(child, children, pathToItem);
-                        forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFolderKind, pi.Name, "", children));
+                        var children = MapChildren(child, pathToItem);
+                        result.Add(new HierarchyItemInfo(kind, pi.Name, "", children));
                     }
                     else if (kind == HierarchyResolver.PhysicalFileKind &&
                              pi.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
@@ -354,11 +327,12 @@ namespace MyExtension
                         // FileNames is an indexed property; index FileCount (NOT index 1, which is
                         // the short name) to get the item's FULL path.
                         string fullPath = pi.FileNames[(short)pi.FileCount];
-                        forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFileKind, pi.Name, fullPath, null));
+                        result.Add(new HierarchyItemInfo(kind, pi.Name, fullPath, null));
                         pathToItem[fullPath] = child;
                     }
                 }
             }
+            return result;
         }
 
         /// <summary>
@@ -405,7 +379,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Debug($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
+                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
     }

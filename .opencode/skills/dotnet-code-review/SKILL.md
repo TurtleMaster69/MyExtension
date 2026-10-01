@@ -15,7 +15,7 @@ On-demand C# review standard for THIS repo (net472 VSIX, WPF overlay, Win32 hook
 ## Core method
 - **Correctness** — disposal/async pitfalls, null/empty/boundary, race conditions, off-by-one. Check UI-thread affinity (`ThreadHelper.ThrowIfNotOnUIThread()`) on any `IVs*`/DTE call.
 - **Performance** — apply the ~50 .NET perf anti-patterns (async, memory, strings, collections, LINQ, regex, I/O) with tiered severity; name the bottleneck before optimizing.
-- **Conventions** — net472 (no modern BCL, hand-rolled `DistinctBy`, no `IReadOnlySet<T>`), `LangVersion` 14, `CardinalMovment` typo isolated, diagnostics-as-contract.
+- **Conventions** — net472 (no modern BCL, hand-rolled `DistinctBy`, no `IReadOnlySet<T>`), `LangVersion` 14, `MyExtension/Navigation/` (window-logic restructure), diagnostics-as-contract.
 - **Architectural drift** — does the change follow the existing pattern (pure `OverlayKeyHandler`/`TextMotionNavigator` seam, controller `ActionKeys` contract) or introduce a new one?
 
 ## Source

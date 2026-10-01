@@ -1,6 +1,6 @@
 ---
 name: vs-extension-dev
-description: Use when working on this Visual Studio extension (VSIX) project — "MyExtension", "CardinalNavigation", window navigation, VS window matrix, global keyboard hook, leader key bindings, InputHandler, IVsWindowFrame, DTE, IVsUIShell. Covers the architecture and conventions of the MyExtension codebase.
+description: Use when working on this Visual Studio extension (VSIX) project — "MyExtension", "MyExtension.Navigation", window navigation, VS window matrix, global keyboard hook, leader key bindings, InputHandler, IVsWindowFrame, DTE, IVsUIShell. Covers the architecture and conventions of the MyExtension codebase.
 ---
 
 # MyExtension (VSIX) Development
@@ -60,16 +60,16 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Input/StaleToolWindowSentinel.cs` | Pure stale-toolwindow fault sentinel (path + cached `IsStale`) for the e2e focus-guard fault injection. |
 | `MyExtension/Hooks/NativeMethods.cs` | P/Invoke declarations for the low-level keyboard hook + key injection. |
 | `MyExtension/Input/PopupNavigation.cs` | Maps `Ctrl+N`/`Ctrl+P` to injected Down/Up for IntelliSense completion / Quick Actions / Peek lists. |
-| `ToolWindows/IToolWindowController.cs` | Tool-window normal/input mode contract: `TryMove`, `Enter/ExitInputMode`, `ActionKeys`. |
-| `ToolWindows/GeneralToolWindowController.cs` | Default controller: hjkl→arrow injection; `IsTextInputType` decides initial mode. |
-| `ToolWindows/TextInputToolWindowController.cs` | Text-input windows (CommandWindow/FindReplace/...): normal-mode h/l/w/b/e caret motions + a/A/I insert placements over the focused text box (WPF TextBox, editor `IWpfTextView`, or WinForms). |
-| `ToolWindows/TextMotionHelper.cs` | Shared vim-caret helper for WPF TextBox surfaces in tool windows (Solution Explorer search box + text-input windows): find the focused box, apply a motion via `TextMotionNavigator`, toggle the white block/line caret. |
-| `ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g programmatically select the first source file (expand → walk → DTE `UIHierarchyItem.Select`, direct `ItemOperations.OpenFile`, ~1.5s re-select/refocus keeper to defeat the hover-preview focus steal), h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions via `TextMotionHelper`). |
-| `ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam (`HierarchyNode` + `FirstSourceFilePath`) behind the `g` selection action: Kind-GUID physical-file/physical-folder classification + in-order folder recursion; unit-tested without DTE. |
-| `ToolWindows/FocusKeeper.cs` | Re-select/refocus keeper that defeats VS's hover-preview focus steal. |
-| `ToolWindows/HierarchyForestBuilder.cs` | Pure tree-forest builder for the Solution Explorer walk. |
-| `ToolWindows/ToolWindowControllerBase.cs` | Shared base for tool-window controllers (text-motion action wiring). |
-| `ToolWindows/FocusGuard.cs` | Pure tool-window key-routing guard (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`/`OwnsKeyboard`): action keys only consume while the tool window holds focus — never leak into a focused editor. |
+| `MyExtension/ToolWindows/IToolWindowController.cs` | Tool-window normal/input mode contract: `TryMove`, `Enter/ExitInputMode`, `ActionKeys`. |
+| `MyExtension/ToolWindows/GeneralToolWindowController.cs` | Default controller: hjkl→arrow injection; `IsTextInputType` decides initial mode. |
+| `MyExtension/ToolWindows/TextInputToolWindowController.cs` | Text-input windows (CommandWindow/FindReplace/...): normal-mode h/l/w/b/e caret motions + a/A/I insert placements over the focused text box (WPF TextBox, editor `IWpfTextView`, or WinForms). |
+| `MyExtension/ToolWindows/TextMotionHelper.cs` | Shared vim-caret helper for WPF TextBox surfaces in tool windows (Solution Explorer search box + text-input windows): find the focused box, apply a motion via `TextMotionNavigator`, toggle the white block/line caret. |
+| `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g programmatically select the first source file (expand → walk → DTE `UIHierarchyItem.Select`, direct `ItemOperations.OpenFile`, ~1.5s re-select/refocus keeper to defeat the hover-preview focus steal), h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions via `TextMotionHelper`). |
+| `MyExtension/ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam (`HierarchyNode` + `FirstSourceFilePath`) behind the `g` selection action: Kind-GUID physical-file/physical-folder classification + in-order folder recursion; unit-tested without DTE. |
+| `MyExtension/ToolWindows/FocusKeeper.cs` | Re-select/refocus keeper that defeats VS's hover-preview focus steal. |
+| `MyExtension/ToolWindows/HierarchyForestBuilder.cs` | Pure tree-forest builder for the Solution Explorer walk. |
+| `MyExtension/ToolWindows/ToolWindowControllerBase.cs` | Shared base for tool-window controllers (text-motion action wiring). |
+| `MyExtension/ToolWindows/FocusGuard.cs` | Pure tool-window key-routing guard (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`/`OwnsKeyboard`): action keys only consume while the tool window holds focus — never leak into a focused editor. |
 | `MyExtension/Adornments/BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode (predefined "Caret" adornment layer — do NOT export a custom `AdornmentLayerDefinition`, it breaks the editor's MEF composition). |
 | `MyExtension/ToolWindows/WindowManager.cs` | Tracks the focused window frame; classifies `ToolWindowType`; dispatches to controllers. |
 | `MyExtension/ToolWindows/ToolWindowTypeResolver.cs` | Maps window frames to `ToolWindowType` (known GUIDs / unknown). |

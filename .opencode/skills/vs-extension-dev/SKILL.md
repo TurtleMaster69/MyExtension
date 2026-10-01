@@ -48,24 +48,57 @@ GlobalKeyboardHook (Win32 LL hook)
 | File | Responsibility |
 |------|----------------|
 | `MyExtensionPackage.cs` | `AsyncPackage` entry point. Installs/disposes the keyboard hook; registers the `SolutionExplorerController`; auto-opens a test solution from `NEOVISUAL_TEST_SOLUTION`. |
+| `InitSteps.cs` | Dependency-free named-step package-init orchestrator (`[MyExtension] init <step> ok/failed`); a failing step never aborts later steps. |
 | `GlobalKeyboardHook.cs` | Win32 low-level keyboard hook (`WH_KEYBOARD_LL`). Owns the P/Invoke surface and output-window logging. `IsInteresting` pre-filter; routes `HasToolWindowActionKeys`. |
 | `InputHandler.cs` | Maps key sequences to actions. Where you add/change key bindings. Routes tool-window keys through the controller (`hjkl` + `controller.ActionKeys`). |
 | `KeybindingConfig.cs` | Loads leader key + bindings from embedded `default-keybindings.json` merged with optional `%APPDATA%\MyExtension\keybindings.json`. Has `LoadFromJson` test seam. |
+| `LeaderSequenceMatcher.cs` | Pure leader-key state machine (start, sequence build, binding match, prefix detection, abort); extracted from `InputHandler` so leader routing is unit-testable. |
+| `SimpleShortcutMatcher.cs` | Pure simple-modifier-shortcut matcher (e.g. `Ctrl+H`); canonical shortcut string via `KeyNameBuilder.Build`. |
+| `KeyNames.cs` | Canonical key-name strings for binding notation. |
+| `KeyNameBuilder.cs` | Builds the canonical shortcut string (`Ctrl+H` / `Shift+F4` / ...) from a key + modifiers. |
+| `InjectedKeyGuard.cs` | Per-VK consume-once counter for injected keys (re-entry guard). |
+| `StaleToolWindowSentinel.cs` | Pure stale-toolwindow fault sentinel (path + cached `IsStale`) for the e2e focus-guard fault injection. |
+| `NativeMethods.cs` | P/Invoke declarations for the low-level keyboard hook + key injection. |
+| `PopupNavigation.cs` | Maps `Ctrl+N`/`Ctrl+P` to injected Down/Up for IntelliSense completion / Quick Actions / Peek lists. |
 | `ToolWindows/IToolWindowController.cs` | Tool-window normal/input mode contract: `TryMove`, `Enter/ExitInputMode`, `ActionKeys`. |
 | `ToolWindows/GeneralToolWindowController.cs` | Default controller: hjkl→arrow injection; `IsTextInputType` decides initial mode. |
 | `ToolWindows/TextInputToolWindowController.cs` | Text-input windows (CommandWindow/FindReplace/...): normal-mode h/l/w/b/e caret motions + a/A/I insert placements over the focused text box (WPF TextBox, editor `IWpfTextView`, or WinForms). |
 | `ToolWindows/TextMotionHelper.cs` | Shared vim-caret helper for WPF TextBox surfaces in tool windows (Solution Explorer search box + text-input windows): find the focused box, apply a motion via `TextMotionNavigator`, toggle the white block/line caret. |
 | `ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g programmatically select the first source file (expand → walk → DTE `UIHierarchyItem.Select`, direct `ItemOperations.OpenFile`, ~1.5s re-select/refocus keeper to defeat the hover-preview focus steal), h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions via `TextMotionHelper`). |
 | `ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam (`HierarchyNode` + `FirstSourceFilePath`) behind the `g` selection action: Kind-GUID physical-file/physical-folder classification + in-order folder recursion; unit-tested without DTE. |
+| `ToolWindows/FocusKeeper.cs` | Re-select/refocus keeper that defeats VS's hover-preview focus steal. |
+| `ToolWindows/HierarchyForestBuilder.cs` | Pure tree-forest builder for the Solution Explorer walk. |
+| `ToolWindows/ToolWindowControllerBase.cs` | Shared base for tool-window controllers (text-motion action wiring). |
+| `ToolWindows/FocusGuard.cs` | Pure tool-window key-routing guard (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`/`OwnsKeyboard`): action keys only consume while the tool window holds focus — never leak into a focused editor. |
 | `BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode (predefined "Caret" adornment layer — do NOT export a custom `AdornmentLayerDefinition`, it breaks the editor's MEF composition). |
 | `WindowManager.cs` | Tracks the focused window frame; classifies `ToolWindowType`; dispatches to controllers. |
-| `CardinalMovment/WindowMatrix.cs` | Core navigation algorithm: filters windows by direction, alignment, adjacency, and closest distance. |
-| `CardinalMovment/WindowAdapter.cs` | Pairs an `IVsWindowFrame` (IVs shell) with its `EnvDTE.Window` (DTE automation); exposes the on-screen rect lazily. |
-| `CardinalMovment/UtilityMethods.cs` | DTE / `IVsUIShell` service access and window comparison/linking helpers. |
-| `CardinalMovment/CardinalNavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
-| `CardinalMovment/RectCoordinate.cs` | Simple int `x, y, width, height` rect value object. |
-| `CardinalMovment/LinqExtensionMethods.cs` | `DistinctBy` LINQ helper (used because target framework lacks it). |
+| `ToolWindowTypeResolver.cs` | Maps window frames to `ToolWindowType` (known GUIDs / unknown). |
+| `VsServices.cs` | `GetService` helpers (DTE, IVsUIShell) with null-safe access. |
+| `Actions.cs` | Action-name → delegate table for leader/shortcut bindings. |
+| `TelescopeLauncher.cs` | Opens the Telescope overlay from the leader binding. |
+| `TelescopeCommand.cs` | VS command wiring for the Telescope finders. |
+| `VimModeState.cs` | Pure owner of the Vim typing/mode state (single source of truth for `vim-mode=`). |
+| `VimModeSource.cs` | VsVim interop: resolves the buffer + subscribes `SwitchedMode` per view. |
+| `VimModeClassifier.cs` | Pure classification of a Vim ModeKind into the typing flag + friendly `vim-mode=` name (single owner of the Normal=1/Insert=2/Replace=7 truth table). |
+| `VimModeTracker.cs` | Shared MEF part tracking the focused editor's VsVim mode (Insert/Replace gating) so leader routing never queries VsVim per keystroke. |
+| `MyExtension/Navigation/WindowMatrix.cs` | Core navigation algorithm: filters windows by direction, alignment, adjacency, and closest distance. |
+| `MyExtension/Navigation/WindowAdapter.cs` | Pairs an `IVsWindowFrame` (IVs shell) with its `EnvDTE.Window` (DTE automation); exposes the on-screen rect lazily. |
+| `MyExtension/Navigation/UtilityMethods.cs` | DTE / `IVsUIShell` service access and window comparison/linking helpers. |
+| `MyExtension/Navigation/CardinalNavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
+| `MyExtension/Navigation/RectCoordinate.cs` | Simple int `x, y, width, height` rect value object. |
+| `MyExtension/Navigation/NavigationSnapshot.cs` | Single-pass snapshot of navigation candidates (active rect derived from the candidate list — no N+1 COM rect calls). |
 | `Telescope/` | The Telescope library (separate project `Telescope.csproj`): `TelescopeController`, `TelescopeOverlay` (WPF modal), `OverlayKeyHandler` (pure vim state machine), `TextMotionNavigator` (shared pure vim motions for preview + text-input windows), `SyntaxHighlighter` (preview syntax coloring), `FzfFilter` (fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `FileFinder`, `CodeIssuesFinder` (warnings/errors/TODO), `ReferencesFinder` + `ReferenceHit` (symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable), `GrepFinder` + `GrepHit` (query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders), `ImplementationFinder` + `ImplementationHit` (symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable), `ProjectFiles` (shared DTE enumeration), `ResultsFormatter`, `NeoVisualLog`/`LogFileWriter` (two-file per-run logs). |
+| `Telescope/Finders/HitOpener.cs` | Shared null/missing-file guard + open-at-line for the finders. |
+| `Telescope/Finders/FileContentCache.cs` | mtime-keyed file-content cache (LRU-capped). |
+| `Telescope/Finders/ProjectFileCache.cs` | Cached `ProjectFiles.Enumerate` enumeration. |
+| `Telescope/Overlay/ResultMapper.cs` | Maps display strings back to hit payloads (duplicate-safe). |
+| `Telescope/Finders/HierarchyWalker.cs` | Pure tree-walk over the Solution Explorer hierarchy. |
+| `Telescope/Finders/DteFileOpener.cs` | DTE-based file opener (host-injected seam). |
+| `Telescope/Finders/FinderBase.cs` | `FinderBase<THit>` — shared gather/open pipeline for the finders (UI-thread assert, try/catch gather, hit→entry mapping, open-with-error-handling). |
+| `Telescope/Logging/PaneFailureTracker.cs` | Pure one-time fallback for the NeoVisual Output pane (`[NeoVisual] output pane unavailable: ...` written to the log file, never re-entering the pane path). |
+| `Telescope/Overlay/FocusTargetModel.cs` | Pure focus-target state machine (List/Preview) — the `[Telescope] focus target=List|Preview` diagnostic contract. |
+| `Telescope/Overlay/LineIndex.cs` | Pure (line, offset) index over text (binary-search 1-based line lookups); shared by preview caret placement + blank-line fallback. |
+| `Telescope/Overlay/TryDispatch.cs` | Shared WPF-`Key` vim-motion dispatch (h/l/j/k/w/b/e/0/$/gg/G + a/A/I) for prompt + preview; delegates to the shared `TextMotionDispatcher`. |
 
 ## Tool-window controller pattern (newer than the window matrix)
 
@@ -167,8 +200,8 @@ candidate's index, or `null` when no candidate qualifies.
 ## Build / toolchain
 
 - **Target framework:** `net472` (.NET Framework 4.7.2) — modern .NET APIs may be
-  unavailable; watch for missing LINQ/BCL members (hence the hand-rolled
-  `DistinctBy`, and `IReadOnlySet<T>` is unavailable).
+  unavailable; watch for missing LINQ/BCL members (and `IReadOnlySet<T>` is
+  unavailable).
 - **LangVersion:** `14`, `Nullable: enable`.
 - **Packages:** `Microsoft.VisualStudio.SDK` (17.14), `Microsoft.VSSDK.BuildTools`
   (18.8), `MessagePack` (3.1.8). `ExcludeAssets="runtime"` on the SDK package
@@ -176,8 +209,8 @@ candidate's index, or `null` when no candidate qualifies.
 - **VSIX target:** Visual Studio Community 17.14+ (see
   `source.extension.vsixmanifest`).
 - **Namespaces:** `MyExtension` (package/hook/handler), `CardinalNavigation`
-  (window logic — note the typo `CardinalMovment` folder/namespace is intentional),
-  and `Telescope` (separate library).
+  (window logic — the source folder is spelled `CardinalMovment` (typo); the
+  namespace is `CardinalNavigation`, not a typo), and `Telescope` (separate library).
 
 ## External skills (on-demand, token-conscious)
 
@@ -207,10 +240,10 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (77) and
-  `dotnet run --project tests/NeoVisual.Tests` (74), with substring filter +
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (143) and
+  `dotnet run --project tests/NeoVisual.Tests` (140), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/test-e2e.ps1` (35 scenarios against the experimental
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

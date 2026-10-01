@@ -1,4 +1,4 @@
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Pure decision helper for tool-window key routing. A tool-window controller's action keys
@@ -15,6 +15,14 @@ namespace MyExtension
     internal static class FocusGuard
     {
         /// <summary>
+        /// True when a tool window genuinely owns the keyboard despite a stale editor-focus flag: a
+        /// controller in input mode, or a text-input surface (Command Window, Find, ...) that is
+        /// focused. The single exemption used by all three routing formulations below.
+        /// </summary>
+        public static bool OwnsKeyboard(bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused)
+            => isInputMode || (isTextInputSurface && textInputSurfaceFocused);
+
+        /// <summary>
         /// True when the hook pre-filter should treat a tool window's action keys as interesting.
         /// False while an editor is focused, so <c>m</c>/<c>o</c>/<c>r</c>/<c>a</c> are never
         /// inspected/consumed by the hook in that state. A text-input surface (Command Window,
@@ -23,7 +31,7 @@ namespace MyExtension
         /// </summary>
         public static bool HasToolWindowActionKeys(
             bool isToolWindow, bool isInputMode, int actionKeyCount, bool editorFocused, bool isTextInputSurface, bool textInputSurfaceFocused)
-            => isToolWindow && !isInputMode && actionKeyCount > 0 && (!editorFocused || (isTextInputSurface && textInputSurfaceFocused));
+            => isToolWindow && !isInputMode && actionKeyCount > 0 && (!editorFocused || OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused));
 
         /// <summary>
         /// True when a key should be routed to the focused tool window's controller. False when an
@@ -32,7 +40,7 @@ namespace MyExtension
         /// editor-focus flag is stale.
         /// </summary>
         public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused)
-            => isToolWindow && !(editorFocused && !isInputMode && !(isTextInputSurface && textInputSurfaceFocused));
+            => isToolWindow && !(editorFocused && !OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused));
 
         /// <summary>
         /// True when the user is typing, so the leader key must type a literal space. A tool window
@@ -40,9 +48,9 @@ namespace MyExtension
         /// a tool window in normal mode is not typing.
         /// </summary>
         public static bool IsTyping(
-            bool isToolWindow, bool isInputMode, bool editorFocused, bool editorInTypingMode)
+            bool isToolWindow, bool isInputMode, bool editorFocusedVeto, bool editorInTypingMode)
             => isInputMode
                 ? true
-                : (editorFocused ? editorInTypingMode : (isToolWindow ? isInputMode : editorInTypingMode));
+                : (editorFocusedVeto ? editorInTypingMode : (isToolWindow ? false : editorInTypingMode));
     }
 }

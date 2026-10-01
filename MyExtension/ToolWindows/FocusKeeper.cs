@@ -1,7 +1,7 @@
 using System;
 using System.Windows.Threading;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Owns the <see cref="DispatcherTimer"/> lifecycle for the Solution Explorer focus-keeper: a
@@ -16,19 +16,20 @@ namespace MyExtension
             var keeper = new DispatcherTimer(DispatcherPriority.Normal);
             keeper.Interval = interval;
             DispatcherTimer keeperRef = keeper;
-            int startTick = Environment.TickCount;
-            int stopAt = startTick + durationMs;
+            // Monotonic clock (m8): Environment.TickCount (int) wraps every ~24.9 days; net472 has
+            // no TickCount64, so use a Stopwatch (high-resolution monotonic counter) instead.
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             keeper.Tick += (_, _) =>
             {
                 try
                 {
-                    tick(Environment.TickCount - startTick);
+                    tick((int)stopwatch.ElapsedMilliseconds);
                 }
                 catch
                 {
                     // selection/focus re-assert must never break the handler
                 }
-                if (Environment.TickCount >= stopAt)
+                if (stopwatch.ElapsedMilliseconds >= durationMs)
                 {
                     keeperRef.Stop();
                 }

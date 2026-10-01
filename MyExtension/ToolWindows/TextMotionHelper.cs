@@ -5,27 +5,13 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using Telescope;
+using MyExtension.Adornments;
+using MyExtension.Hooks;
+using Telescope.Logging;
+using Telescope.Overlay;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
-    /// <summary>
-    /// The vim text motions available in a text-input tool window's normal mode. Pure mapping
-    /// (key + shift state -> motion) so it can be unit-tested hermetically; the motion math itself
-    /// lives in the shared <see cref="TextMotionNavigator"/>.
-    /// </summary>
-    internal enum TextMotion
-    {
-        Left,
-        Right,
-        NextWord,
-        PrevWord,
-        EndWord,
-        InsertAfter,
-        InsertEnd,
-        InsertStart,
-    }
-
     /// <summary>
     /// Shared vim-caret behavior for the tool-window text surfaces — the Solution Explorer search
     /// box and the text-input tool windows (Command Window, Find and Replace, ...). Finds the
@@ -65,26 +51,12 @@ namespace MyExtension
         /// <summary>
         /// Maps a normal-mode key to the text motion it triggers (shift distinguishes A/a and I/i).
         /// Returns null when the key is not a text-input motion (e.g. a bare <c>i</c>, which the
-        /// generic insert handler in <see cref="InputHandler"/> takes care of).
+        /// generic insert handler in <see cref="InputHandler"/> takes care of). Delegates to the
+        /// shared <see cref="TextMotionDispatcher"/> (M19 — the single key→motion table).
         /// </summary>
         public static TextMotion? MapMotion(Keys key, bool shift)
         {
-            switch (key)
-            {
-                case Keys.H: return TextMotion.Left;
-                case Keys.L: return TextMotion.Right;
-                case Keys.W: return TextMotion.NextWord;
-                case Keys.B: return TextMotion.PrevWord;
-                case Keys.E: return TextMotion.EndWord;
-                case Keys.A:
-                    // A (Shift+a) = insert at end of line; a = insert after the caret.
-                    return shift ? TextMotion.InsertEnd : TextMotion.InsertAfter;
-                case Keys.I:
-                    // I (Shift+i) = insert at start of line; a bare i is the generic insert.
-                    return shift ? TextMotion.InsertStart : (TextMotion?)null;
-                default:
-                    return null;
-            }
+            return TextMotionDispatcher.MapKey(key, shift);
         }
 
         /// <summary>
@@ -145,7 +117,7 @@ namespace MyExtension
                 int vk = motion == TextMotion.Left ? KeyInjection.VK_LEFT : KeyInjection.VK_RIGHT;
                 string focused = Keyboard.FocusedElement?.GetType().FullName ?? "null";
                 IntPtr hwnd = NativeMethods.GetFocus();
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk} focused={focused} hwnd=0x{hwnd.ToInt64():X}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk} focused={focused} hwnd=0x{hwnd.ToInt64():X}");
                 KeyInjection.Press(vk);
                 return true;
             }
@@ -163,22 +135,14 @@ namespace MyExtension
             navigator.SetText(text);
             navigator.MoveTo(caret);
 
-            switch (motion)
+            if (!TextMotionDispatcher.Apply(motion, navigator, out CaretPlacement? insertPlacement))
             {
-                case TextMotion.Left: navigator.Left(); break;
-                case TextMotion.Right: navigator.Right(); break;
-                case TextMotion.NextWord: navigator.NextWord(); break;
-                case TextMotion.PrevWord: navigator.PrevWord(); break;
-                case TextMotion.EndWord: navigator.EndWord(); break;
-                case TextMotion.InsertAfter: navigator.InsertAfter(); break;
-                case TextMotion.InsertEnd: navigator.InsertEnd(); break;
-                case TextMotion.InsertStart: navigator.InsertStart(); break;
-                default: return false;
+                return false;
             }
 
             int newCaret = navigator.Caret;
 
-            if (motion == TextMotion.InsertAfter || motion == TextMotion.InsertEnd || motion == TextMotion.InsertStart)
+            if (insertPlacement != null)
             {
                 isInputMode = true;
                 applyCaret(newCaret);
@@ -186,7 +150,7 @@ namespace MyExtension
                 {
                     ApplyCaretStyle(focusedBox, true);
                 }
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}textinput-enter-input {MotionName(motion)} caret={newCaret}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}textinput-enter-input {MotionName(motion)} caret={newCaret}");
             }
             else
             {
@@ -196,7 +160,7 @@ namespace MyExtension
                     ApplyCaretStyle(focusedBox, false);
                 }
                 string sample = text.Length > 30 ? text.Substring(0, 30) : text;
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={text.Length} text='{sample}'");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={text.Length} text='{sample}'");
             }
             return true;
         }

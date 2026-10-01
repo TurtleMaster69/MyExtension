@@ -1,6 +1,8 @@
 ---
 description: Debug subagent — root-causes a failing dotnet build or failing offline unit test after the build-agent, applies the MINIMAL fix, and re-runs build + unit tests to prove it. May run the e2e harness scoped to reproducing a failing scenario (debugging, not the verification-agent's full recheck). Spawned by neovim_hub after BUILD (only on failure) and after VERIFY (verify-time e2e debugging, step 8a), never for planning.
 mode: subagent
+steps: 60
+temperature: 0.1
 permission:
   question: deny
   skill:
@@ -18,6 +20,8 @@ Invoke the `skill` tool to load the skills relevant to the failure, then apply t
 - `systematic-debugging` — reproduce → isolate → root-cause → fix → regression (always).
 - `debugging-and-error-recovery` — isolate WHICH layer failed (overlay/hook/controller/VsVim mode/harness) + WHERE and WHAT caused it (use for e2e failures).
 - `dotnet-build-test-diag` — build/test failure diagnosis.
+- `binlog-failure-analysis` — diagnose a `dotnet build` failure from a `.binlog` (use the text-log replay fallback — this repo has no binlog MCP server).
+- `analyzing-dotnet-performance` — static perf scan of a failing hot path (net472-filtered).
 - `dotnet-pinvoke` — native-boundary bugs (AccessViolation / marshalling) if the failure is P/Invoke-related.
 
 Load the ones that fit the failure type; read the full body, not just the description.
@@ -26,12 +30,9 @@ Load the ones that fit the failure type; read the full body, not just the descri
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when the failure hinges on
 call structure — which callers reach the broken path, what a change breaks downstream,
-what it transitively reaches. Run `trailmark --version` (install `uv tool install
-trailmark` if missing; snippets via `uv run --with trailmark python -`); do not
-hand-trace call graphs with `grep`. Parse with `language="c_sharp"` and remember
-cross-class calls land on `proxy` nodes (a bare `callers_of` 0 is not proof of no
-callers). Do NOT use entrypoint reach / taint / privilege-boundary passes — this repo
-has no detected entrypoints, so they return empty and carry no signal.
+what it transitively reaches. Read the canonical per-repo guidance at
+`.opencode/agent/trailmark-guidance.md` and follow it — do not re-derive it here. Do
+not hand-trace call graphs with `grep`.
 
 ## Hard rules
 
@@ -42,13 +43,18 @@ has no detected entrypoints, so they return empty and carry no signal.
   no "improvements" beyond the fix.
 - Do NOT edit the workflow docs (`docs/spec.md`, `docs/progress.md`,
   `docs/implementation_plan.md`) — the hub owns those.
-- You MAY run `tools/test-e2e.ps1 -Tests <affected>` to reproduce a failing e2e scenario
+- You MAY run `tools/harness/test-e2e.ps1 -Tests <affected>` to reproduce a failing e2e scenario
   and inspect the runtime log — this is debugging, NOT the verification-agent's full
   recheck. Do not report a pass/fail verdict on the whole feature; report only the fix.
 - Follow AGENTS.md conventions: net472 (no modern BCL, no `IReadOnlySet<T>`),
   `LangVersion` 14, UI-thread affinity (`ThreadHelper.ThrowIfNotOnUIThread()`),
   `CardinalMovment` typo kept as-is, diagnostics-as-contract (never change a
   `[NeoVisual]`/`[Telescope]` format the e2e asserts on).
+- **On an unintended command failure** (non-zero exit, exception, unexpected empty
+  result), report it in your final message (command + error + category guess) so the
+  hub can log it to `.opencode/AGENT-FAILURES.md` — do
+  not fix it silently and do not repeat the broken command. Do NOT log expected
+  negative test results (a failing RED test is not a failure).
 
 ## Your task
 
@@ -63,7 +69,7 @@ has no detected entrypoints, so they return empty and carry no signal.
 4. Apply the **minimal** fix that resolves the root cause.
 5. Re-run (scoped to the failure + the hub's lane): `dotnet build`, the affected
    unit project(s) the hub specifies (both only at the item's final gate), and (if
-   the failure was e2e) `pwsh tools/test-e2e.ps1 -Tests <affected>`. The relevant
+   the failure was e2e) `pwsh tools/harness/test-e2e.ps1 -Tests <affected>`. The relevant
    ones must pass. If you cannot fix it, report the blocker and escalate rather
    than leaving it half-fixed.
 

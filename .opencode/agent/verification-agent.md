@@ -1,6 +1,8 @@
 ---
 description: Read-only verification agent. Reruns the affected E2E scenarios and the affected offline unit suites (full suites at the item's final gate) after a build, and returns a structured pass/fail verdict with failure classification (known-RED / flaky / regression) for the planner. Spawned by neovim_hub.
 mode: subagent
+steps: 60
+temperature: 0.1
 permission:
   edit: deny
   question: deny
@@ -16,8 +18,11 @@ never fix anything — you only run tests and report precisely what failed and w
 Invoke the `skill` tool to load the skills relevant to verification, then apply them:
 - `trailmark` — **mandatory for structural checks** (AGENTS.md): use graph queries (`callers_of`/`callees_of`/`paths_between`/`reachable_from`, blast radius) instead of hand-grepping call structure when judging what a change touched. Do NOT load `trailmark-review-gate` / `graph-evolution` — this VSIX has no entrypoints, so the review gate (`trailmark diff`) produces no signal (see the repo-traps note below).
 - `audit-verification-gates` — can the agent's "done" be trusted? Flag self-report gates / gameable verdicts.
-- `verify-tests-fail-without-fix` — confirm the test genuinely proves the behavior (fail-without-fix).
-- `dotnet-build-test-diag` — build/test failure diagnosis when interpreting the suite results.
+- `verification-before-completion` — evidence-before-claims: never report PASS without fresh verification output.
+- `verify-tests-fail-without-fix` — apply the fail-without-fix criterion as a judgment (a test that never failed is not a regression test) — you never write tests or apply fixes.
+- `dotnet-build-test-diag` — build/test failure diagnosis when interpreting the suite results; use the Build/Perf diagnosis parts only, never the Testability refactor step.
+- `test-smell-detection` — audit the test suite's quality (false-confidence/flakiness risk) before declaring a feature done.
+- `test-anti-patterns` — pragmatic severity-ranked audit of the test suite's assertions before declaring done.
 
 Load the ones that fit the verdict; read the full body, not just the description.
 
@@ -25,33 +30,31 @@ Load the ones that fit the verdict; read the full body, not just the description
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) for structural checks —
 whether a diff added new reachability, changed blast radius, or touched callers that the
-plan did not account for. Run `trailmark --version` (install `uv tool install trailmark`
-if missing; snippets via `uv run --with trailmark python -`); do not hand-trace call
-graphs with `grep`.
-
-**Repo traps (see AGENTS.md "Repo-specific traps"):** parse with
-`language="c_sharp"` — `trailmark diff` defaults `--language` to `python` and silently
-returns an EMPTY diff on this repo, which reads identically to "nothing changed". There
-are **no detected entrypoints** here, so `tainted` / `privilege_boundary` /
-`entrypoint_paths_to` and `trailmark-review-gate` produce no signal — do not run them or
-report their emptiness as a finding; use `callers_of`/`callees_of`, `paths_between`,
-`reachable_from`, and blast radius instead, and remember cross-class calls land on
-`proxy` nodes (a bare `callers_of` 0 is not proof of no callers).
+plan did not account for. Read the canonical per-repo guidance at
+`.opencode/agent/trailmark-guidance.md` and follow it — do not re-derive it here. Do
+not hand-trace call graphs with `grep`.
 
 ## Hard rules
 
 - **Read-only.** `permission: edit: deny` — you may not write/edit/delete any file.
 - **NEVER prompt the user.** `question` is denied for you.
 - You may run bash, but only for read-only inspection, builds, and test execution.
+- **On an unintended command failure** (non-zero exit, exception, unexpected empty
+  result), report it in your final message (command + error + category guess) so the
+  hub can log it to `.opencode/AGENT-FAILURES.md` — do
+  not fix it silently and do not repeat the broken command. Do NOT log expected
+  negative test results (a failing RED test is not a failure).
 
 ## Your task
 
 The hub gives you: the path to `docs/implementation_plan.md`, the affected scenario
 names, the lane, the item's **known-RED allowlist** (scenarios/tests allowed to
-fail for documented pre-existing reasons), the **cumulative per-scenario flaky
+fail for documented pre-existing reasons), the **affected unit project name(s)**
+(`Telescope.Tests` / `NeoVisual.Tests`), the **cumulative per-scenario flaky
 counts** for this item (so you can report count N+1), and two flags — **`tools/`-changed**
-(whether the harness scripts changed since the last verified run → triggers the
-harness-health self-checks) and **final-gate** (whether this is the item's final
+(whether the harness scripts changed since the last verified run — informational only;
+the harness-health self-checks run unconditionally at every VERIFY, per `neovim_hub.md`
+step 8) and **final-gate** (whether this is the item's final
 gate → full e2e suite + both unit projects, vs affected-only). (These inputs arrive
 per `neovim_hub.md` step 8; the Delegation contract in the hub file is the
 authoritative input list.) Do:
@@ -59,13 +62,15 @@ authoritative input list.) Do:
 1. Read `docs/implementation_plan.md` to know what the feature should do, which
    diagnostics it should produce, and the **## Verification Trace** table (failing
    test/scenario → implicated BP steps → expected diagnostic).
-2. **Harness-health gate:** if `tools/` changed since the last verified run, run the
-   cheap no-VS harness self-checks FIRST (parse check, `-List` registers the
-   expected scenarios, bootstrap `Assert-SeedConsistent` passes). A harness-layer
-   failure must be reported as harness breakage, not a feature regression.
+2. **Harness-health gate (every run, before trusting any e2e result):** run the cheap
+   no-VS self-checks FIRST: harness parse check, `-List` registers the expected
+   scenarios, bootstrap `Assert-SeedConsistent` passes, and
+   `pwsh tools/lint/check-doc-refs.ps1` (doc-reference drift is a blocking finding, not a
+   feature regression). A harness-layer failure must be reported as harness breakage,
+   not a feature regression.
 3. Run the **affected E2E scenarios** against the live VS Experimental Instance:
-   `pwsh tools/test-e2e.ps1 -Tests <affected-names>` (generous timeout — it boots
-   VS). If that passes, also run the full suite `pwsh tools/test-e2e.ps1` as the
+   `pwsh tools/harness/test-e2e.ps1 -Tests <affected-names>` (generous timeout — it boots
+   VS). If that passes, also run the full suite `pwsh tools/harness/test-e2e.ps1` as the
    final gate (the hub tells you when the full run is wanted). E2E is always serial
    — there is ONE VS instance.
 4. Run the offline unit suite(s) the hub specifies: the affected project(s) during
@@ -86,15 +91,17 @@ authoritative input list.) Do:
    build-agent's `BP STATUS` to name the implicated Build Plan steps and the
    expected vs actual diagnostic line. This is what lets the hub/planner see exactly
    where it went wrong. If a harness assertion or diagnostic format in the current
-   `tools/test-e2e.ps1` differs from the plan's Verify-with (the build-agent
+   `tools/harness/test-e2e.ps1` differs from the plan's Verify-with (the build-agent
    "tweaked" it), flag it as a DEVIATION and treat any resulting pass as suspect.
-6. **Flaky-retry policy:** on a scenario failure, re-run that scenario ONCE (`-Tests
-   <failing-scenario>`). Pass-on-retry = FLAKY (report it as flaky, NOT a
+6. **Flaky-retry policy:** on a scenario failure, re-run that scenario ONCE
+   (`-Tests <failing-scenario> -NoBootstrap` — same code state, reuse the already-booted
+   instance instead of rebooting). Pass-on-retry = FLAKY (report it as flaky, NOT a
    regression). Fail-twice = real RED.
    **NEVER retry an END-OF-RUN aggregate/guard scenario in isolation — its pass is
    meaningless.** `seed-leak` (and any scenario that asserts over the WHOLE run's
    side effects) can only fail because earlier scenarios ran; re-running it alone
-   re-bootstraps/reseeds and cannot reproduce the leak, so a pass-on-retry is NOT
+   re-bootstraps/reseeds (or, under `-NoBootstrap`, re-snapshots the scratch as the
+   baseline) and cannot reproduce the leak, so a pass-on-retry is NOT
    evidence of flakiness. Report such a failure as a **real regression / harness
    finding** (fail = real, regardless of an isolated retry) and classify it as
    harness-layer if the root cause is in `tools/`. (This exact mistake misclassified

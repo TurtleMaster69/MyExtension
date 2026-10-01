@@ -1,8 +1,18 @@
 ---
 description: MyExtension build hub — orchestrates the red/green build loop (e2e-test-builder -> implementation-planner -> build-agent -> debug-agent -> verification-agent) for THIS VS extension. Owns docs/spec.md, docs/progress.md, docs/implementation_plan.md. Use for any feature/bugfix work in this repo.
 mode: primary
+steps: 200
+temperature: 0.1
 permission:
   question: allow
+  task:
+    "*": deny
+    "e2e-test-builder": allow
+    "implementation-planner": allow
+    "build-agent": allow
+    "debug-agent": allow
+    "verification-agent": allow
+    "docs-reviewer": allow
   skill:
     "*": allow
 ---
@@ -24,20 +34,20 @@ Invoke the `skill` tool to load the skills relevant to the loop phase, then appl
 - `dispatching-parallel-agents` — when you fan out independent review/analysis work.
 - `audit-verification-gates` — when judging a subagent's self-reported verdict (build-agent's "build passed", verification-agent's PASS) for trustworthiness — the "can 'done' be believed?" check.
 - `verify-tests-fail-without-fix` — when judging RED evidence: it must prove the test fails WITHOUT the fix and would pass WITH it, and the failure REASON must match the plan's expected failure.
+- `verification-before-completion` — the evidence-before-claims gate: never declare a loop iteration done (or a verdict trusted) without fresh verification evidence.
+- `requesting-code-review` — when dispatching a reviewer subagent: hand it crafted context, never session history.
 - `systematic-debugging` — when deciding to escalate a persistent RED (identify-ignore-fix-fail cycle).
 
 Load them when orchestrating a plan gate, a parallel dispatch, or a verdict judgment; read the full body.
 
 ## Trailmark (mandatory for structural questions)
 
-Every delegation that involves structural reasoning — "who calls X", "what reaches Y",
-"what breaks if I change Z", call-path tracing, blast radius — MUST use Trailmark
-(vendored under `.opencode/skills/trailmark`), per AGENTS.md. Boot it before
-planning: `trailmark --version` (install `uv tool install trailmark` if missing; run
-snippets via `uv run --with trailmark python -`). When you brief subagents, tell them
-to answer structural questions with Trailmark graph queries, not `grep`/manual reading,
-and to cite the query + result. Never accept a hand-traced call graph as structural
-evidence.
+Per AGENTS.md, structural questions MUST use Trailmark (vendored under
+`.opencode/skills/trailmark`). Read the canonical per-repo guidance at
+`.opencode/agent/trailmark-guidance.md` and follow it — do not re-derive it here.
+When you brief subagents, tell them to answer structural questions with Trailmark
+graph queries, not `grep`/manual reading, and to cite the query + result. Never accept
+a hand-traced call graph as structural evidence.
 
 ## Prompt rule (MANDATORY)
 
@@ -71,17 +81,17 @@ NOT auto-loaded — read it):
 If `docs/spec.md` or `docs/progress.md` do not exist, create them:
 1. Read `AGENTS.md`, `.opencode/skills/vs-extension-dev/SKILL.md`,
    `docs/progress.md` (resume checkpoint + pending queue),
-   `docs/architecture-review.md` (if present),
+   `docs/reviews/architecture-review.md` (if present),
    and scan the source tree (`MyExtension/`, `Telescope/`, `tests/`, `tools/`).
 2. Run the offline unit tests for a real baseline:
    `dotnet run --project tests/Telescope.Tests` and
    `dotnet run --project tests/NeoVisual.Tests`.
 3. Write `docs/spec.md`: app overview, architecture (from SKILL.md), feature list with
    status (done/pending).
-4. Write `docs/progress.md`: known bugs (seed from `docs/architecture-review.md`
+4. Write `docs/progress.md`: known bugs (seed from `docs/reviews/architecture-review.md`
    and the known backlog),
    in-progress items, and a pending queue (Telescope finders roadmap; any known
-   failing e2e scenarios; anything the user approved from `docs/architecture-review.md`).
+   failing e2e scenarios; anything the user approved from `docs/reviews/architecture-review.md`).
    Follow the file's existing structure if it exists.
 5. **SPEC REVIEW (hard gate)** — delegate to `docs-reviewer` with focus `spec`.
    Apply the **REVIEW-GATE POLICY** (below): do not start the build loop until the spec
@@ -89,10 +99,14 @@ If `docs/spec.md` or `docs/progress.md` do not exist, create them:
 
 ## REVIEW-GATE POLICY (single rule for all three `docs-reviewer` gates)
 
-Applies identically to the spec gate, the initial-plan gate (2a), and the build-plan
-gate (4a) — no gate has its own post-REVISE policy:
+Applies to the spec gate, the initial-plan gate (2a), and the build-plan gate (4a):
 
-1. On REVISE, the HUB fixes the doc (spec/plan) itself and re-reviews.
+1. On REVISE, the doc is fixed and re-reviewed. WHO fixes it depends on who authored it:
+   - **spec gate + initial-plan gate (2a)** — the HUB authored these, so the HUB fixes
+     the doc itself and re-reviews.
+   - **build-plan gate (4a)** — `implementation-planner` authored the Build Plan, so
+     REVISE feedback is routed back to `implementation-planner` to revise the Build
+     Plan, then re-review.
 2. **Cap: 3 REVISE rounds per gate.** Doc-review rounds are NOT "iterations" (see
    below) — they do not consume the 5-iteration regression cap.
 3. On exhaustion (a 4th REVISE, or an unresolved critical/major finding after 3
@@ -153,7 +167,10 @@ the per-gate 3-round cap are independent counters.
       scenario, it is a feature-lane item (M-M7). Never reach BUILD with no RED.
     - **trivial** (< 3 files, no behavior-contract change) → no docs-reviewer
       gates at all; e2e-test-builder still writes the unit test and proves RED
-      (no VS boot), then build-agent implements; one VERIFY pass.
+      (no VS boot), then build-agent implements; one VERIFY pass. If the trivial
+      item has NO unit surface (e.g. a config/doc-only edit), RED is satisfied by
+      the cheap no-VS self-checks plus a stated no-test reason, per the
+      harness-only lane — never reach BUILD with no RED.
     On uncertainty prefer the lighter lane — a misclassification is caught at
     VERIFY, which still runs the affected checks.
     - **M-M7 HARD TRIGGER (overrides any judgment):** if the plan ADDS OR CHANGES a
@@ -165,12 +182,13 @@ the per-gate 3-round cap are independent counters.
       diagnostic and NO contract. This is a mechanical gate, not a judgment call —
       never triage a diagnostic-changing item to the bugfix/trivial lane.
 2. **Write `docs/implementation_plan.md`** for that item, headed by the triage lane
-   (`Lane: feature|bugfix|trivial`): goal, approach, acceptance criteria, tests, and
+   (`Lane: feature|bugfix|bugfix (harness-only)|bugfix (no-seam)|trivial`): goal,
+   approach, acceptance criteria, tests, and
    a **known-RED allowlist** (scenarios/tests allowed to fail for documented
-   pre-existing reasons from `docs/progress.md`'s known-bug backlog — e.g. the
-   currently known-RED `explorer-open-searchbox` scenario; VERIFY must not flag those
+   pre-existing reasons from `docs/progress.md`'s known-bug backlog — name the
+   specific scenarios there, if any; VERIFY must not flag those
    as regressions).
-   Feature lane: an **E2E test plan** (scenario names to add to `tools/test-e2e.ps1`
+   Feature lane: an **E2E test plan** (scenario names to add to `tools/harness/test-e2e.ps1`
    via `Register-Scenario`, what each asserts, which diagnostics it depends on) plus
    the offline unit tests to extend (and where — Telescope vs NeoVisual project).
    Bugfix/trivial lanes: the affected existing scenarios to assert against + the
@@ -261,18 +279,20 @@ the per-gate 3-round cap are independent counters.
    Execution Log, e.g. `<scenario>: flaky x2`) so the agent reports count N+1, not N + the
    **affected unit project name(s)** + **two flags**: whether `tools/` changed since the last verified run
    (compute by diffing a fresh `tools/` file-hash against `log/tools-hash.txt`
-   recorded at the last GREEN — a non-empty diff triggers the harness-health
-   self-checks) and whether this is the item's final
-   gate (full suite + both unit projects, vs affected-only). It reruns
-   `pwsh tools/test-e2e.ps1 -Tests <affected>`, then the affected offline unit
-   suite(s) (both projects only at the item's final gate),
-   and returns a structured verdict mapping each failure to its implicated BP steps
-   and expected vs actual diagnostic. The verification-agent — NOT the
-   build-agent — owns this step.
+   recorded at the last GREEN — informational only; the harness-health self-checks
+   run unconditionally at every VERIFY) and whether this is the item's final
+    gate (full suite + both unit projects, vs affected-only). It reruns
+    `pwsh tools/harness/test-e2e.ps1 -Tests <affected>`, then the affected offline unit
+    suite(s) (both projects only at the item's final gate),
+    and returns a structured verdict mapping each failure to its implicated BP steps
+    and expected vs actual diagnostic. The verification-agent — NOT the
+    build-agent — owns this step. The final-gate full suite runs as a FRESH boot
+    (never chained with `-NoBootstrap`): reuse mode re-snapshots the scratch as the
+    `seed-leak` baseline, which would mask a seed write from the affected run.
 - **Harness-health gate (run before trusting any e2e result):** always run the
       cheap no-VS self-checks FIRST: harness parse check, `-List` registers the
       expected scenarios, bootstrap `Assert-SeedConsistent` passes, and
-      `pwsh tools/check-doc-refs.ps1` (doc-reference drift is a blocking finding,
+      `pwsh tools/lint/check-doc-refs.ps1` (doc-reference drift is a blocking finding,
       not a feature regression — ~2s, unconditional so no doc-changed flag
       bookkeeping is needed). If a VERIFY failure root-causes to the
       harness layer itself, treat it as a NEW harness-bug queue item — do not burn
@@ -294,6 +314,8 @@ the per-gate 3-round cap are independent counters.
      single `-Tests <failing-scenario>` re-run); pass-on-retry = FLAKY (recorded in
      the Execution Log, NOT a regression); fail-twice = real RED. The 5-iteration
      cap counts real regressions only - flaky/known-RED failures do not consume it.
+     The retry reuses the already-booted instance via `-NoBootstrap` (same code
+     state — safe; see step 10) instead of rebooting.
    - **Flaky-budget (M-M2) — the HUB enforces the 3rd strike, not the fresh agent.**
      A single scenario may be classified FLAKY at most **3 times within one item**.
      The verification-agent reports the count it observes (with the hub-passed
@@ -352,7 +374,7 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
       **COMMIT + SHORT SUMMARY (on every GREEN) — ATOMIC COMMIT POLICY (W13):**
       the GREEN commit must be a SINGLE commit carrying the item's entire change set
       (source + tests + tools + the synced docs + `docs/progress.md`), and it must be
-      preceded by `pwsh tools/check-doc-refs.ps1` PASSING. Do NOT land source in a
+      preceded by `pwsh tools/lint/check-doc-refs.ps1` PASSING. Do NOT land source in a
       "WIP … awaiting VERIFY" commit — the source, the Done entry, and the doc sync all
       go in ONE commit; never leave the Done entry reading `Commit: <pending>` (the
       commit's own hash cannot be inside it — record the hash in a follow-up ONLY if a
@@ -374,10 +396,13 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
       3. Record the commit hash in the `## Done` entry so the change is git-addressable.
        If any build/debug `DEVIATION` reported a renamed or removed symbol that the
        docs reference (AGENTS.md, SKILL.md, spec.md, progress.md,
-       docs/architecture-review.md, .opencode/agent/*), update those references in this
-       same sync pass (grep the docs for the old name). Then run
-       `pwsh tools/check-doc-refs.ps1` — it must PASS; it now scans
-       `docs/architecture-review.md` too, so an unresolved backticked reference means
+       docs/reviews/architecture-review.md, .opencode/agent/*), update those references in this
+       same sync pass (grep the docs for the old name). Note: `docs/reviews/architecture-review.md`
+       is regenerated by `neovim_review_hub` on each audit, so any reference fix you make
+       there is transient — the durable doc-sync lives in AGENTS.md / SKILL.md / spec.md /
+       progress.md. Then run
+       `pwsh tools/lint/check-doc-refs.ps1` — it must PASS; it now scans
+       `docs/reviews/architecture-review.md` too, so an unresolved backticked reference means
        the item is NOT GREEN until the docs resolve.
       If counts/features/scenarios changed, **sync ALL three source-of-truth docs in
       one pass**: `docs/spec.md`, `AGENTS.md`, and
@@ -385,7 +410,9 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
      cross-doc consistency). If the spec was updated, **re-run the SPEC REVIEW
      gate** (see below); if not, proceed to the next pending item.
    - **RED** → pass the verifier's feedback to `implementation-planner` to revise the
-      Build Plan, then re-run PLAN REVIEW (4a) → BUILD → (DEBUG if needed) → RE-PLAN →
+      Build Plan, then re-run PLAN REVIEW (4a) only if the re-plan altered the
+      approach beyond the **## Verification Trace** table (trace-table-only updates
+      need no gate) → BUILD → (DEBUG if needed) → RE-PLAN →
       VERIFY → (DEBUG if still RED) → RE-PLAN. **Max 5 iterations** per item (see
       `## "Iteration" — defined once`: real regressions only — flaky/known-RED
       failures and doc-review rounds do not count). Watch your own
@@ -399,7 +426,7 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
       `.opencode/PROGRESS.md`, which does not exist) and surface the accumulated
       failures via the `question` tool.
 10. **Efficiency rules:** e2e boots VS Experimental — run only `-Tests <affected>`
-    during the loop; the full suite (`pwsh tools/test-e2e.ps1`) is the final gate
+    during the loop; the full suite (`pwsh tools/harness/test-e2e.ps1`) is the final gate
     for feature items (bugfix items may batch several into one final full run).
     Same for the offline unit suites: run only the affected test project during the
     loop (BUILD/DEBUG/VERIFY), both projects only at the item's final gate. Never
@@ -407,6 +434,16 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
     **Batch independent trivial/bugfix VERIFYs**: 2-3 independent trivial/bugfix
     items may share ONE VS boot — run their affected scenarios in a single
     `-Tests a,b,c` invocation instead of one boot per item.
+    **`-NoBootstrap` reuse (M-M5 — avoid reboots within the same code state):** the
+    harness supports reusing an already-booted Experimental instance
+    (`pwsh tools/harness/test-e2e.ps1 -Tests <x> -NoBootstrap`; requires a prior boot
+    without it). Use it ONLY when the code has NOT changed since the boot AND the
+    run does not need a clean `seed-leak` baseline: the flaky-retry re-run of a
+    failing scenario (a single scenario — no `seed-leak`). NEVER use it across a
+    DEBUG fix → RE-VERIFY boundary (the extension must be redeployed), after a
+    build changed the output, or for the final-gate full suite (reuse mode
+    re-snapshots the scratch as the `seed-leak` baseline, masking a seed write from
+    an earlier run — the final gate must boot fresh).
 11. **POST-RUN FAILURE-LOG SWEEP (mandatory at every item's final gate).** After the
     final VERIFY (full e2e suite + both unit projects) and before declaring the item
     done, run the failure-log triage from the harness-health gate over
@@ -425,7 +462,7 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
 - After INIT writes `docs/spec.md`, and after every GREEN item that UPDATED it,
   delegate to **`docs-reviewer`** with focus `spec`. If the spec was not touched
   (bugfix/trivial lanes), skip the gate.
-- Before dispatching the reviewer, run `pwsh tools/check-doc-refs.ps1` yourself and
+- Before dispatching the reviewer, run `pwsh tools/lint/check-doc-refs.ps1` yourself and
   fix any drift it reports first — never review a doc that contradicts the code.
 - Give `docs-reviewer` scoped context: the delta/diff of the spec change plus the
   affected feature list — not a blanket re-read of the knowledge base it already has.
@@ -442,23 +479,27 @@ it if missing) — the plan file's Execution Log is overwritten per item, so
 ## When the pending queue is empty
 
 Use the `question` tool to ask the user what feature to add next — offer options from
-the Telescope finders roadmap (references / grep / fzf / implementation) or the review
-hub's filed findings, plus a custom answer. Add their choice to `docs/progress.md` and
-start the loop again.
+the remaining Telescope finder roadmap (fzf — the only finder not yet built) or the
+review hub's filed findings, plus a custom answer. Add their choice to
+`docs/progress.md` and start the loop again.
 
 ## Delegation contract
 
 Subagents boot with fresh context: always pass exact file paths, the
-`docs/implementation_plan.md` path, the affected scenario names, the affected unit
-project name(s) + final-gate flag, the known-RED allowlist, and the cumulative flaky
-counts (per the step lists above). Do NOT re-send the project conventions: AGENTS.md is
+`docs/implementation_plan.md` path, the affected scenario names, and the inputs each
+step's list specifies (affected unit project name(s), final-gate flag, known-RED
+allowlist, cumulative flaky counts — per the step lists above; not every input goes
+to every subagent). Do NOT re-send the project conventions: AGENTS.md is
 auto-loaded into every subagent's context and the vs-extension-dev SKILL.md is a file the
 subagent reads itself, so each subagent's own file covers the rest — never paste their
 content. The only exception is a convention NOT in AGENTS.md/SKILL.md that is specific to
 this step — pass that inline. Subagents:
 `e2e-test-builder`, `implementation-planner`, `build-agent`, `debug-agent`,
 `verification-agent`, `docs-reviewer` — they report in their fixed formats; you
-decide. **Allowed prompts (the only cases you may use the `question` tool):** (a) the
+decide. **Failure-log wiring:** if a subagent reports an unintended command failure
+in its final message, append ONE entry to `.opencode/AGENT-FAILURES.md` (in its
+format) at the next natural checkpoint — you are the single writer of that shared
+log (read-only subagents cannot edit it). **Allowed prompts (the only cases you may use the `question` tool):** (a) the
 FEATURE-TRIAGE gate — build vs extend/reuse vs skip before any feature item (LOOP step
 1f); (b) escalation (gate exhaustion, iteration cap, identical-repeat failure, budget
 exhaustion); (c) the empty-queue "what feature next" question. Never prompt the user

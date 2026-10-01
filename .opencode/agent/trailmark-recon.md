@@ -21,6 +21,11 @@ and every arch-auditor consumes so they do not each rediscover the graph.
 - **Never fall back to grep / manual call tracing.** Boot Trailmark and query the graph
   (the `trailmark` skill's "Rationalizations to Reject" table forbids manual reading).
 - Return the digest only — no preamble, no code-quality findings.
+- **On an unintended command failure** (non-zero exit, exception, unexpected empty
+  result), report it in your final message (command + error + category guess) so the
+  hub can log it to `.opencode/AGENT-FAILURES.md` — do
+  not fix it silently and do not repeat the broken command. Do NOT log expected
+  negative test results.
 
 ## Task
 
@@ -28,8 +33,9 @@ The hub gives you a repo root (default the working directory) and an optional **
 focus** (a list of files or a class/type name). You are a child session and cannot spawn
 further agents — never attempt to.
 
-1. Boot Trailmark: `trailmark --version` (install with `uv tool install trailmark` if
-   missing; run snippets via `uv run --with trailmark python -`).
+1. Boot Trailmark per the canonical guidance at `.opencode/agent/trailmark-guidance.md`
+   (`trailmark --version`; install with `uv tool install trailmark` if missing; run
+   snippets via `uv run --with trailmark python -`).
 2. Parse the repo with `language="c_sharp"` — never the CLI default, because `python`
    silently yields an empty graph on this repo — then call `engine.preanalysis()`.
 3. Query the baseline below, plus the slice members when a focus is given.
@@ -51,18 +57,13 @@ further agents — never attempt to.
 
 ### Querying callers (proxy-addressed — do NOT enumerate `to_json()` nodes)
 
-Address the proxy id DIRECTLY; no node enumeration is needed:
+Address the proxy id DIRECTLY; no node enumeration is needed (see the canonical
+guidance at `.opencode/agent/trailmark-guidance.md` for the full `to_json()` shape):
 
 ```python
 engine.callers_of("proxy.unresolved:controller.TryMove")        # -> ['HandleKey']
 engine.callers_of("proxy.unresolved:controller.ExitInputMode")  # -> ['ExitToolWindowInputMode']
 ```
-
-`engine.to_json(indent=2) -> str` returns a JSON **string** — indexing it directly raises
-`TypeError: string indices must be integers, not 'str'`, so `json.loads` it first. After
-parsing, **`nodes` is an id-keyed dict** (`{node_id: node_dict}`, so `['nodes'][0]` is a
-`KeyError`) while **`edges` is a list**. Never enumerate `to_json()` nodes to answer a
-caller question — use `callers_of`/`callees_of` on the proxy id.
 
 ## Return format (final message, target <= ~6KB)
 

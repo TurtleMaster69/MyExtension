@@ -10,7 +10,7 @@ Each entry asserts: the listed scenarios stay GREEN + `git diff` shows no
 log-literal drift. Diagnostics depended on: the existing
 `[Telescope]`/`[NeoVisual]`/`[Hook]` lines (unchanged).
 
-Run: `pwsh tools/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
+Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
 final entry).
 
 ## E2E-AC-1 — Lane 1 (mechanical dedup)
@@ -73,7 +73,7 @@ added by the plan (`[NeoVisual] stale-toolwindow sentinel active`,
 `[Telescope] fzf filter failed:`, `[Telescope] fzf unavailable — showing
 unfiltered list`, `[Telescope] filter failed:`).
 
-Run: `pwsh tools/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
+Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
 final entry).
 
 ## E2E-CR-1 — CR1 (per-type controller loop overwrites SolutionExplorerController)

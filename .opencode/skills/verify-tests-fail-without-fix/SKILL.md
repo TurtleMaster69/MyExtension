@@ -16,7 +16,7 @@ A test that never failed is not a regression test. Adapted from official `dotnet
 1. **Write the test against the current (buggy) behavior** and run it — it must FAIL.
 2. **Confirm the failure is the intended one** — the assertion/diagnostic that fails must be the one tied to the bug, not an unrelated crash.
 3. **Run it without the fix** → RED; **with the fix** → GREEN. Both directions proven.
-4. Auto-detect the test type: offline unit in `tests/*.Tests` for pure logic, e2e scenario in `tools/test-e2e.ps1` when a live VS instance is needed.
+4. Auto-detect the test type: offline unit in `tests/*.Tests` for pure logic, e2e scenario in `tools/harness/test-e2e.ps1` when a live VS instance is needed.
 5. If the test can't be made to fail first, the test is testing the wrong thing — revise it.
 
 ## Source

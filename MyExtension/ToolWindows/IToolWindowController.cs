@@ -1,6 +1,6 @@
 using System.Windows.Forms;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// General contract for a tool window's normal/input mode behavior.

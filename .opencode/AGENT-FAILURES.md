@@ -7,18 +7,23 @@ genuinely broken — fix or work around the tool). Tools are only useful if used
 correctly; a recurring agent-side error is a prompt/skill defect, not a tool defect.
 
 **Rules for agents (all hubs and subagents):**
-- On a command that fails (non-zero exit, exception, unexpected empty result), append
-  ONE entry in the format below — do not fix it silently and do not repeat the same
-  broken command.
+- On a command that fails (non-zero exit, exception, unexpected empty result), report
+  it in your FINAL MESSAGE (the exact command, the exact error line, and your one-line
+  guess at the category) — do not fix it silently and do not repeat the same broken
+  command. The hub appends it to this log (read-only agents cannot edit files; the hub
+  is the single writer of this shared log).
 - Keep it terse: the exact command, the exact error line, and your one-line guess at
   the category.
 - **Do NOT** log expected/negative results that are part of a test (e.g. a RED test
   that is supposed to fail, a `-Tests` scenario that is intentionally red). Log only
   UNINTENDED failures.
 - Read the existing entries first — if your exact failure is already listed with a
-  fix, apply the fix instead of appending a duplicate.
+  fix, apply the fix instead of reporting a duplicate.
 
 **Rules for the hub (the sweep — `neovim_hub.md` LOOP step 11):**
+- When a subagent reports a command failure in its final message, append ONE entry to
+  this log (in the format below) at the next natural checkpoint (step 9 Execution Log
+  or the final-gate sweep).
 - At every item's **final gate** (after the last VERIFY, before the GREEN commit), read
   this file and process EVERY entry whose FIX is empty or `unknown`.
 - `agent-syntax` → fix the prompt/skill/agent file so the mistake cannot recur, then
@@ -81,6 +86,21 @@ end-of-run aggregate/guard scenarios — such a failure is a real harness findin
 regardless of an isolated retry. The guard defect itself was fixed in
 `tools/test-e2e.ps1` (exclude `obj/`+`bin/`; `Assert-NoSeedLeak` takes the allowlist
 and skips allowlisted files instead of mutating the snapshot). FIXED 2026-09-27.
+
+## 2026-09-29 | code-review-worker (S9) | agent-syntax
+COMMAND: `uv run --with trailmark python -` with `trailmark.parse.parse_directory(..., language="c_sharp")` + `trailmark.query.QueryEngine`
+ERROR: `AttributeError: 'CodeGraph' object has no attribute 'find_node_id'` (and `preanalysis()` -> `'CodeGraph' object has no attribute '_graph'`); tried 3 variants (default, `--with trailmark==0.5.0`, no preanalysis) — all failed identically.
+FIX: use the documented `QueryEngine.from_directory(dir, language="c_sharp")` entry point (as `trailmark-recon` does) instead of `trailmark.parse.parse_directory` + `trailmark.query.QueryEngine`; the wheel's `QueryEngine` expects a store shape the `parse_directory`-returned `CodeGraph` lacks. The worker fell back to the shared RECON digest + direct reading — no finding was lost. FIXED 2026-09-29 (guidance: the canonical entry point is `QueryEngine.from_directory`).
+
+## 2026-09-29 | arch-auditor (R8-S3) | environment
+COMMAND: a Python Trailmark query script run via `uv run --with trailmark python -` (QueryEngine.from_directory + preanalysis)
+ERROR: `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` (cp1250 console encoding) — the query script printed a `→` character to a cp1250 console; the query still returned the needed caller data before failing on the last method.
+FIX: set `PYTHONIOENCODING=utf-8` (or avoid non-ASCII in query-script output) when running Trailmark query scripts on this machine's cp1250 console. No repo impact; the worker completed its findings. FIXED 2026-09-29 (workaround noted).
+
+## 2026-09-29 | arch-auditor (R10-S2) | environment
+COMMAND: repeated `uv run --with trailmark python -` Trailmark query invocations (QueryEngine.from_directory + preanalysis)
+ERROR: the first identical query pattern returned data, but subsequent runs produced EMPTY stdout even with `2>&1` — no exception, no output. Category guess: `uv run` stdin-pipe flakiness on repeat invocations.
+FIX: run each Trailmark query in a fresh `uv run` process (or batch all queries into one script invocation) rather than re-invoking `uv run` repeatedly in the same shell; the worker had enough evidence from the first successful query + direct reads and completed its findings. No repo impact. FIXED 2026-09-29 (workaround noted).
 
 ## 2026-09-27 | hub (meta) | agent-syntax
 COMMAND: repeated `pwsh tools/test-e2e.ps1` runs over several sessions; two scenarios

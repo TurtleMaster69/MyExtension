@@ -1,4 +1,4 @@
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     internal sealed class HierarchyNode
     {

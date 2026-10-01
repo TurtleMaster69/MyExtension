@@ -5,7 +5,7 @@ agent: neovim_review_hub
 
 Run the MyExtension architectural review workflow. Load the project conventions,
 spawn the parallel arch-auditor subagents per slice, consolidate and prioritize the
-findings, write the live report to docs/architecture-review.md, then present the
+findings, write the live report to docs/reviews/architecture-review.md, then present the
 findings as options and ask which to file into docs/progress.md for the build hub.
 
 Boot Trailmark before auditing (`trailmark --version`; install `uv tool install

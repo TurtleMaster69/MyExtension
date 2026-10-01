@@ -1,7 +1,8 @@
+using MyExtension.Hooks;
 using System;
 using System.Windows.Forms;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Default <see cref="IToolWindowController"/> used for every tool window that doesn't have a
@@ -40,18 +41,29 @@ namespace MyExtension
         /// </summary>
         public override bool TryMove(Keys key)
         {
+            return TryMoveArrow(key);
+        }
+
+        /// <summary>
+        /// Shared hjkl→arrow path used by the default controller and the Solution Explorer
+        /// controller's J/K entries: maps the key via <see cref="KeyToArrowVk"/>, logs the
+        /// <c>[NeoVisual] toolwindow-move key=... -&gt; arrow vk=...</c> diagnostic, and presses the
+        /// arrow via <see cref="KeyInjection.Press"/>. Returns true when the key was handled.
+        /// </summary>
+        internal static bool TryMoveArrow(Keys key)
+        {
             int vk = KeyToArrowVk(key);
             if (vk == 0)
             {
                 return false;
             }
 
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk}");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-move key={key} -> arrow vk={vk}");
             KeyInjection.Press(vk);
             return true;
         }
 
-        private static int KeyToArrowVk(Keys key)
+        internal static int KeyToArrowVk(Keys key)
         {
             switch (key)
             {

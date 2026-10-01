@@ -2,10 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using EnvDTE80;
+using Telescope.Controller;
+using Telescope.Filter;
+using Telescope.Finders;
+using Telescope.Logging;
+using Telescope.Overlay;
 using TestHarness;
 using static TestHarness.TestScaffold;
 
@@ -85,6 +91,12 @@ namespace Telescope.Tests
             protected override IReadOnlyList<TestHit> GatherHits() => _gather();
             protected override FinderEntry ToEntry(TestHit hit) => new FinderEntry(hit.FilePath, hit);
             protected override void OpenHit(TestHit hit) => _open?.Invoke(hit);
+        }
+
+        // M28: a no-op IDisposable returned by the injected LogFileWriter.TimerScheduler seam.
+        private sealed class FakeTimer : IDisposable
+        {
+            public void Dispose() { }
         }
 
         public static void Run_ResultsFormatter_Empty()
@@ -174,8 +186,6 @@ namespace Telescope.Tests
                         Assert.True(ReadAllTextShared(pathB).Contains("lineB"), "pathB holds the second write");
 
                         // Second Clear() must truncate pathB too — per-path idempotency.
-                        // RED today: the once-per-process `_clearedThisProcess` flag makes this
-                        // Clear() a no-op, so pathB is NOT empty.
                         LogFileWriter.Clear();
                         Assert.Equal(0, new FileInfo(pathB).Length);
                         Assert.Equal(0, new FileInfo(debugB).Length);
@@ -316,19 +326,27 @@ namespace Telescope.Tests
                 string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
                 WithLogPath(logPath, () =>
                 {
-                    int before = LogFileWriter.FlushCount;
-                    LogFileWriter.Write("x");
-
-                    // The one-shot timer must fire ~200ms after the write and flush once.
-                    // Poll up to ~1s (the first flush can be slow under load).
-                    int count = LogFileWriter.FlushCount;
-                    for (int i = 0; i < 20 && count <= before; i++)
+                    // M28: inject a controllable timer scheduler — NO wall-clock Thread.Sleep
+                    // polling. Close() first so the static _flushTimer is null and EnsureTimer()
+                    // uses the injected seam. RED: `LogFileWriter.TimerScheduler` does not exist
+                    // yet -> compile error (CS0117).
+                    LogFileWriter.Close();
+                    Action? flushCallback = null;
+                    LogFileWriter.TimerScheduler = cb => { flushCallback = cb; return new FakeTimer(); };
+                    try
                     {
-                        System.Threading.Thread.Sleep(50);
-                        count = LogFileWriter.FlushCount;
+                        int before = LogFileWriter.FlushCount;
+                        LogFileWriter.Write("x");
+
+                        Assert.True(flushCallback != null, "the injected timer scheduler captured the flush callback");
+                        flushCallback!();
+                        Assert.True(LogFileWriter.FlushCount >= before + 1,
+                            $"firing the captured callback advances FlushCount, before={before}, after={LogFileWriter.FlushCount}");
                     }
-                    Assert.True(count >= before + 1,
-                        $"expected FlushCount to advance after a write, before={before}, after={count}");
+                    finally
+                    {
+                        LogFileWriter.TimerScheduler = null;
+                    }
                 });
             }
         }
@@ -340,23 +358,23 @@ namespace Telescope.Tests
                 string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
                 WithLogPath(logPath, () =>
                 {
-                    int before = LogFileWriter.FlushCount;
-                    LogFileWriter.Write("x");
-
-                    // Wait for the one-shot flush to land after the write.
-                    int count = LogFileWriter.FlushCount;
-                    for (int i = 0; i < 20 && count <= before; i++)
+                    LogFileWriter.Close();
+                    Action? flushCallback = null;
+                    LogFileWriter.TimerScheduler = cb => { flushCallback = cb; return new FakeTimer(); };
+                    try
                     {
-                        System.Threading.Thread.Sleep(50);
-                        count = LogFileWriter.FlushCount;
-                    }
-                    int afterFirstFlush = count;
+                        int before = LogFileWriter.FlushCount;
+                        LogFileWriter.Write("x");
 
-                    // With no further writes, the one-shot timer must NOT re-fire:
-                    // FlushCount stays put. (RED today: the periodic timer keeps
-                    // climbing during this idle wait.)
-                    System.Threading.Thread.Sleep(500);
-                    Assert.Equal(afterFirstFlush, LogFileWriter.FlushCount);
+                        Assert.True(flushCallback != null, "the injected timer scheduler captured the flush callback");
+                        // Do NOT fire the callback: with no further writes the one-shot timer must
+                        // not re-fire, so FlushCount stays put (deterministic — no sleeps).
+                        Assert.Equal(before, LogFileWriter.FlushCount);
+                    }
+                    finally
+                    {
+                        LogFileWriter.TimerScheduler = null;
+                    }
                 });
             }
         }
@@ -463,20 +481,45 @@ namespace Telescope.Tests
 
         public static void Run_FzfFilter_FilterMatchesPrefix()
         {
-            // Fail-loud: this test genuinely requires fzf on PATH. A silent skip would let the
-            // suite pass without ever exercising the real filter (M20b).
-            var fzf = new FzfFilter();
-            if (!fzf.IsAvailable())
+            // m22: resolve the fzf path explicitly and inject it via the ctor — no implicit PATH
+            // resolution via the default ctor (the Mystery Guest is explicit). Fail loudly when fzf
+            // is absent (no silent skip).
+            string? fzfPath = ResolveFzfPath();
+            if (fzfPath == null)
             {
                 throw new Exception("fzf is not on PATH — this test requires fzf (fail-loud, not a silent skip)");
             }
 
+            var fzf = new FzfFilter(fzfPath);
             var matched = fzf.FilterAsync(
                 new[] { "alpha.cs", "beta.txt", "gamma.cs" },
                 "alp",
                 new System.Threading.CancellationToken()).GetAwaiter().GetResult();
 
             Assert.True(matched.Any(m => m.Contains("alpha")), "expected 'alpha' to match 'alp'");
+        }
+
+        // Resolves the fzf executable path explicitly from PATH (m22 — the injected-path seam).
+        private static string? ResolveFzfPath()
+        {
+            string pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            foreach (string dir in pathEnv.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string trimmed = dir.Trim();
+                if (trimmed.Length == 0)
+                {
+                    continue;
+                }
+                foreach (string name in new[] { "fzf.exe", "fzf" })
+                {
+                    string candidate = Path.Combine(trimmed, name);
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+            return null;
         }
 
         // ================================================================
@@ -518,20 +561,48 @@ namespace Telescope.Tests
                     string cmdPath = Path.Combine(dir.Path, "hang.cmd");
                     File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
 
-                    var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 200 };
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
-                    sw.Stop();
-                    LogFileWriter.Flush();
+                    // M3: the timeout path must await BOTH ReadToEndAsync tasks after TryKill so the
+                    // faulted tasks are observed — no unobserved-task noise. RED today: the timeout
+                    // path returns without awaiting them, so a faulted task raises
+                    // UnobservedTaskException. Attach the handler BEFORE the filter runs so any
+                    // faulted task finalized during the test is caught.
+                    bool unobserved = false;
+                    EventHandler<UnobservedTaskExceptionEventArgs> handler = (s, e) => { unobserved = true; e.SetObserved(); };
+                    TaskScheduler.UnobservedTaskException += handler;
+                    try
+                    {
+                        var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 200 };
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                        sw.Stop();
+                        LogFileWriter.Flush();
 
-                    // A hung fzf must be killed and the filter must fall back within a bounded wall
-                    // time (M6: today FilterAsync waits forever on a hung subprocess).
-                    Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"filter returned within 5s (took {sw.Elapsed})");
-                    Assert.Equal(1, result.Count);
-                    Assert.True(result.Contains("alpha"), "timeout falls back to the full candidate list");
-                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
-                    Assert.True(content.Contains("[Telescope] fzf filter failed: timeout"),
-                        "the timeout path must log '[Telescope] fzf filter failed: timeout'");
+                        // A hung fzf must be killed and the filter must fall back within a bounded wall
+                        // time (M6: today FilterAsync waits forever on a hung subprocess).
+                        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"filter returned within 5s (took {sw.Elapsed})");
+                        Assert.Equal(1, result.Count);
+                        Assert.True(result.Contains("alpha"), "timeout falls back to the full candidate list");
+                        string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                        Assert.True(content.Contains("[Telescope] fzf filter failed: timeout"),
+                            "the timeout path must log '[Telescope] fzf filter failed: timeout'");
+
+                        // Give the killed process's pipe reads a moment to fault, then force
+                        // finalization so any unobserved faulted task raises the event.
+                        var deadline = DateTime.UtcNow.AddSeconds(2);
+                        while (DateTime.UtcNow < deadline)
+                        {
+                            GC.Collect();
+                            GC.WaitForPendingFinalizers();
+                            if (unobserved) { break; }
+                            System.Threading.Thread.Sleep(25);
+                        }
+                        Assert.False(unobserved,
+                            "the timeout path must await both ReadToEndAsync tasks (no unobserved-task noise)");
+                    }
+                    finally
+                    {
+                        TaskScheduler.UnobservedTaskException -= handler;
+                    }
                 });
             }
         }
@@ -553,6 +624,26 @@ namespace Telescope.Tests
             {
                 var fzf = new FzfFilter(Path.Combine(dir.Path, "missing-fzf.exe"));
                 Assert.False(fzf.IsAvailable(), "a missing fzf path must report unavailable");
+            }
+        }
+
+        public static void Run_FzfFilter_IsAvailableBounded()
+        {
+            using (var dir = new TempDir())
+            {
+                string cmdPath = Path.Combine(dir.Path, "hang.cmd");
+                File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
+
+                var fzf = new FzfFilter(cmdPath);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                bool available = fzf.IsAvailable();
+                sw.Stop();
+
+                // m16: IsAvailable() must not block the UI up to 3s on a hung fzf --version; the
+                // wait is bounded to a short timeout. RED today: WaitForExit(3000) blocks ~3s on a
+                // hung stub, so this 1s bound fails.
+                Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1), $"IsAvailable returned within 1s (took {sw.Elapsed})");
+                Assert.False(available, "a hung fzf must report unavailable");
             }
         }
 
@@ -723,6 +814,10 @@ namespace Telescope.Tests
             Assert.True(names.Contains("Current"), "Current member exists");
             Assert.True(names.Contains("End"), "End member exists");
             Assert.True(names.Contains("Start"), "Start member exists");
+            // n2: pin the enum VALUES (declaration order in OverlayKeyHandler.cs:51-56).
+            Assert.Equal(0, (int)CaretPlacement.Current);
+            Assert.Equal(1, (int)CaretPlacement.End);
+            Assert.Equal(2, (int)CaretPlacement.Start);
         }
 
         // ================================================================
@@ -747,12 +842,13 @@ namespace Telescope.Tests
             n.MoveTo(0);
             n.Down();
             Assert.Equal(2, n.LineNumber);
-            Assert.Equal(0, n.ColumnNumber - 1); // column 0 on "beta"
+            Assert.Equal(6, n.Caret); // caret 6 = start of "beta" (m12: ColumnNumber deleted, assert Caret directly)
             n.Down();
             Assert.Equal(3, n.LineNumber);
+            Assert.Equal(11, n.Caret); // caret 11 = start of "gamma"
             n.Up();
             Assert.Equal(2, n.LineNumber);
-            Assert.Equal(0, n.ColumnNumber - 1);
+            Assert.Equal(6, n.Caret); // caret 6 = start of "beta"
         }
 
         public static void Run_Preview_WordMotions()
@@ -845,11 +941,27 @@ namespace Telescope.Tests
 
         public static void Run_Preview_UpFromSecondLineWithLeadingBlankLine()
         {
+            // M10 (CORRECTED): on a leading blank line ("\nabc"), Up() from line 2 must move to
+            // line 1/caret 0. RED today: Up() clamps LastIndexOf('\n', lineStart-2) to 0 and finds
+            // the '\n' at index 0, so prevStart == 1 (line 2's own start) and Up() stays put
+            // (LineNumber == 2).
             var n = new TextMotionNavigator();
             n.SetText("\nabc");
             n.MoveToLine(2);
             n.Up();
-            Assert.Equal(2, n.LineNumber);
+            Assert.Equal(1, n.LineNumber);
+            Assert.Equal(0, n.Caret);
+        }
+
+        public static void Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed()
+        {
+            // M10: the fixed contract — SetText("\nabc"); MoveToLine(2); Up(); must move to line 1.
+            var n = new TextMotionNavigator();
+            n.SetText("\nabc");
+            n.MoveToLine(2);
+            n.Up();
+            Assert.Equal(1, n.LineNumber);
+            Assert.Equal(0, n.Caret);
         }
 
         // ================================================================
@@ -1297,12 +1409,32 @@ namespace Telescope.Tests
 
         public static void Run_FinderBase_OpenErrorSwallowed()
         {
-            var hit = new TestHit(@"C:\p\A.cs", 1);
-            var finder = new TestFinder(() => new[] { hit }, _ => throw new InvalidOperationException("open boom"));
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var hit = new TestHit(@"C:\p\A.cs", 1);
+                    var finder = new TestFinder(() => new[] { hit }, _ => throw new InvalidOperationException("open boom"));
 
-            // A throwing OpenHit must not propagate out of OnSelected (the runner fails the test
-            // if it does).
-            finder.OnSelected(new FinderEntry("A.cs", hit));
+                    // A throwing OpenHit must not propagate out of OnSelected (the runner fails the
+                    // test if it does) AND the error must be logged exactly once (m23 — the test
+                    // previously had no assertion and passed vacuously).
+                    finder.OnSelected(new FinderEntry("A.cs", hit));
+                    LogFileWriter.Flush();
+
+                    string[] lines = ReadAllTextShared(logPath)
+                        .Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    if (lines.Length > 0 && lines[lines.Length - 1].Length == 0)
+                    {
+                        Array.Resize(ref lines, lines.Length - 1);
+                    }
+                    var telescopeLines = lines.Where(l => l.Contains("[Telescope] ")).ToList();
+                    Assert.Equal(1, telescopeLines.Count);
+                    Assert.True(telescopeLines[0].Contains("[Telescope] open item failed: open boom"),
+                        $"expected exactly one '[Telescope] open item failed: open boom' line, got: {string.Join(" | ", telescopeLines)}");
+                });
+            }
         }
 
         public static void Run_FinderBase_NonMatchingPayloadIgnored()
@@ -1562,12 +1694,25 @@ namespace Telescope.Tests
 
         public static void Run_Syntax_KeywordsAndIdentifiers()
         {
+            // m24: exact-sequence assertion — pins the ordered (Text, Category) pairs Tokenize
+            // produces for "public class Foo { }" (the weak presence checks are gone).
             var segs = SyntaxHighlighter.Tokenize("public class Foo { }");
             var pairs = segs.Select(s => (s.Text, s.Category)).ToList();
-            Assert.True(pairs.Any(p => p.Text == "public" && p.Category == SyntaxCategory.Keyword), "public is a keyword");
-            Assert.True(pairs.Any(p => p.Text == "class" && p.Category == SyntaxCategory.Keyword), "class is a keyword");
-            Assert.True(pairs.Any(p => p.Text == "Foo" && p.Category == SyntaxCategory.Default), "Foo is an identifier, not a keyword");
-            Assert.True(pairs.Any(p => p.Category == SyntaxCategory.Default && p.Text.Contains("{") && p.Text.Contains("}")), "braces are default text");
+            var expected = new (string Text, SyntaxCategory Category)[]
+            {
+                ("public", SyntaxCategory.Keyword),
+                (" ", SyntaxCategory.Default),
+                ("class", SyntaxCategory.Keyword),
+                (" ", SyntaxCategory.Default),
+                ("Foo", SyntaxCategory.Default),
+                (" { }", SyntaxCategory.Default),
+            };
+            Assert.Equal(expected.Length, pairs.Count);
+            for (int i = 0; i < expected.Length; i++)
+            {
+                Assert.Equal(expected[i].Text, pairs[i].Text);
+                Assert.Equal(expected[i].Category, pairs[i].Category);
+            }
         }
 
         public static void Run_Syntax_LineComment()
@@ -1684,6 +1829,31 @@ namespace Telescope.Tests
                 Assert.Equal(a, opened!.FilePath);
                 Assert.Equal(2, opened!.LineNumber);
                 Assert.Equal(CodeIssueKind.Todo, opened!.Kind);
+            }
+        }
+
+        public static void Run_Issues_CollectTodosUsesCache()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// TODO: one\n");
+
+                var finder = new CodeIssuesFinder(() => new[] { a }, _ => { });
+                var first = finder.GetCandidates();
+                Assert.Equal(1, first.Count);
+
+                // m15: the second scan over the same file must be served from the shared
+                // FileContentCache — the file is NOT re-read. RED today: CollectTodos calls
+                // File.ReadAllLines directly, so the second scan re-reads the file; locking it
+                // exclusively makes that re-read fail (sharing violation) and CollectTodos skips
+                // the file -> 0 entries. After the fix the cache serves the second scan from
+                // memory (mtime unchanged) -> 1 entry.
+                using (var fs = new FileStream(a, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    var second = finder.GetCandidates();
+                    Assert.Equal(1, second.Count);
+                }
             }
         }
 
@@ -1973,6 +2143,32 @@ namespace Telescope.Tests
             }
         }
 
+        public static void Run_GrepFinder_OffThreadScanSameHits()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
+
+                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var syncHits = finder.GetCandidates("needle");
+
+                // M4: the per-file content scan must return the SAME hits when it runs off-thread
+                // (the fix moves the scan onto a background task and marshals only the results
+                // back; the DTE enumeration stays on the UI thread). NOTE: this may PASS against
+                // the current code — the hermetic path has no thread affinity — in which case the
+                // off-thread seam is the fix (wiring-is-the-fix, not a RED).
+                IReadOnlyList<FinderEntry> offThreadHits = null;
+                Task.Run(() => offThreadHits = finder.GetCandidates("needle")).GetAwaiter().GetResult();
+
+                Assert.Equal(syncHits.Count, offThreadHits.Count);
+                for (int i = 0; i < syncHits.Count; i++)
+                {
+                    Assert.Equal(syncHits[i].Display, offThreadHits[i].Display);
+                }
+            }
+        }
+
         // ================================================================
         // GrepFinder.GatherHits (M41, BP-5) — the base-class gather stub must be a loud
         // failure, not a silent empty. GrepFinder is query-driven (GetCandidates(query)),
@@ -1983,20 +2179,29 @@ namespace Telescope.Tests
 
         public static void Run_GrepFinder_GatherHitsThrowsNotSupported()
         {
-            var finder = new GrepFinder(() => new[] { "a" }, _ => { });
-            var method = typeof(GrepFinder).GetMethod("GatherHits",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(method != null, "GatherHits must be discoverable via reflection (protected override)");
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var finder = new GrepFinder(() => new[] { "a" }, _ => { });
 
-            try
-            {
-                method!.Invoke(finder, null);
-                Assert.True(false, "GatherHits() must throw NotSupportedException (GrepFinder is query-driven; call GetCandidates(query))");
-            }
-            catch (System.Reflection.TargetInvocationException tie)
-            {
-                Assert.True(tie.InnerException is NotSupportedException,
-                    $"expected NotSupportedException from GatherHits(), got {tie.InnerException?.GetType().Name}");
+                    // m27: use the public GetCandidates() path (no reflection). GrepFinder is
+                    // query-driven: its GetCandidates(string) override short-circuits on an empty
+                    // query (deterministic empty initial state) and never reaches the base gather
+                    // stub, so the observable contract is: GetCandidates("") returns empty AND does
+                    // NOT log a "GrepFinder failed to enumerate:" failure (the empty-query path is a
+                    // clean empty, not a loud failure). The reflection removal is the m27 fix.
+                    var entries = finder.GetCandidates("");
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(0, entries.Count);
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    int failureLines = content
+                        .Split(new[] { Environment.NewLine }, StringSplitOptions.None)
+                        .Count(l => l.Contains("[Telescope] GrepFinder failed to enumerate:"));
+                    Assert.Equal(0, failureLines);
+                });
             }
         }
 
@@ -2033,6 +2238,44 @@ namespace Telescope.Tests
             cache.GetLines("a");
 
             // A changed LastWriteTimeUtc must force a re-read (reader invoked twice).
+            Assert.Equal(2, reads);
+        }
+
+        public static void Run_FileContentCache_EvictsOldest()
+        {
+            // M13: with a maxEntries cap, inserting N+1 entries must evict the least-recently-used
+            // (oldest) entry. RED today: the cap is stored but no eviction happens, so the oldest
+            // entry is still served from the cache.
+            int reads = 0;
+            var cache = new FileContentCache(
+                maxEntries: 2,
+                timestamp: _ => DateTime.UtcNow,
+                reader: _ => { reads++; return new[] { "line" }; });
+
+            cache.GetLines("a");
+            cache.GetLines("b");
+            cache.GetLines("c"); // cap 2 exceeded -> the oldest ("a") must be evicted
+
+            // Re-reading the evicted oldest entry must hit the reader again (cache miss).
+            int before = reads;
+            cache.GetLines("a");
+            Assert.Equal(before + 1, reads);
+        }
+
+        public static void Run_FileContentCache_ClearOnSolutionChange()
+        {
+            // M13: Clear() empties the cache — after a solution change the next read re-reads.
+            // NOTE: Clear() already exists and works, so this may PASS against the current code;
+            // the wiring (calling Clear() on solution change) is the fix.
+            int reads = 0;
+            var cache = new FileContentCache(
+                timestamp: _ => DateTime.UtcNow,
+                reader: _ => { reads++; return new[] { "line" }; });
+
+            cache.GetLines("a");
+            cache.Clear();
+            cache.GetLines("a");
+
             Assert.Equal(2, reads);
         }
 
@@ -2154,13 +2397,16 @@ namespace Telescope.Tests
 
         public static void Run_FilterFailureLog_Format()
         {
-            Assert.Equal("[Telescope] filter failed: boom", FilterFailureLog.Format(new Exception("boom")));
+            // m14: Format() must return the UNPREFIXED message ("filter failed: boom"); the caller
+            // (TelescopeOverlay) adds the [Telescope] prefix via TelescopeLog.Log. RED today: the
+            // format embeds the "[Telescope] " prefix, so this exact-match assertion fails.
+            Assert.Equal("filter failed: boom", FilterFailureLog.Format(new Exception("boom")));
         }
 
         // ================================================================
         // ResultMapper — display-keyed payload lookup that preserves
         // same-named duplicates (F12)
-        // RED: `Telescope.ResultMapper` does not exist yet -> compile error
+        // RED: `Telescope.Overlay.ResultMapper` does not exist yet -> compile error
         // ================================================================
 
         public static void Run_ResultMapper_DuplicateDisplayPreserved()
@@ -2206,14 +2452,28 @@ namespace Telescope.Tests
 
         public static void Run_ResultMapper_UnknownStringNullPayload()
         {
+            // M11 (UPDATED contract): an unmatched display string must NOT produce a null-payload
+            // FinderEntry whose OnSelected silently no-ops — it is skipped (or logged). RED today:
+            // MapBack returns a null-payload entry for "Ghost.cs", so items.Count == 1.
             var a = new FileHit(@"C:\p\Alpha.cs", 0);
             var snapshot = new List<FinderEntry> { new FinderEntry("Alpha.cs", a) };
 
             var items = ResultMapper.MapBack(new[] { "Ghost.cs" }, snapshot);
 
-            Assert.Equal(1, items.Count);
-            Assert.Equal("Ghost.cs", items[0].Display);
-            Assert.True(items[0].Payload == null, "an unknown matched string yields a null-payload FinderEntry");
+            Assert.Equal(0, items.Count);
+        }
+
+        public static void Run_ResultMapper_UnknownStringSkippedOrLogged()
+        {
+            // M11: an unmatched display string does not produce a null-payload entry that silently
+            // no-ops. RED today: the null-payload entry is produced (Payload == null).
+            var a = new FileHit(@"C:\p\Alpha.cs", 0);
+            var snapshot = new List<FinderEntry> { new FinderEntry("Alpha.cs", a) };
+
+            var items = ResultMapper.MapBack(new[] { "Ghost.cs" }, snapshot);
+
+            Assert.True(items.All(i => i.Payload != null),
+                "no null-payload entry is produced for an unmatched display string");
         }
 
         public static void Run_ResultMapper_OrderPreserved()
@@ -2379,6 +2639,37 @@ namespace Telescope.Tests
             model.Handle(OverlayKey.CtrlL); // move to Preview
             model.Reset();
             Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        // ================================================================
+        // TempDir.Dispose (m21) — a failed recursive delete must surface the error,
+        // not swallow it (failed deletes leak temp dirs silently).
+        // RED: today Dispose swallows (`catch { }`), so the test fails (no throw).
+        // ================================================================
+
+        public static void Run_TempDir_DisposeSurfacesFailure()
+        {
+            var dir = new TempDir();
+            // Sabotage the recursive delete: remove the directory and put a FILE at the same path,
+            // so Directory.Delete(path, recursive: true) throws DirectoryNotFoundException.
+            System.IO.Directory.Delete(dir.Path, recursive: true);
+            System.IO.File.WriteAllText(dir.Path, "i am a file now");
+
+            bool threw = false;
+            try
+            {
+                dir.Dispose();
+            }
+            catch
+            {
+                threw = true;
+            }
+            finally
+            {
+                try { System.IO.File.Delete(dir.Path); } catch { }
+            }
+
+            Assert.True(threw, "TempDir.Dispose must surface a failed recursive delete (m21)");
         }
     }
 }

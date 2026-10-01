@@ -1,8 +1,9 @@
 using System;
 using System.Windows.Forms;
 using Microsoft.VisualStudio.Shell;
+using MyExtension.Hooks;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Controller for the Solution Explorer tool window. Extends the default hjkl tree navigation
@@ -25,6 +26,9 @@ namespace MyExtension
         private readonly Func<EnvDTE.DTE> _dteFactory;
         private readonly System.Collections.Generic.Dictionary<Keys, Func<bool>> _actions;
 
+        /// <summary>How long the focus-keeper re-asserts tree focus/selection (m9 — single source).</summary>
+        private const int FocusKeeperDurationMs = 1500;
+
         public SolutionExplorerController(Func<EnvDTE.DTE> dteFactory) : base(ToolWindowType.SolutionExplorer)
         {
             _dteFactory = dteFactory;
@@ -39,13 +43,13 @@ namespace MyExtension
                 [Keys.M] = () => { MoveSelected(); return true; },
                 [Keys.A] = () => { AddItem(); return true; },
                 [Keys.G] = () => { SelectFirstSourceFile(); return true; },
-                [Keys.H] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(KeyInjection.VK_LEFT); return true; },
-                [Keys.L] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(KeyInjection.VK_RIGHT); return true; },
-                [Keys.J] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=J -> arrow vk={(int)KeyInjection.VK_DOWN}"); KeyInjection.Press(KeyInjection.VK_DOWN); return true; },
-                [Keys.K] = () => { Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-move key=K -> arrow vk={(int)KeyInjection.VK_UP}"); KeyInjection.Press(KeyInjection.VK_UP); return true; },
-                [Keys.W] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.W, ref _isInputMode),
-                [Keys.B] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.B, ref _isInputMode),
-                [Keys.E] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.E, ref _isInputMode),
+                [Keys.H] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(KeyInjection.VK_LEFT); return true; },
+                [Keys.L] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(KeyInjection.VK_RIGHT); return true; },
+                [Keys.J] = () => GeneralToolWindowController.TryMoveArrow(Keys.J),
+                [Keys.K] = () => GeneralToolWindowController.TryMoveArrow(Keys.K),
+                [Keys.W] = TextMotion(Keys.W),
+                [Keys.B] = TextMotion(Keys.B),
+                [Keys.E] = TextMotion(Keys.E),
             };
         }
 
@@ -112,10 +116,10 @@ namespace MyExtension
                 // Hover-preview / async-focus robustness: re-assert tree focus + the matched selection
                 // on a ~100ms DispatcherTimer for ~1.5s, like SelectFirstSourceFile.
                 int escapeAttempts = 0;
-                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), 1500, elapsed =>
+                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
                 {
                     var decision = FocusKeeperSchedule.Decide(
-                        TextMotionHelper.FindFocusedTextBox() != null, elapsed, escapeAttempts, 1500);
+                        TextMotionHelper.FindFocusedTextBox() != null, elapsed, escapeAttempts, FocusKeeperDurationMs);
                     if (decision == FocusKeeperSchedule.Decision.InjectEscape)
                     {
                         // Focus has NOT left the search box yet — Escape #2 is what actually moves
@@ -135,7 +139,7 @@ namespace MyExtension
                 // Debug aid ONLY — OUTSIDE the M-M7 diagnostic contract (never asserted by the harness;
                 // M-M7 covers only the [NeoVisual]/[Telescope] LOG lines emitted via NeoVisualLog/Log).
                 // Mirrors the established SelectFirstSourceFile catch.
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
             }
         }
 
@@ -162,7 +166,7 @@ namespace MyExtension
         private void OpenSelected()
         {
             // Enter is the native "open selected item" key in the Solution Explorer tree.
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer open");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer open");
             KeyInjection.Press(KeyInjection.VK_RETURN);
         }
 
@@ -187,21 +191,21 @@ namespace MyExtension
                 var dte = _dteFactory();
                 if (dte == null)
                 {
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none");
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select none");
                     return;
                 }
 
                 var dte2 = dte as EnvDTE80.DTE2;
                 if (dte2 == null)
                 {
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none");
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select none");
                     return;
                 }
 
                 var (item, first) = ResolveTreeItem(dte2, HierarchyResolver.FirstSourceFilePath);
                 if (first == null)
                 {
-                    Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select none");
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select none");
                     return;
                 }
 
@@ -238,12 +242,12 @@ namespace MyExtension
                 // deterministically (activating an already-created view raises no TextViewCreated).
                 // Mirrors solution-explorer select/open; `editor-view-opened file=` is verified by
                 // `explorer-open-navigation` / `explorer-open-searchbox`.
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select file={first}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select file={first}");
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
             }
         }
 
@@ -267,7 +271,7 @@ namespace MyExtension
             projectNode.UIHierarchyItems.Expanded = true;
             var pathToItem = new System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem>(StringComparer.OrdinalIgnoreCase);
             var items = MapChildren(projectNode, pathToItem);
-            var forest = HierarchyForestBuilder.Build(items, new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            var forest = HierarchyForestBuilder.Build(items);
             string? path = pick(forest);
             if (path == null) return (null, null);
             return (pathToItem.TryGetValue(path, out var t) ? t : null, path);
@@ -301,10 +305,9 @@ namespace MyExtension
         /// DTOs plus a full-path → <see cref="EnvDTE.UIHierarchyItem"/> map. This is the ONLY place
         /// <c>pi.Kind</c> / <c>pi.Name</c> / <c>pi.FileNames[FileCount]</c> are read. The caller
         /// must expand the node's <c>UIHierarchyItems</c> first (a collapsed node's children are
-        /// not enumerated). Physical folders recurse; physical files are added ONLY when their name
-        /// ends with <c>.cs</c> (non-.cs files such as .csproj/.json are never added, so the seam
-        /// cannot return them); everything else (virtual folders, references, sub-projects) is
-        /// skipped.
+        /// not enumerated). Physical folders recurse; physical files are passed through (the
+        /// <c>.cs</c> filter lives in <see cref="HierarchyForestBuilder"/>); everything else
+        /// (virtual folders, references, sub-projects) is skipped.
         /// </summary>
         private static System.Collections.Generic.List<HierarchyItemInfo> MapChildren(
             EnvDTE.UIHierarchyItem item,
@@ -321,8 +324,7 @@ namespace MyExtension
                         var children = MapChildren(child, pathToItem);
                         result.Add(new HierarchyItemInfo(kind, pi.Name, "", children));
                     }
-                    else if (kind == HierarchyResolver.PhysicalFileKind &&
-                             pi.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    else if (kind == HierarchyResolver.PhysicalFileKind)
                     {
                         // FileNames is an indexed property; index FileCount (NOT index 1, which is
                         // the short name) to get the item's FULL path.
@@ -343,31 +345,31 @@ namespace MyExtension
         /// </summary>
         private void FocusSearchBox()
         {
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer search-focus");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer search-focus");
             ExecuteCommand("Window.SolutionExplorerSearch");
             EnterInputMode();
             // TryMove(Keys.I) returns true, so InputHandler's generic tool-window branch never
             // logs its enter-input line — emit the same contract here so the E2E harness's
             // "i entered tool-window input mode" assertion stays stable.
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}toolwindow-enter-input");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-enter-input");
         }
 
         private void RenameSelected()
         {
             // F2 is the native rename shortcut in the Solution Explorer tree.
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer rename");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer rename");
             KeyInjection.Press(KeyInjection.VK_F2);
         }
 
         private void MoveSelected()
         {
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer move");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer move");
             ExecuteCommand("SolutionExplorer.Move");
         }
 
         private void AddItem()
         {
-            Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}solution-explorer add");
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer add");
             ExecuteCommand("SolutionExplorer.AddItem");
         }
 
@@ -379,7 +381,7 @@ namespace MyExtension
             }
             catch (Exception ex)
             {
-                Telescope.NeoVisualLog.Log($"{Telescope.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
             }
         }
     }

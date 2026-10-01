@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Pure DTO mirroring <see cref="HierarchyNode"/>: the DTE adapter
@@ -24,15 +24,12 @@ namespace MyExtension
     /// <summary>
     /// Pure forest builder (M14): recurses physical folders and adds physical <c>.cs</c> files,
     /// reusing <see cref="HierarchyResolver.PhysicalFolderKind"/> / <see cref="HierarchyResolver.PhysicalFileKind"/>
-    /// and producing the existing <see cref="HierarchyNode"/>. The <paramref name="pathToItem"/>
-    /// map records path→path identity for every added <c>.cs</c> file (the pure builder cannot
-    /// hold DTE objects; the DTE adapter owns the real path→<c>UIHierarchyItem</c> map).
+    /// and producing the existing <see cref="HierarchyNode"/>. The <c>.cs</c> filter lives here
+    /// (the DTE adapter passes all physical files through).
     /// </summary>
     internal static class HierarchyForestBuilder
     {
-        public static List<HierarchyNode> Build(
-            IEnumerable<HierarchyItemInfo> items,
-            Dictionary<string, string> pathToItem)
+        public static List<HierarchyNode> Build(IEnumerable<HierarchyItemInfo> items)
         {
             var forest = new List<HierarchyNode>();
             if (items == null)
@@ -43,14 +40,13 @@ namespace MyExtension
             {
                 if (item.Kind == HierarchyResolver.PhysicalFolderKind)
                 {
-                    var children = Build(item.Children, pathToItem);
+                    var children = Build(item.Children);
                     forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFolderKind, item.Name, "", children));
                 }
                 else if (item.Kind == HierarchyResolver.PhysicalFileKind &&
                          item.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 {
                     forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFileKind, item.Name, item.FullPath, null));
-                    pathToItem[item.FullPath] = item.FullPath;
                 }
             }
             return forest;

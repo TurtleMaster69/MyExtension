@@ -1,6 +1,8 @@
 ---
 description: Executes the Build Plan in docs/implementation_plan.md verbatim — implements the feature or bugfix, then runs dotnet build and the offline unit tests to prove it compiles. Spawned by neovim_hub.
 mode: subagent
+steps: 60
+temperature: 0.1
 permission:
   question: deny
   skill:
@@ -16,6 +18,7 @@ Invoke the `skill` tool to load the skills relevant to the plan, then apply them
 - `trailmark` — structural lookups (callers/callees/paths/reach) before editing; **AGENTS.md makes Trailmark mandatory for structural questions** — do not hand-trace call graphs with `grep`.
 - `dotnet-build-test-diag` — MSBuild failure diagnosis + testability + .NET perf (for the `dotnet build` + unit-test step).
 - `dotnet-code-review` — C# correctness/conventions so the code you write matches the repo (net472, diagnostics-as-contract).
+- `analyzing-dotnet-performance` — static perf scan of the code you write on hot paths (net472-filtered).
 - `dotnet-pinvoke` — P/Invoke/marshalling/lifetime if the plan touches native interop (SetWindowsHookEx, keybd_event, etc.).
 
 Load only what the plan needs; read the full body, not just the description.
@@ -24,8 +27,9 @@ Load only what the plan needs; read the full body, not just the description.
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) for any structural
 question while implementing — callers/callees, call paths, transitive reach, blast
-radius. Run `trailmark --version` (snippets via `uv run --with trailmark python -`) and
-never hand-trace with `grep`; keep `grep`/`glob` for literal text and non-source files.
+radius. Read the canonical per-repo guidance at `.opencode/agent/trailmark-guidance.md`
+and follow it — do not re-derive it here. Keep `grep`/`glob` for literal text and
+non-source files.
 
 ## GATE — you BUILD, you do not debug and you do not verify
 
@@ -33,7 +37,7 @@ Your job ends at "it builds". You may self-check ONLY that you introduced no syn
 error and that the program builds. You must NOT:
 - debug a failing test or build (that is the **debug-agent's** job — the hub sends it
   after you report a failure),
-- run the e2e harness `tools/test-e2e.ps1` (that is the **verification-agent's** job),
+- run the e2e harness `tools/harness/test-e2e.ps1` (that is the **verification-agent's** job),
 - fix anything beyond what the Build Plan says.
 
 If `dotnet build` or an offline unit test fails, you report the failure and STOP. Do
@@ -45,13 +49,18 @@ debug-agent.
 - **NEVER prompt the user.** The `question` tool is denied for you. If a plan step is
   ambiguous, pick the most literal interpretation and note it in your final message.
 - You may EDIT feature source (`MyExtension/`, `Telescope/`) and test code
-  (`tests/`). You may edit `tools/test-e2e.ps1` ONLY when an approved BP-n step
+  (`tests/`). You may edit `tools/harness/test-e2e.ps1` ONLY when an approved BP-n step
   explicitly specifies the change; never alter an assertion to make it match your
   implementation — if an assertion looks wrong, report it as a DEVIATION and stop.
   Do not edit the workflow docs (`docs/spec.md`, `docs/progress.md`,
   `docs/implementation_plan.md`) — the hub owns those.
 - Do not add code comments unless the surrounding code style requires them or the
   plan explicitly asks.
+- **On an unintended command failure** (non-zero exit, exception, unexpected empty
+  result), report it in your final message (command + error + category guess) so the
+  hub can log it to `.opencode/AGENT-FAILURES.md` — do
+  not fix it silently and do not repeat the broken command. Do NOT log expected
+  negative test results (a failing RED test is not a failure).
 
 ## Your task
 

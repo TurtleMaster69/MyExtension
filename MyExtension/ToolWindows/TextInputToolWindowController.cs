@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Controller for text-input tool windows (Command Window, Find and Replace, Immediate Window,
@@ -41,12 +41,13 @@ namespace MyExtension
             _isInputMode = true;
             _actions = new Dictionary<Keys, Func<bool>>
             {
-                [Keys.W] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.W, ref _isInputMode),
-                [Keys.B] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.B, ref _isInputMode),
-                [Keys.E] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.E, ref _isInputMode),
-                [Keys.A] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.A, ref _isInputMode),
-                [Keys.H] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.H, ref _isInputMode),
-                [Keys.L] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.L, ref _isInputMode),
+                [Keys.W] = TextMotion(Keys.W),
+                [Keys.B] = TextMotion(Keys.B),
+                [Keys.E] = TextMotion(Keys.E),
+                [Keys.A] = TextMotion(Keys.A),
+                [Keys.H] = TextMotion(Keys.H),
+                [Keys.L] = TextMotion(Keys.L),
+                [Keys.I] = TextMotion(Keys.I),
             };
         }
 

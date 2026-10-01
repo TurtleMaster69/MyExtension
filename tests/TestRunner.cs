@@ -143,7 +143,9 @@ namespace TestHarness
 
         public void Dispose()
         {
-            try { System.IO.Directory.Delete(Path, recursive: true); } catch { }
+            // m21/BP-18: surface a failed recursive delete instead of swallowing it — a silent
+            // failure leaks temp dirs and hides the error from the test runner.
+            System.IO.Directory.Delete(Path, recursive: true);
         }
     }
 
@@ -154,38 +156,38 @@ namespace TestHarness
     public static class TestScaffold
     {
         /// <summary>
-        /// Runs <paramref name="body"/> with <c>Telescope.LogFileWriter.LogPath</c> temporarily set to
+        /// Runs <paramref name="body"/> with <c>Telescope.Logging.LogFileWriter.LogPath</c> temporarily set to
         /// <paramref name="logPath"/>, restoring the previous value in a finally block.
         /// </summary>
         public static void WithLogPath(string logPath, Action body)
         {
-            string original = Telescope.LogFileWriter.LogPath;
+            string original = Telescope.Logging.LogFileWriter.LogPath;
             try
             {
-                Telescope.LogFileWriter.LogPath = logPath;
+                Telescope.Logging.LogFileWriter.LogPath = logPath;
                 body();
             }
             finally
             {
-                Telescope.LogFileWriter.LogPath = original;
+                Telescope.Logging.LogFileWriter.LogPath = original;
             }
         }
 
         /// <summary>
-        /// Runs <paramref name="body"/> with <c>Telescope.LogFileWriter.DebugLogPath</c> temporarily set
+        /// Runs <paramref name="body"/> with <c>Telescope.Logging.LogFileWriter.DebugLogPath</c> temporarily set
         /// to <paramref name="debugPath"/>, restoring the previous value in a finally block.
         /// </summary>
         public static void WithDebugLogPath(string debugPath, Action body)
         {
-            string original = Telescope.LogFileWriter.DebugLogPath;
+            string original = Telescope.Logging.LogFileWriter.DebugLogPath;
             try
             {
-                Telescope.LogFileWriter.DebugLogPath = debugPath;
+                Telescope.Logging.LogFileWriter.DebugLogPath = debugPath;
                 body();
             }
             finally
             {
-                Telescope.LogFileWriter.DebugLogPath = original;
+                Telescope.Logging.LogFileWriter.DebugLogPath = original;
             }
         }
     }

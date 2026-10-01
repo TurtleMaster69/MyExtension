@@ -9,7 +9,7 @@ compatibility: opencode
 Systematic root-cause debugging for a failing e2e scenario / unit test / build. Adapted from `addyosmani` `debugging-and-error-recovery`. Fits `debug-agent`'s job: find WHERE and WHAT caused a failure.
 
 ## When to use
-- A `tools/test-e2e.ps1` scenario or offline unit test fails (verify-time debug).
+- A `tools/harness/test-e2e.ps1` scenario or offline unit test fails (verify-time debug).
 - A build breaks (build-time debug).
 
 ## Core method (Stop-the-Line)

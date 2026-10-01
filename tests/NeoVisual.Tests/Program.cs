@@ -3,10 +3,19 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using CardinalNavigation;
+using MyExtension.Hooks;
+using MyExtension.Input;
+using MyExtension.Navigation;
+using MyExtension.Package;
+using MyExtension.ToolWindows;
+using MyExtension.Vim;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using MyExtension;
+using Microsoft.VisualStudio.Text.Formatting;
+using Microsoft.VisualStudio.Text.Projection;
+using Telescope.Logging;
+using Telescope.Overlay;
 using TestHarness;
 using static TestHarness.TestScaffold;
 
@@ -16,7 +25,7 @@ namespace NeoVisual.Tests
     {
         private static int Main(string[] args)
         {
-            MyExtension.KeyInjection.SimulateOnly = true;
+            MyExtension.Hooks.KeyInjection.SimulateOnly = true;
             return TestHarness.TestRunner.Run(typeof(Tests), args);
         }
     }
@@ -33,6 +42,20 @@ namespace NeoVisual.Tests
             {
                 return sr.ReadToEnd();
             }
+        }
+
+        // Counts non-overlapping occurrences of a substring (used to assert log lines are emitted
+        // exactly once, e.g. `vim-mode=` on a mode change).
+        private static int CountOccurrences(string text, string needle)
+        {
+            int count = 0;
+            int index = 0;
+            while ((index = text.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                index += needle.Length;
+            }
+            return count;
         }
 
         // ================================================================
@@ -248,19 +271,19 @@ namespace NeoVisual.Tests
         // HierarchyResolver — select-first-source-file resolution (pure seam)
         // ================================================================
 
-        public static void Run_HierarchyResolver_FirstSourceFile()
+        public static void Run_HierarchyResolver_FirstSourceFile_FileVsFolder()
         {
-            // Pure seam: resolve the first physical SOURCE file under a project's child nodes.
-            // Classification is by Kind GUID: physical file (returned) vs physical folder (recursed);
-            // any other kind (project/solution/virtual-folder/references) is skipped, not recursed.
-
-            // (1) file-vs-folder classification — a physical FILE returns its own path.
+            // m25: a physical FILE returns its own path (not recursed).
             var fileNode = new HierarchyNode(
                 HierarchyResolver.PhysicalFileKind, "Beta.cs", @"C:\p\Beta.cs", null);
-            Assert.Equal(@"C:\p\Beta.cs",
-                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { fileNode }));
+            Assert.True(
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { fileNode }) == @"C:\p\Beta.cs",
+                "a physical file returns its own path");
+        }
 
-            // (2) folder recursion — a physical FOLDER recurses to its first physical file (in order).
+        public static void Run_HierarchyResolver_FirstSourceFile_FolderRecursion()
+        {
+            // m25: a physical FOLDER recurses to its first physical file (in order).
             var folder = new HierarchyNode(
                 HierarchyResolver.PhysicalFolderKind, "Models", "",
                 new HierarchyNode[]
@@ -268,16 +291,24 @@ namespace NeoVisual.Tests
                     new HierarchyNode(HierarchyResolver.PhysicalFileKind, "User.cs", @"C:\p\Models\User.cs", null),
                     new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Order.cs", @"C:\p\Models\Order.cs", null),
                 });
-            Assert.Equal(@"C:\p\Models\User.cs",
-                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { folder }));
+            Assert.True(
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { folder }) == @"C:\p\Models\User.cs",
+                "a physical folder recurses to its first physical file");
+        }
 
-            // (3) non-file/non-folder nodes are skipped (not recursed), first real file still found.
+        public static void Run_HierarchyResolver_FirstSourceFile_SkipsNonFileNonFolder()
+        {
+            // m25: non-file/non-folder nodes are skipped (not recursed), first real file still found.
             var unknown = new HierarchyNode("{00000000-0000-0000-0000-000000000000}", "Dependencies", "", null);
             var realFile = new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Alpha.cs", @"C:\p\Alpha.cs", null);
-            Assert.Equal(@"C:\p\Alpha.cs",
-                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { unknown, realFile }));
+            Assert.True(
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { unknown, realFile }) == @"C:\p\Alpha.cs",
+                "non-file/non-folder nodes are skipped, the first real file is still found");
+        }
 
-            // (4) empty -> null (no reachable source file).
+        public static void Run_HierarchyResolver_FirstSourceFile_EmptyReturnsNull()
+        {
+            // m25: empty -> null (no reachable source file).
             Assert.True(
                 HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { }) == null,
                 "empty nodes resolve to null");
@@ -356,8 +387,8 @@ namespace NeoVisual.Tests
                             }),
                     }),
             };
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var forest = HierarchyForestBuilder.Build(items, map);
+            // M21: Build takes no pathToItem map (the throwaway map was never read by any caller).
+            var forest = HierarchyForestBuilder.Build(items);
 
             Assert.Equal(1, forest.Count);
             Assert.Equal(HierarchyResolver.PhysicalFolderKind, forest[0].Kind);
@@ -376,8 +407,7 @@ namespace NeoVisual.Tests
                 new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Program.CS", @"C:\p\Program.CS", null),
                 new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "App.config", @"C:\p\App.config", null),
             };
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var forest = HierarchyForestBuilder.Build(items, map);
+            var forest = HierarchyForestBuilder.Build(items);
 
             Assert.Equal(1, forest.Count);
             Assert.Equal("Program.CS", forest[0].Name);
@@ -386,20 +416,17 @@ namespace NeoVisual.Tests
 
         public static void Run_HierarchyForestBuilder_FullPathFlowsThroughAndPathMap()
         {
-            // The file's FullPath lands in HierarchyNode.FilePath AND is recorded in the passed
-            // pathToItem map (path -> path identity; the DTE adapter owns the real path->item map).
+            // The file's FullPath lands in HierarchyNode.FilePath. (M21: the throwaway pathToItem
+            // map is gone — Build takes no map param, so only the forest is asserted.)
             const string fullPath = @"C:\p\Alpha.cs";
             var items = new[]
             {
                 new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Alpha.cs", fullPath, null),
             };
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var forest = HierarchyForestBuilder.Build(items, map);
+            var forest = HierarchyForestBuilder.Build(items);
 
             Assert.Equal(1, forest.Count);
             Assert.Equal(fullPath, forest[0].FilePath);
-            Assert.True(map.ContainsKey(fullPath), "pathToItem records the added .cs file");
-            Assert.Equal(fullPath, map[fullPath]);
         }
 
         public static void Run_HierarchyForestBuilder_NonFolderNonFileKindsSkipped()
@@ -414,17 +441,14 @@ namespace NeoVisual.Tests
                         new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Hidden.cs", @"C:\p\Hidden.cs", null),
                     }),
             };
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var forest = HierarchyForestBuilder.Build(items, map);
+            var forest = HierarchyForestBuilder.Build(items);
 
             Assert.Equal(0, forest.Count);
-            Assert.False(map.ContainsKey(@"C:\p\Hidden.cs"), "unknown-kind children are not recursed");
         }
 
         public static void Run_HierarchyForestBuilder_EmptyChildrenEmptyForest()
         {
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var forest = HierarchyForestBuilder.Build(new HierarchyItemInfo[0], map);
+            var forest = HierarchyForestBuilder.Build(new HierarchyItemInfo[0]);
 
             Assert.True(forest != null, "Build returns a list");
             Assert.Equal(0, forest.Count);
@@ -438,50 +462,105 @@ namespace NeoVisual.Tests
         {
             var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
             Assert.True(controller.IsInputMode, "text-input windows start in insert mode");
-            Assert.False(controller.ActionKeys.Count == 0, "text-input controller exposes action keys");
+            Assert.True(controller.ActionKeys.Count > 0, "text-input controller exposes action keys");
+        }
+
+        public static void Run_TextInput_TryMove_UnmappedKeyNotConsumed()
+        {
+            // m28: TryMove is callable on the test host (the csproj references
+            // Microsoft.VisualStudio.Text.UI, so the IWpfTextView type JITs fine). An unmapped key
+            // (X) is not consumed and does not throw. RED: if TryMove throws on the test host, the
+            // stale "Text.UI not referenced" comment was right and this test fails.
+            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
+            Assert.False(controller.TryMove(Keys.X), "an unmapped key is not consumed (no throw)");
         }
 
         // ================================================================
-        // TextMotionEngine — TextMotionHelper.MapMotion (BP-1/T1)
-        // RED: `TextMotionHelper.MapMotion` does not exist yet -> compile error
+        // TextMotionEngine — TextMotionDispatcher.MapKey (BP-16/M19)
+        // The shared pure dispatcher owns the single key->motion table for BOTH surfaces; the
+        // tool-window surface uses its WinForms-Keys mapping. RED: the dispatcher does not exist
+        // yet -> compile error (CS0246). (The skeleton exists so the tests compile; the M19 fix
+        // wires TextMotionHelper.MapMotion / TryDispatch.Handle to delegate to it.)
         // ================================================================
 
         public static void Run_TextMotionEngine_MapMotion_LeftRight()
         {
-            Assert.Equal(TextMotion.Left, TextMotionHelper.MapMotion(Keys.H, false));
-            Assert.Equal(TextMotion.Right, TextMotionHelper.MapMotion(Keys.L, false));
+            Assert.Equal(TextMotion.Left, TextMotionDispatcher.MapKey(Keys.H, false));
+            Assert.Equal(TextMotion.Right, TextMotionDispatcher.MapKey(Keys.L, false));
         }
 
         public static void Run_TextMotionEngine_MapMotion_Words()
         {
-            Assert.Equal(TextMotion.NextWord, TextMotionHelper.MapMotion(Keys.W, false));
-            Assert.Equal(TextMotion.PrevWord, TextMotionHelper.MapMotion(Keys.B, false));
-            Assert.Equal(TextMotion.EndWord, TextMotionHelper.MapMotion(Keys.E, false));
+            Assert.Equal(TextMotion.NextWord, TextMotionDispatcher.MapKey(Keys.W, false));
+            Assert.Equal(TextMotion.PrevWord, TextMotionDispatcher.MapKey(Keys.B, false));
+            Assert.Equal(TextMotion.EndWord, TextMotionDispatcher.MapKey(Keys.E, false));
         }
 
         public static void Run_TextMotionEngine_MapMotion_InsertShift()
         {
             // A (Shift+a) = insert at end; a = insert after caret; I (Shift+i) = insert at start.
-            Assert.Equal(TextMotion.InsertEnd, TextMotionHelper.MapMotion(Keys.A, true));
-            Assert.Equal(TextMotion.InsertAfter, TextMotionHelper.MapMotion(Keys.A, false));
-            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
+            Assert.Equal(TextMotion.InsertEnd, TextMotionDispatcher.MapKey(Keys.A, true));
+            Assert.Equal(TextMotion.InsertAfter, TextMotionDispatcher.MapKey(Keys.A, false));
+            Assert.Equal(TextMotion.InsertStart, TextMotionDispatcher.MapKey(Keys.I, true));
             // A bare i (no shift) is the generic insert handled by InputHandler, not a motion.
-            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.I, false));
+            Assert.Equal(null, TextMotionDispatcher.MapKey(Keys.I, false));
         }
 
         public static void Run_TextMotionEngine_MapMotion_UnknownNull()
         {
-            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.X, false));
+            Assert.Equal(null, TextMotionDispatcher.MapKey(Keys.X, false));
         }
 
-        public static void Run_TextInput_ActionKeys()
+        // ================================================================
+        // VimBufferSubscriptions — pure per-view Vim-buffer subscription map (BP-2/CR2)
+        // RED: the map type does not exist yet -> compile error (CS0246). The skeleton exists so
+        // the tests compile; the CR2 fix wires VsVimModeSource to use it (per-view Detach).
+        // ================================================================
+
+        public static void Run_VimBufferSubscriptions_AttachTwoDetachOneKeepsOther()
         {
-            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
-            var keys = new List<Keys>(controller.ActionKeys);
-            Assert.True(keys.Contains(Keys.W), "w is an action key");
-            Assert.True(keys.Contains(Keys.B), "b is an action key");
-            Assert.True(keys.Contains(Keys.E), "e is an action key");
-            Assert.True(keys.Contains(Keys.A), "a/A is an action key");
+            // CR2: with two views attached, detaching A must NOT kill B's subscription.
+            var subs = new VimBufferSubscriptions();
+            var viewA = new FakeTextView();
+            var viewB = new FakeTextView();
+            var bufferA = new object();
+            var bufferB = new object();
+
+            subs.Attach(viewA, bufferA);
+            subs.Attach(viewB, bufferB);
+            subs.Detach(viewA);
+
+            Assert.True(ReferenceEquals(bufferB, subs.BufferFor(viewB)),
+                "detaching A keeps B's buffer subscription");
+            Assert.True(subs.BufferFor(viewA) == null, "detaching A removes A's buffer");
+        }
+
+        public static void Run_VimBufferSubscriptions_DetachNonAttachedNoOp()
+        {
+            var subs = new VimBufferSubscriptions();
+            var viewA = new FakeTextView();
+            var viewB = new FakeTextView();
+            subs.Attach(viewA, new object());
+
+            // Detaching a view that was never attached must be a no-op (no throw, no effect).
+            subs.Detach(viewB);
+
+            Assert.True(subs.BufferFor(viewA) != null, "the attached view's buffer survives a non-attached detach");
+        }
+
+        public static void Run_VimBufferSubscriptions_ReattachAfterDetach()
+        {
+            var subs = new VimBufferSubscriptions();
+            var view = new FakeTextView();
+            var first = new object();
+            var second = new object();
+
+            subs.Attach(view, first);
+            subs.Detach(view);
+            subs.Attach(view, second);
+
+            Assert.True(ReferenceEquals(second, subs.BufferFor(view)),
+                "re-attaching a view after detach re-subscribes it to the new buffer");
         }
 
         // ================================================================
@@ -489,24 +568,6 @@ namespace NeoVisual.Tests
         // RED: hjkl are not in ActionKeys today (SolutionExplorer =
         // O/Enter/R/M/A/W/B/E/G, TextInput = W/B/E/A) -> assertion failure
         // ================================================================
-
-        public static void Run_ActionTable_SolutionExplorer_HjklInActionKeys()
-        {
-            var controller = new SolutionExplorerController(() => null!);
-            var keys = new List<Keys>(controller.ActionKeys);
-            Assert.True(keys.Contains(Keys.H), "h is an action key");
-            Assert.True(keys.Contains(Keys.J), "j is an action key");
-            Assert.True(keys.Contains(Keys.K), "k is an action key");
-            Assert.True(keys.Contains(Keys.L), "l is an action key");
-        }
-
-        public static void Run_ActionTable_TextInput_HjklInActionKeys()
-        {
-            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
-            var keys = new List<Keys>(controller.ActionKeys);
-            Assert.True(keys.Contains(Keys.H), "h is an action key");
-            Assert.True(keys.Contains(Keys.L), "l is an action key");
-        }
 
         public static void Run_ActionTable_SolutionExplorer_ActionKeysMatchTable()
         {
@@ -526,14 +587,29 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionTable_TextInput_ActionKeysMatchTable()
         {
+            // CR1: the exact action-key set is {W,B,E,A,H,L,I} (count 7). RED today: the
+            // consolidation dropped Keys.I from _actions, so the actual set is {W,B,E,A,H,L}
+            // (count 6) and this exact-set assertion fails.
             var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
-            var expected = new[] { Keys.W, Keys.B, Keys.E, Keys.A, Keys.H, Keys.L };
+            var expected = new[] { Keys.W, Keys.B, Keys.E, Keys.A, Keys.H, Keys.L, Keys.I };
             var actual = new List<Keys>(controller.ActionKeys);
             Assert.Equal(expected.Length, actual.Count);
             foreach (var key in expected)
             {
                 Assert.True(actual.Contains(key), $"ActionKeys contains {key}");
             }
+        }
+
+        public static void Run_TextInput_KeysIMapsToInsertStart()
+        {
+            // CR1: the I action must be present in the text-input controller's action table and
+            // map to InsertStart (Shift+i). RED today: Keys.I is missing from _actions, so the
+            // action table does not contain it.
+            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
+            var keys = new List<Keys>(controller.ActionKeys);
+            Assert.True(keys.Contains(Keys.I), "I is an action key (CR1)");
+            // The pure mapping the I action applies: Shift+I -> InsertStart.
+            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
         }
 
         public static void Run_ActionTable_UnmappedKeyNotConsumed()
@@ -620,7 +696,8 @@ namespace NeoVisual.Tests
         // ================================================================
 
         // Guard only checks > 0 — any positive action-key count behaves identically.
-        private const int PositiveActionKeyCount = 5;
+        // 7 = the real TextInputToolWindowController action-key count after CR1 added Keys.I (m26).
+        private const int PositiveActionKeyCount = 7;
 
         public static void Run_FocusGuard_EditorFocusedBlocksRouting()
         {
@@ -721,6 +798,24 @@ namespace NeoVisual.Tests
                 "editor-focused action keys are not interesting");
         }
 
+        public static void Run_FocusGuard_OwnsKeyboard_TruthTable()
+        {
+            // M22: the single keyboard-ownership exemption helper. Input mode owns the keyboard;
+            // a genuinely focused text-input surface owns it; neither -> false.
+            Assert.True(
+                FocusGuard.OwnsKeyboard(isInputMode: true, isTextInputSurface: false, textInputSurfaceFocused: false),
+                "input mode owns the keyboard");
+            Assert.True(
+                FocusGuard.OwnsKeyboard(isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
+                "a genuinely focused text-input surface owns the keyboard");
+            Assert.False(
+                FocusGuard.OwnsKeyboard(isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
+                "neither input mode nor a focused text-input surface -> does not own the keyboard");
+            Assert.False(
+                FocusGuard.OwnsKeyboard(isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: false),
+                "a non-focused text-input surface does not own the keyboard");
+        }
+
         public static void Run_FocusGuard_TextInputSurfaceFocused_EditorFocusedNotFocusedSurface()
         {
             // M16: a text-input surface only owns the keyboard when it genuinely holds focus.
@@ -728,7 +823,7 @@ namespace NeoVisual.Tests
             // (the current isTextInputSurface exemption leaks — it returns TRUE here).
             Assert.False(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 6, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: false),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: false),
                 "editor-focused, non-focused text-input surface must not expose action keys");
             Assert.False(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: false),
@@ -741,7 +836,7 @@ namespace NeoVisual.Tests
             // even when the editor-focus flag is stale.
             Assert.True(
                 FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 6, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: true),
+                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: true),
                 "genuinely-focused text-input surface action keys are interesting");
             Assert.True(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
@@ -752,11 +847,11 @@ namespace NeoVisual.Tests
         {
             // Editor insert/replace -> typing (leader key must type a space).
             Assert.True(
-                FocusGuard.IsTyping(isToolWindow: false, isInputMode: false, editorFocused: true, editorInTypingMode: true),
+                FocusGuard.IsTyping(isToolWindow: false, isInputMode: false, editorFocusedVeto: true, editorInTypingMode: true),
                 "editor insert/replace is typing");
             // Editor normal -> not typing.
             Assert.False(
-                FocusGuard.IsTyping(isToolWindow: false, isInputMode: false, editorFocused: true, editorInTypingMode: false),
+                FocusGuard.IsTyping(isToolWindow: false, isInputMode: false, editorFocusedVeto: true, editorInTypingMode: false),
                 "editor normal is not typing");
         }
 
@@ -764,11 +859,11 @@ namespace NeoVisual.Tests
         {
             // Tool window in input mode -> typing regardless of editor state.
             Assert.True(
-                FocusGuard.IsTyping(isToolWindow: true, isInputMode: true, editorFocused: false, editorInTypingMode: false),
+                FocusGuard.IsTyping(isToolWindow: true, isInputMode: true, editorFocusedVeto: false, editorInTypingMode: false),
                 "tool-window input mode is typing");
             // Tool window in normal mode, editor not focused -> not typing.
             Assert.False(
-                FocusGuard.IsTyping(isToolWindow: true, isInputMode: false, editorFocused: false, editorInTypingMode: false),
+                FocusGuard.IsTyping(isToolWindow: true, isInputMode: false, editorFocusedVeto: false, editorInTypingMode: false),
                 "tool-window normal mode is not typing");
         }
 
@@ -930,7 +1025,7 @@ namespace NeoVisual.Tests
 
                     source.Mode = 2;
                     source.RaiseModeChanged();
-                    Telescope.LogFileWriter.Flush();
+                    Telescope.Logging.LogFileWriter.Flush();
 
                     string content = ReadAllTextShared(logPath);
                     Assert.True(content.Contains("[NeoVisual] vim-mode=Insert"),
@@ -938,11 +1033,41 @@ namespace NeoVisual.Tests
 
                     source.Mode = 1;
                     source.RaiseModeChanged();
-                    Telescope.LogFileWriter.Flush();
+                    Telescope.Logging.LogFileWriter.Flush();
 
                     content = ReadAllTextShared(logPath);
                     Assert.True(content.Contains("[NeoVisual] vim-mode=Normal"),
                         "Normal mode logs vim-mode=Normal");
+                });
+            }
+        }
+
+        public static void Run_VimModeTracker_LogOnlyOnChange()
+        {
+            // M16: `vim-mode=` must be logged only when the mode value actually changes. A focus
+            // gain/loss with the SAME mode emits nothing. RED today: UpdateTypingFromMode logs on
+            // every call, so two identical Insert events emit two `vim-mode=Insert` lines.
+            using (var dir = new TempDir())
+            {
+                string logPath = System.IO.Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var source = new FakeVimModeSource();
+                    var tracker = new VimModeTracker(source);
+
+                    source.Mode = 2;
+                    source.RaiseModeChanged();
+                    source.Mode = 2;
+                    source.RaiseModeChanged();
+                    source.Mode = 1;
+                    source.RaiseModeChanged();
+                    Telescope.Logging.LogFileWriter.Flush();
+
+                    string content = ReadAllTextShared(logPath);
+                    int insertCount = CountOccurrences(content, "[NeoVisual] vim-mode=Insert");
+                    int normalCount = CountOccurrences(content, "[NeoVisual] vim-mode=Normal");
+                    Assert.Equal(1, insertCount);
+                    Assert.Equal(1, normalCount);
                 });
             }
         }
@@ -1019,18 +1144,8 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
-        // Helpers — DistinctBy, RectCoordinate
+        // Helpers — RectCoordinate
         // ================================================================
-
-        public static void Run_DistinctBy_DeduplicatesOnKey()
-        {
-            var items = new[] { "a", "b", "a", "c", "b" };
-            var distinct = items.DistinctBy(x => x).ToList();
-            Assert.Equal(3, distinct.Count);
-            Assert.Equal("a", distinct[0]);
-            Assert.Equal("b", distinct[1]);
-            Assert.Equal("c", distinct[2]);
-        }
 
         public static void Run_RectCoordinate_StoresFields()
         {
@@ -1438,6 +1553,51 @@ namespace NeoVisual.Tests
             Assert.False(matcher.IsActive, "a failed execution still ends the sequence");
         }
 
+        public static void Run_LeaderMatcher_ActiveSequenceConsumesI()
+        {
+            // M15: while a leader sequence is active, I must be treated as a sequence key
+            // (consumed), NOT passed through — the InputHandler guard (`!_leaderMatcher.IsActive &&
+            // key == Keys.I`) relies on the matcher consuming I as part of the sequence.
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["I,F"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var result = matcher.HandleKey(Keys.I, false, false, false, false);
+
+            Assert.Equal(LeaderResultKind.Consume, result.Kind);
+            Assert.True(matcher.IsActive, "I continues the active leader sequence");
+            Assert.Equal(0, executed);
+        }
+
+        public static void Run_LeaderMatcher_PrefixSetBuiltOnce()
+        {
+            // M7: the matcher must precompute a prefix set once at construction (a readonly field)
+            // so the per-key prefix check is a set lookup instead of a StartsWith scan. RED today:
+            // no prefix set exists -> the field is absent (assertion failure).
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["F"] = () => { },
+                ["F,F"] = () => { },
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            var field = typeof(LeaderSequenceMatcher).GetFields(
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                .FirstOrDefault(f => f.Name.IndexOf("prefix", StringComparison.OrdinalIgnoreCase) >= 0);
+            Assert.True(field != null, "LeaderSequenceMatcher must precompute a prefix set (M7)");
+            Assert.True(field!.IsInitOnly, "the prefix set must be readonly (built once at construction)");
+
+            object? value = field.GetValue(matcher);
+            Assert.True(value != null, "the prefix set is populated at construction");
+            bool containsF = value is System.Collections.IEnumerable seq
+                && seq.Cast<object?>().Any(o => string.Equals(o?.ToString(), "F", StringComparison.OrdinalIgnoreCase));
+            Assert.True(containsF, "prefix set contains 'F' (a proper prefix of 'F,F')");
+        }
+
         // ================================================================
         // SimpleShortcutMatcher — pure simple-shortcut state machine (M31)
         // RED: `SimpleShortcutMatcher`/`SimpleShortcutResult`/`SimpleShortcutResultKind` don't
@@ -1720,6 +1880,28 @@ namespace NeoVisual.Tests
             Assert.True(sink.Any(l => l.StartsWith("[MyExtension] init window-manager failed: ", StringComparison.Ordinal)),
                 "the diagnostic text names the failing step");
         }
+
+        public static void Run_InitSteps_RunSyncLogsOk()
+        {
+            // M24: the sync step runner shares the per-step try/catch + `[MyExtension] init <name>
+            // ok/failed` contract with RunAsync. RED: `InitSteps.RunSync` does not exist yet ->
+            // compile error (CS0117).
+            var sink = new List<string>();
+            InitSteps.RunSync("x", () => { }, sink.Add);
+
+            Assert.True(sink.Contains("[MyExtension] init x ok"), "a sync step logs ok");
+        }
+
+        public static void Run_InitSteps_RunSyncFailingLogsFailed()
+        {
+            // M24: a throwing sync step logs `[MyExtension] init x failed: boom` and does NOT throw
+            // (the per-step try/catch swallows it, matching RunAsync).
+            var sink = new List<string>();
+            InitSteps.RunSync("x", () => throw new InvalidOperationException("boom"), sink.Add);
+
+            Assert.True(sink.Contains("[MyExtension] init x failed: boom"),
+                "a throwing sync step logs failed and does not throw");
+        }
     }
 
     /// <summary>
@@ -1736,5 +1918,54 @@ namespace NeoVisual.Tests
         public void Attach(ITextView view) { }
         public void Detach(ITextView view) { }
         public void RaiseModeChanged() => ModeChanged?.Invoke(Mode);
+    }
+
+    /// <summary>
+    /// Minimal ITextView fake for the VimBufferSubscriptions tests (CR2). The subscription map
+    /// only uses the view as a dictionary key (reference identity), so every member throws — the
+    /// fake just needs to be a distinct, non-null ITextView instance.
+    /// </summary>
+    internal sealed class FakeTextView : ITextView
+    {
+        public IBufferGraph BufferGraph => throw new NotImplementedException();
+        public ITextCaret Caret => throw new NotImplementedException();
+        public void Close() => throw new NotImplementedException();
+        public event EventHandler? Closed { add { } remove { } }
+        public void DisplayTextLineContainingBufferPosition(SnapshotPoint bufferPosition, double verticalDistance, ViewRelativePosition relativeTo) => throw new NotImplementedException();
+        public void DisplayTextLineContainingBufferPosition(SnapshotPoint bufferPosition, double verticalDistance, ViewRelativePosition relativeTo, double? viewportWidthOverride, double? viewportHeightOverride) => throw new NotImplementedException();
+        public SnapshotSpan GetTextElementSpan(SnapshotPoint point) => throw new NotImplementedException();
+        public ITextViewLine GetTextViewLineContainingBufferPosition(SnapshotPoint bufferPosition) => throw new NotImplementedException();
+        public event EventHandler? GotAggregateFocus { add { } remove { } }
+        public bool HasAggregateFocus => throw new NotImplementedException();
+        public bool InLayout => throw new NotImplementedException();
+        public bool IsClosed => throw new NotImplementedException();
+        public bool IsMouseOverViewOrAdornments => throw new NotImplementedException();
+        public event EventHandler<TextViewLayoutChangedEventArgs>? LayoutChanged { add { } remove { } }
+        public double LineHeight => throw new NotImplementedException();
+        public event EventHandler? LostAggregateFocus { add { } remove { } }
+        public double MaxTextRightCoordinate => throw new NotImplementedException();
+        public event EventHandler<MouseHoverEventArgs>? MouseHover { add { } remove { } }
+        public IEditorOptions Options => throw new NotImplementedException();
+        public Microsoft.VisualStudio.Utilities.PropertyCollection Properties => throw new NotImplementedException();
+        public ITrackingSpan? ProvisionalTextHighlight { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public void QueueSpaceReservationStackRefresh() => throw new NotImplementedException();
+        public ITextViewRoleSet Roles => throw new NotImplementedException();
+        public ITextSelection Selection => throw new NotImplementedException();
+        public ITextBuffer TextBuffer => throw new NotImplementedException();
+        public ITextDataModel TextDataModel => throw new NotImplementedException();
+        public ITextSnapshot TextSnapshot => throw new NotImplementedException();
+        public ITextViewLineCollection TextViewLines => throw new NotImplementedException();
+        public ITextViewModel TextViewModel => throw new NotImplementedException();
+        public double ViewportBottom => throw new NotImplementedException();
+        public double ViewportHeight => throw new NotImplementedException();
+        public event EventHandler? ViewportHeightChanged { add { } remove { } }
+        public double ViewportLeft { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public event EventHandler? ViewportLeftChanged { add { } remove { } }
+        public double ViewportRight => throw new NotImplementedException();
+        public double ViewportTop => throw new NotImplementedException();
+        public double ViewportWidth => throw new NotImplementedException();
+        public event EventHandler? ViewportWidthChanged { add { } remove { } }
+        public IViewScroller ViewScroller => throw new NotImplementedException();
+        public ITextSnapshot VisualSnapshot => throw new NotImplementedException();
     }
 }

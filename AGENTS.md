@@ -104,20 +104,20 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
 class, mirror the `OverlayKeyHandler` / `TextMotionNavigator` pattern
 (dependency-free state machine the UI delegates to) so it stays unit-testable.
-The E2E behavior is verified by the live harness (`tools/test-e2e.ps1`).
+The E2E behavior is verified by the live harness (`tools/harness/test-e2e.ps1`).
 
 ## Live E2E tests (experimental instance)
 
-`tools/test-e2e.ps1` boots the VS Experimental Instance with the extension deployed and a real
+`tools/harness/test-e2e.ps1` boots the VS Experimental Instance with the extension deployed and a real
 solution open, then runs every functionality scenario against that **live** instance, asserting on
 the runtime log (with per-scenario focus verification so keys are never typed into the wrong
 window):
 
 ```
-pwsh tools/test-e2e.ps1                              # all 35 scenarios
-pwsh tools/test-e2e.ps1 -Tests telescope-open        # a single scenario
-pwsh tools/test-e2e.ps1 -Tests telescope-search,telescope-navigate
-pwsh tools/test-e2e.ps1 -List                        # list scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 35 scenarios
+pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
+pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
+pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
 Scenarios (35 total; no known-RED remaining — `explorer-open-searchbox` was GREened
@@ -311,8 +311,8 @@ Pending (user-requested, NOT yet implemented):
   `SwitchToMainThreadAsync()`. Never touch VS objects from a background thread;
   add `ThrowIfNotOnUIThread()` to any new VS API method.
 - **Target framework is `net472`** (not modern .NET). Avoid .NET 5+/BCL-only APIs;
-  the repo hand-rolls `DistinctBy` for this reason. `IReadOnlySet<T>` is NOT available —
-  use `IReadOnlyCollection<Keys>` for controller action keys. `LangVersion` 14, `Nullable` enabled.
+  `IReadOnlySet<T>` is NOT available — use `IReadOnlyCollection<Keys>` for controller
+  action keys. `LangVersion` 14, `Nullable` enabled.
 - `Microsoft.VisualStudio.SDK` is referenced with `ExcludeAssets="runtime"` — VS
   supplies it at load time; do not expect SDK assemblies in the build output.
   The test projects add `Microsoft.VisualStudio.Interop` + `Shell.Framework` with
@@ -325,7 +325,7 @@ Pending (user-requested, NOT yet implemented):
 - **Leader key is Space by default**, and bindings are **user-configurable** via an
   external file at `%APPDATA%\MyExtension\keybindings.json`. It is **not created
   automatically** — it's only read if it exists, and merged over the built-in
-  defaults in `MyExtension/default-keybindings.json` (embedded resource). Action
+  defaults in `MyExtension/Resources/default-keybindings.json` (embedded resource). Action
   names are resolved in `InputHandler.ResolveAction` (`navigate-left` etc.);
   `command:<VsCommandName>` runs any VS command by name (this is how the
   LazyVim-style leader bindings like `w`→save are wired). To add a *new built-in
@@ -393,9 +393,10 @@ Pending (user-requested, NOT yet implemented):
   `IsLeaderActive` is a volatile bool read by the pre-filter, mutated only on the
   UI thread. `Log` uses `OutputStringThreadSafe` (pane created eagerly on the UI
   thread); never add per-key logging back to the callback.
-- Namespaces: `MyExtension` (package/hook/handler) and `CardinalNavigation`
-  (window logic). The source folder is spelled **`CardinalMovment`** (typo) — keep
-  it consistent, do not "fix" it (breaks references).
+- Namespaces: `MyExtension` (package/hook/handler) and `MyExtension.Navigation`
+  (window logic). The window-logic sources live in `MyExtension/Navigation/`
+  (renamed from the old `CardinalMovment/` folder by the 2026-09-30 restructure;
+  the namespace is `MyExtension.Navigation`, not `CardinalNavigation`).
 - Two window APIs are used together: `IVsWindowFrame`/`IVsUIShell` for on-screen
   geometry (`GetWindowScreenRect`), `EnvDTE.Window` for activation
   (`window.Activate()`) and framing (`LinkedWindowFrame`). `WindowAdapter`

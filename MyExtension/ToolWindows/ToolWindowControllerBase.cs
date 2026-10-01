@@ -1,7 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
 
-namespace MyExtension
+namespace MyExtension.ToolWindows
 {
     /// <summary>
     /// Shared mode-state owner for the tool-window controllers. Holds the tool-window type and the
@@ -36,6 +37,10 @@ namespace MyExtension
         }
 
         protected virtual void OnModeChanged() { }
+
+        /// <summary>Shared vim text-motion action wiring for the focused text surface (search box /
+        /// text-input window): routes the key through <see cref="TextMotionHelper.TryMoveFocusedSurface"/>.</summary>
+        protected Func<bool> TextMotion(Keys key) => () => TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode);
 
         public abstract bool TryMove(Keys key);
 

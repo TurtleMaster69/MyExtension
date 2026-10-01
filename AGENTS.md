@@ -83,7 +83,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   fallback (`PaneFailureTracker`).
   `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TryDispatch`,
   `-- LineIndex`, `-- FocusTarget`, `-- Syntax` run subsets.
-  Currently **135 tests, all passing**.
+  Currently **143 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -98,7 +98,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
   `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-  run subsets. Currently **130 tests, all passing**.
+  run subsets. Currently **140 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -186,7 +186,8 @@ Key facts that make this reliable:
   and trigger the Deactivated->close); it just sends Escapes until `overlay closed` is seen.
 - Diagnostics added so the harness can assert each feature: `[NeoVisual] navigate direction=...`,
   `[NeoVisual] leader-binding executed: ...`, `[NeoVisual] shortcut-binding executed: ...`,
-  `[NeoVisual] toolwindow-move key=... -> arrow vk=...`, `[NeoVisual] toolwindow-enter-input` /
+  `[NeoVisual] toolwindow-move key=... -> arrow vk=...`, `[NeoVisual] toolwindow-move failed: {msg}`
+  (controller exception passes the key through — never crashes the hook), `[NeoVisual] toolwindow-enter-input` /
   `toolwindow-exit-input`, `[NeoVisual] solution-explorer toggled open/closed`,
   `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`,
   `[NeoVisual] solution-explorer select file=...` (programmatic first-source-file
@@ -206,7 +207,8 @@ Key facts that make this reliable:
   (grep finder — query-driven, per-query gather summary),
   `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
   (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
-  `[Telescope] focus target=List|Preview`, `[Telescope] preview caret=... line=...`,
+  `[Telescope] focus target=List|Preview`, `[Telescope] result-mapper unknown display: {display}`
+  (unknown-match warning when a display string has no payload), `[Telescope] preview caret=... line=...`,
   `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions),
   `[NeoVisual] stale-toolwindow sentinel active` (M3 — the injected stale-frame fault is
   active, not skipped), `[NeoVisual] leader-binding failed: {seq}: {msg}` /

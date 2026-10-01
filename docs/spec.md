@@ -73,6 +73,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g select-first-source-file, h/l fold expand/collapse, j/k navigate, i focuses the search box. |
 | `MyExtension/ToolWindows/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam: `HierarchyNode` + `FirstSourceFilePath` (physical-file/folder Kind-GUID classification, folder recursion) used by `SolutionExplorerController`'s `g` action. |
 | `MyExtension/ToolWindows/FocusKeeper.cs` | Re-select/refocus keeper that defeats VS's hover-preview focus steal. |
+| `MyExtension/ToolWindows/FocusGuard.cs` | Pure tool-window key-routing guard (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`/`OwnsKeyboard`): action keys only consume while the tool window holds focus — never leak into a focused editor. |
 | `MyExtension/ToolWindows/HierarchyForestBuilder.cs` | Pure tree-forest builder for the Solution Explorer walk. |
 | `MyExtension/ToolWindows/ToolWindowControllerBase.cs` | Shared base for tool-window controllers (text-motion action wiring). |
 | `MyExtension/Adornments/BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode. |
@@ -90,6 +91,9 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Filter/FzfFilter.cs` | fzf `--filter` subprocess; input written as explicit UTF-8 bytes. |
 | `Telescope/Finders/FileFinder.cs` | File finder (hermetic open seam). |
 | `Telescope/Finders/CodeIssuesFinder.cs` | Warnings/errors + TODO/FIXME/HACK/XXX marker finder. |
+| `Telescope/Finders/ReferencesFinder.cs` | Symbol-at-caret find-references with read/write access (Roslyn `FindReferencesAsync`; host-injected gatherer keeps it hermetic-testable). |
+| `Telescope/Finders/GrepFinder.cs` | Query-driven grep over `ProjectFiles.Enumerate` (per-keystroke re-gather with a ~200ms debounce; skips fzf for query finders). |
+| `Telescope/Finders/ImplementationFinder.cs` | Symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering (host-injected gatherer). |
 | `Telescope/Finders/ProjectFiles.cs` | Shared DTE project-file enumeration. |
 | `Telescope/Finders/HierarchyWalker.cs` | Pure tree-walk over the Solution Explorer hierarchy. |
 | `Telescope/Finders/DteFileOpener.cs` | DTE-based file opener (host-injected seam). |
@@ -104,8 +108,9 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Finders/FinderBase.cs` | `FinderBase<THit>` — shared gather/open pipeline for the finders. |
 | `Telescope/Logging/NeoVisualLog.cs`, `LogFileWriter.cs`, `NeoVisualTraceListener.cs`, `DiagnosticLog.cs` | Per-run two-file logs (`*-exp.log`, `*-main.log`) + the `[Telescope]`/`[NeoVisual]`/`[Hook]` prefix constants. |
 
-**Note:** the source folder is spelled `CardinalMovment` (intentional typo); the
-namespace remains `CardinalNavigation`. Never "fix" the folder spelling.
+**Note:** the window-logic sources live in `MyExtension/Navigation/` (renamed from
+the old `CardinalMovment/` folder by the 2026-09-30 restructure); the namespace is
+`MyExtension.Navigation`, not `CardinalNavigation`.
 
 **Project layering (decision 2026-09-28):** the host (`MyExtension`) depends on
 `Telescope` for core infrastructure — `NeoVisualLog` (the extension-wide logger),
@@ -182,6 +187,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[NeoVisual] leader-binding executed: ...`
 - `[NeoVisual] shortcut-binding executed: ...`
 - `[NeoVisual] toolwindow-move key=... -> arrow vk=...`
+- `[NeoVisual] toolwindow-move failed: {msg}` (controller exception passes the key through — never crashes the hook)
 - `[NeoVisual] toolwindow-enter-input` / `toolwindow-exit-input`
 - `[NeoVisual] solution-explorer toggled open/closed`
 - `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`
@@ -199,6 +205,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
 - `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
 - `[Telescope] focus target=List|Preview`
+- `[Telescope] result-mapper unknown display: {display}` (unknown-match warning when a display string has no payload)
 - `[Telescope] preview caret=... line=...`
 - `[Telescope] prompt-motion key=... caret=...`
 - `[NeoVisual] stale-toolwindow sentinel active`

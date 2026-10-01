@@ -399,7 +399,7 @@ Top of the queue, in priority order:
   `[Hook]`/`[MyExtension]` literal changed by the restructure). NO e2e harness commands
   run (user mandate — VS-capable machine required). e2e gates queued in
   `docs/e2e-queue.md` (E2E-NCR-1..2, E2E-NCR-M1/M2/M15 .. E2E-NCR-M26/M27/M28,
-  E2E-RESTRUCTURE-1, status QUEUED). Commit: `pending`.
+  E2E-RESTRUCTURE-1, status QUEUED). Commit: `92b119f`.
   **Change summary:** Phases 0-5 (Chunk A): CR1/CR2 (TextInput action table + VimBufferSubscriptions),
   M1/M2/M3/M4/M5/M6/M7/M8/M9/M10/M11/M12/M13/M14/M15/M16/M19/M25 + m14/m15/m16/m17 (fzf
   off-thread spawn + timeout observation, FileContentCache LRU, ResultMapper unknown-display

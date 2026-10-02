@@ -14,15 +14,17 @@ namespace Telescope.Overlay
     /// first. Unknown strings are skipped (M11 — no null-payload <see cref="FinderEntry"/> whose
     /// <c>OnSelected</c> silently no-ops) and logged as a warning.
     /// </summary>
-    public static class ResultMapper
+    public sealed class ResultMapper
     {
         // m33: the byDisplay map is derived from the snapshot and rebuilt per keystroke; cache it
         // per snapshot (reference-keyed single entry — the snapshot is the overlay's candidate list,
         // which does not change while filtering). Rebuilt only when a different snapshot arrives.
-        private static IReadOnlyList<FinderEntry>? _cachedSnapshot;
-        private static Dictionary<string, List<(FinderEntry entry, int index)>>? _cachedByDisplay;
+        // R40: the cache is INSTANCE-scoped (not static) so a closed overlay's candidate list is
+        // not pinned in memory and the mapper is safe to use off the UI thread.
+        private IReadOnlyList<FinderEntry>? _cachedSnapshot;
+        private Dictionary<string, List<(FinderEntry entry, int index)>>? _cachedByDisplay;
 
-        public static IReadOnlyList<FinderEntry> MapBack(IReadOnlyList<string> matched, IReadOnlyList<FinderEntry> snapshot)
+        public IReadOnlyList<FinderEntry> MapBack(IReadOnlyList<string> matched, IReadOnlyList<FinderEntry> snapshot)
         {
             if (!ReferenceEquals(_cachedSnapshot, snapshot))
             {

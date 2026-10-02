@@ -62,16 +62,13 @@ namespace MyExtension.Vim
         /// <summary>
         /// Handles a view closing. Clears the mode only when the view is the focused one;
         /// returns whether the MODE changed (not just the typing flag), so the tracker emits
-        /// <c>vim-mode=Unknown</c> when a focused Normal-mode view closes (m41).
+        /// <c>vim-mode=Unknown</c> when a focused Normal-mode view closes (m41). R29: delegates to
+        /// <see cref="OnViewLostFocus"/> — the two handlers are behaviorally identical, so a future
+        /// change to one must not silently diverge from the other.
         /// </summary>
         public bool OnViewClosed(bool isFocusedView)
         {
-            if (!isFocusedView)
-            {
-                return false;
-            }
-
-            return Clear();
+            return OnViewLostFocus(isFocusedView);
         }
     }
 }

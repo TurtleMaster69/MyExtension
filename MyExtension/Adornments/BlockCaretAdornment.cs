@@ -61,6 +61,7 @@ namespace MyExtension.Adornments
 
             _view.Caret.PositionChanged += OnCaretChanged;
             _view.LayoutChanged += OnLayoutChanged;
+            _view.LostAggregateFocus += OnLostFocus;
             _view.Closed += OnClosed;
         }
 
@@ -91,10 +92,19 @@ namespace MyExtension.Adornments
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e) => Update();
 
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            // R21: a normal-mode block caret must not persist over an unfocused editor view —
+            // deactivate the adornment so the native line caret shows. ApplyEditorViewCaret
+            // re-activates it when the view regains focus in normal mode.
+            Active = false;
+        }
+
         private void OnClosed(object sender, EventArgs e)
         {
             _view.Caret.PositionChanged -= OnCaretChanged;
             _view.LayoutChanged -= OnLayoutChanged;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
 

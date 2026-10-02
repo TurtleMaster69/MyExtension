@@ -45,6 +45,47 @@ namespace Telescope.Finders
             return null;
         }
 
+        /// <summary>
+        /// Returns the first path ending with <paramref name="extension"/> in tree order, WITHOUT
+        /// the on-disk existence filter (R19 — <c>HierarchyResolver.FirstSourceFilePath</c> delegates
+        /// here so the walk + extension filter are single-sourced; the resolver's forest is built
+        /// from live DTE items, so the paths exist on disk).
+        /// </summary>
+        public static string? FirstPathEndingWith(IEnumerable<IHierarchyNode> roots, string extension)
+        {
+            foreach (var root in roots)
+            {
+                string? hit = FirstPathEndingWithCore(root, extension);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+            return null;
+        }
+
+        private static string? FirstPathEndingWithCore(IHierarchyNode? node, string extension)
+        {
+            if (node == null)
+            {
+                return null;
+            }
+            if (!string.IsNullOrEmpty(node.Path) &&
+                node.Path!.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            {
+                return node.Path;
+            }
+            foreach (var child in node.Children)
+            {
+                string? hit = FirstPathEndingWithCore(child, extension);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+            return null;
+        }
+
         private static void Walk(IHierarchyNode? node, List<string> paths, HashSet<string> seen)
         {
             if (node == null)

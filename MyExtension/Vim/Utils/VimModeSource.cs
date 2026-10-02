@@ -62,6 +62,7 @@ namespace MyExtension.Vim
         private MethodInfo? _removeSwitchedModeMethod;       // IVimTextBuffer.remove_SwitchedMode
         private MethodInfo? _getTextBufferModeKindMethod;    // IVimTextBuffer.get_ModeKind
         private MethodInfo? _addClosedMethod;                // IVimBuffer.add_Closed
+        private MethodInfo? _removeClosedMethod;             // IVimBuffer.remove_Closed
 
         private Delegate? _switchedModeDelegate;             // EventHandler<SwitchModeKindEventArgs>
         private readonly EventHandler _bufferClosedDelegate; // EventHandler (System)
@@ -88,13 +89,10 @@ namespace MyExtension.Vim
 
         // Guards against double-subscribing the same buffer's events when a view is attached and
         // then focused (Attach + GetModeKind both call SubscribeBuffer). Reference-equality sets.
+        // R3: the Closed-subscription set + the per-shared-text-buffer refcounts moved into the
+        // pure VimBufferSubscriptions (the lifecycle bookkeeping is unit-tested there); this set
+        // guards only the SwitchedMode subscription.
         private readonly HashSet<object> _subscribedTextBuffers = new HashSet<object>();
-        private readonly HashSet<object> _subscribedBuffers = new HashSet<object>();
-
-        // m40: reference count of attached views per shared text buffer. Two views can share one
-        // ITextBuffer (split views), so Detach must not unsubscribe a text buffer another view
-        // still uses. Incremented in Attach, decremented in Detach; unsubscribed only at 0.
-        private readonly Dictionary<object, int> _textBufferRefCounts = new Dictionary<object, int>();
 
         public VsVimModeSource()
         {
@@ -126,15 +124,13 @@ namespace MyExtension.Vim
             object? buffer = GetBufferForView(view);
             if (buffer != null)
             {
-                _subscriptions.Attach(view, buffer);
+                object? textBuffer = GetTextBuffer(buffer);
+                // R3: the refcount increment + buffer->textBuffer mapping live in the pure
+                // subscriptions map (unit-tested lifecycle bookkeeping).
+                _subscriptions.Attach(view, buffer, textBuffer);
                 // makeCurrent: false — a newly created view is not necessarily focused; subscribe
                 // its buffer's events but do NOT re-point the focused buffer (m39).
                 SubscribeBuffer(buffer, makeCurrent: false);
-                object? textBuffer = GetTextBuffer(buffer);
-                if (textBuffer != null)
-                {
-                    _textBufferRefCounts[textBuffer] = _textBufferRefCounts.TryGetValue(textBuffer, out int c) ? c + 1 : 1;
-                }
             }
         }
 
@@ -142,25 +138,15 @@ namespace MyExtension.Vim
         public void Detach(ITextView view)
         {
             object? buffer = _subscriptions.BufferFor(view);
-            if (buffer != null)
+            // R3: the subscriptions map coordinates the refcount decrement + Closed-subscription
+            // removal (no double-decrement with OnBufferClosed) and reports whether this was the
+            // last view sharing the text buffer.
+            bool lastView = _subscriptions.Detach(view);
+            if (buffer != null && lastView)
             {
-                object? textBuffer = GetTextBuffer(buffer);
-                if (textBuffer != null && _textBufferRefCounts.TryGetValue(textBuffer, out int count))
-                {
-                    if (count <= 1)
-                    {
-                        // Last view sharing this text buffer: unsubscribe its SwitchedMode event.
-                        _textBufferRefCounts.Remove(textBuffer);
-                        UnsubscribeBuffer(textBuffer);
-                    }
-                    else
-                    {
-                        // Another view still shares this text buffer — keep the subscription (m40).
-                        _textBufferRefCounts[textBuffer] = count - 1;
-                    }
-                }
+                // Last view sharing this text buffer: unsubscribe its SwitchedMode + Closed events.
+                UnsubscribeBuffer(buffer);
             }
-            _subscriptions.Detach(view);
         }
 
         /// <summary>Raised by VsVim whenever the buffer's mode changes (UI thread).</summary>
@@ -188,11 +174,15 @@ namespace MyExtension.Vim
                 _currentBuffer = null;
                 _currentTextBuffer = null;
             }
-            _subscribedBuffers.Remove(sender);
+            // R3: the subscriptions map removes the Closed subscription + decrements the refcount
+            // (removing the entry at 0) and reports whether this was the last view sharing the
+            // text buffer — only then is the SwitchedMode subscription dropped.
+            bool lastView = _subscriptions.OnBufferClosed(sender);
             object? textBuffer = GetTextBuffer(sender);
-            if (textBuffer != null)
+            if (textBuffer != null && lastView)
             {
                 _subscribedTextBuffers.Remove(textBuffer);
+                RemoveSwitchedMode(textBuffer);
             }
         }
 
@@ -244,7 +234,9 @@ namespace MyExtension.Vim
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}VsVim SwitchedMode subscribe failed: {ex.Message}");
             }
 
-            if (!_subscribedBuffers.Add(buffer))
+            // R3: the Closed-subscription set lives in the pure subscriptions map (guards
+            // double-subscribing the Closed event).
+            if (!_subscriptions.MarkClosedSubscribed(buffer))
             {
                 return;
             }
@@ -260,15 +252,30 @@ namespace MyExtension.Vim
             }
         }
 
-        private void UnsubscribeBuffer(object? textBuffer)
+        /// <summary>
+        /// Unsubscribes a buffer's SwitchedMode (on its text buffer) + Closed (on the buffer)
+        /// events. R3: the Closed subscription is on the <c>IVimBuffer</c>, not the text buffer, so
+        /// the buffer is threaded through the pure subscriptions map (which also removes the Closed
+        /// subscription + decrements the refcount).
+        /// </summary>
+        private void UnsubscribeBuffer(object buffer)
         {
-            if (textBuffer == null || _switchedModeDelegate == null)
+            object? textBuffer = GetTextBuffer(buffer);
+            if (textBuffer != null)
+            {
+                RemoveSwitchedMode(textBuffer);
+            }
+            _subscriptions.UnsubscribeBuffer(buffer);
+            RemoveClosed(buffer);
+        }
+
+        private void RemoveSwitchedMode(object textBuffer)
+        {
+            if (_switchedModeDelegate == null)
             {
                 return;
             }
-
             _subscribedTextBuffers.Remove(textBuffer);
-
             try
             {
                 _removeSwitchedModeMethod ??= GetInterfaceMethod(textBuffer, IVimTextBufferFullName, "remove_SwitchedMode");
@@ -277,6 +284,19 @@ namespace MyExtension.Vim
             catch (Exception ex)
             {
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}VsVim SwitchedMode unsubscribe failed: {ex.Message}");
+            }
+        }
+
+        private void RemoveClosed(object buffer)
+        {
+            try
+            {
+                _removeClosedMethod ??= GetInterfaceMethod(buffer, IVimBufferFullName, "remove_Closed");
+                _removeClosedMethod?.Invoke(buffer, new object[] { _bufferClosedDelegate });
+            }
+            catch (Exception ex)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}VsVim Closed unsubscribe failed: {ex.Message}");
             }
         }
 

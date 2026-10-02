@@ -7,27 +7,24 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (67 findings) + restructure GREEN (2026-09-30); combined plan (98 findings + Functional restructure) in progress
+> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (51 findings) — GREEN 2026-10-02 (unit-only lane; e2e gates E2E-CR51-1..10 queued in `e2e-queue.md`)
 
 ## Current state
 
-- **In progress:** none — the **Code review findings (98 findings) + Functional
-  restructure** combined plan reached GREEN 2026-10-02 (unit-only lane; the e2e gates
-  are queued in `e2e-queue.md`, E2E-NCR-1..2, E2E-NCR-M2/M4/M5/M3/M7/m47,
-  E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, E2E-NCR-67-*, status QUEUED). Also GREEN
-  2026-09-30: the Code review findings (67) + Repository restructure plan; also GREEN
-  2026-09-28: the Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly
-  bugfix, F22 (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache). No
+- **In progress:** none — the **Code review fixes (51 findings)** plan reached GREEN
+  2026-10-02 (unit-only lane; the e2e gates are queued in `e2e-queue.md`,
+  E2E-CR51-1..10, status QUEUED). Prior GREEN: the **Code review findings (98 findings)
+  + Functional restructure** combined plan (2026-10-02, e2e gates E2E-NCR-* queued);
+  the Code review findings (67) + Repository restructure plan (2026-09-30); the
+  Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly bugfix, F22
+  (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache) (2026-09-28). No
   known-RED e2e scenario remains.
-- **Next up:** the still-open Architecture review backlog findings (F5, F8, F9, F13,
-  F14, F43 — the ones NOT subsumed by the consolidation and not yet fixed) are the next
-  candidates. **Blockers on this machine (no VS Experimental Instance boot):** F5/F14
-  are no-seam (VS-coupled, no hermetic unit surface), F9 adds a diagnostic (feature
-  lane, needs e2e RED booting VS), F13 is a no-seam dedup (no behavior change), F8 is a
-  perf fix with no observable behavior change, F43 is not RED-provable (fzf present).
-  Also pending: the Telescope `fzf` finder (DEFERRED, scope TBD) and the user-requested
-  features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts it). See the
-  Pending queue + User-requested features sections below.
+- **Next up:** the still-open Architecture backlog findings **F13** (no-seam dedup) and
+  **F43** (not RED-provable) — the only remaining backlog items after the 51-findings
+  plan (which subsumed F5→R3, F7→R4, F8/F9→R22/R42, F10→R2, F14→R45). Also pending: the
+  Telescope `fzf` finder (SCOPE DECIDED 2026-09-28, PLANNED not executed) and the
+  user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts
+  it). See the Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
@@ -72,9 +69,8 @@ reads at the start of every loop iteration.
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **151 passed**; `tests/NeoVisual.Tests`
-  **158 passed** (after the Code review findings (98) + Functional restructure plan,
-  2026-10-02).
+- Offline units: `tests/Telescope.Tests` **153 passed**; `tests/NeoVisual.Tests`
+  **163 passed** (after the Code review fixes (51 findings) plan, 2026-10-02).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **35 scenarios** (incl. `seed-reset`,
   `seed-leak`, `neovisual-explorer-move-editor-focus`). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
@@ -197,6 +193,21 @@ were known-backlog assertion bugs, not regressions).
 
 Top of the queue, in priority order:
 
+> **FIRST ITEM (2026-10-02):** ~~the **Code review fixes (51 findings)** plan~~ —
+> **DONE** (GREEN 2026-10-02, unit-only lane; see the Done section). Source:
+> `docs/reviews/code-review.md` (2026-10-02, 51 findings:
+> 0 critical, 5 major, 22 minor, 24 nit — the user requested fixes for ALL findings,
+> incl. minors/nits). Plan in `docs/implementation_plan.md` (10 phases: 0-9 code-review
+> fixes; 51 BP steps + Verification Trace).
+> **DEFER e2e tests (unit-only lane):** e2e scenarios are queued in `e2e-queue.md`
+> (E2E-CR51-1..10, status QUEUED) — run them on a VS-capable machine after this plan is
+> GREEN. The plan subsumes Architecture backlog findings F5→R3, F7→R4, F8/F9→R22/R42,
+> F10→R2, F14→R45 (documented/accepted n16) — do not double-execute those. It also
+> re-fixes the prior regressions M1→R1, M4→R2, M7→R24.
+> **R45 disposition (BP-43, recorded 2026-10-02):** the Ctrl+N/P unconditional swallow in
+> `PopupNavigation` (PopupNavigation.cs:47-61) is the documented/accepted n16 design —
+> re-verified still live; NO code change (keep documented/accepted).
+
 > **FIRST ITEM (2026-10-01):** ~~the **Code review findings (98 findings) + Functional
 > restructure** combined plan~~ — **DONE** (GREEN 2026-10-02, unit-only lane; see the Done
 > section). Source:
@@ -256,7 +267,10 @@ Top of the queue, in priority order:
 > F5, F8, F9, F22 are now covered by the combined plan (F5→CR2, F8/F9→M2, F22→M18) and
 > F12/F15 are already FIXED (2026-09-28) — do not double-execute. Remaining after the
 > combined plan: F13 (no-seam dedup), F14 (no-seam VS-coupled), F43 (not RED-provable).
-> The Telescope `fzf` finder (item 5) is DEFERRED (scope TBD by the user).
+> **UPDATE 2026-10-02:** F5→R3, F7→R4, F8/F9→R22/R42, F10→R2, F14→R45 are now covered
+> by the 51-findings plan (GREEN 2026-10-02) — do not double-execute. Remaining
+> after it: F13 (no-seam dedup), F43 (not RED-provable).
+> The Telescope `fzf` finder (item 5) — SCOPE DECIDED 2026-09-28, PLANNED (not executed).
 
 0. ~~Harness seeding hardening~~ — **DONE** (see Done section).
 1. ~~F45 e2e verification subset (BP-23)~~ — **DONE**: the 19-scenario gate ran
@@ -284,7 +298,8 @@ Top of the queue, in priority order:
      GREEN 2026-09-19; see Done section).
    - ~~**`explorer-open-searchbox`**~~ — ✅ **DONE** (search-box focus-exit gap
      fixed, GREEN 2026-09-27; see Done section).
-5. **Telescope `fzf` finder** — **DEFERRED** (scope TBD by the user).
+5. **Telescope `fzf` finder** — **SCOPE DECIDED 2026-09-28** (fuzzy content finder + fuzzy
+   file finder; see the Decisions section + `backlog-plans.md`), **PLANNED** (not executed).
 5.5. ~~**`telescope-implementation` — intermittent injected-Enter loss.**~~ ✅ **DONE
     2026-09-27** (see the Done section; commit `7c6569b`). Root cause was a **harness focus
     race** — `Assert-OverlayFocused` was PID-only, so Enter was injected before the overlay
@@ -407,6 +422,46 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-02 — Code review fixes (51 findings)** (Lane: `bugfix`, unit-only, e2e
+  deferred; 11 delegations, 0 VS boots, 0 iterations). All 51 findings (0 critical, 5
+  major, 22 minor, 24 nit) from `docs/reviews/code-review.md` executed per-phase
+  RED→GREEN (Phases 0-9) in the unit-only lane. Final suites: **Telescope.Tests 153,
+  NeoVisual.Tests 163** (both 0 failed); `dotnet build` 0 errors; all harness-health
+  self-checks PASS (check-doc-refs 0 unresolved, harness `-List` 35 scenarios,
+  `-SelfCheck` 12/12 incl. the R49 seed-leak standalone check). NO e2e harness commands
+  run (machine cannot boot the VS Experimental Instance). e2e gates queued in
+  `docs/e2e-queue.md` (E2E-CR51-1..10, status QUEUED).
+  **Change summary:** Phase 0 (R1 prompt selection navigation — surface-aware
+  `PromptMotionRouter` restriction + a/A/I placement routing; R2 preview document cache;
+  R3 VimModeSource buffer-subscription lifecycle — Closed removal + refcount via the pure
+  `VimBufferSubscriptions`; R4 per-frame fault isolation); Phase 1 (R5 telescope-mode
+  i/a post-tap assertions; R13 shell-wait gated on harness env vars; R49 self-seeding
+  subsets); Phase 2 (R6 `HasToolWindowActionKeys` deleted; R7 null-frame state reset;
+  R10 shift gating for non-text-input controllers; R11 `IsKeyOfInterest` shift narrowed;
+  R12 `InjectedKeyGuard` TTL-at-record); Phase 3 (R14 dead FocusedView/FocusedBuffer
+  members deleted; R46 per-buffer-type delegate); Phase 4 (R15 Properties-window quirk
+  single-source; R16 `GetWindowScreenRect` HRESULT + n19; R31 `_dte` readonly; R32
+  linked-filter cache; R33 "Window navigator initialization failed" rename; R34
+  `TryGetScreenRect` UI-thread assert); Phase 5 (R8 `FocusKeeper.Run` disposable; R9
+  `PrimaryFilePath` empty-list guard; R17 focused-box reuse; R18 caret-relative slice;
+  R19 `HierarchyWalker.FirstPathEndingWith` delegation; R20 instance-scoped
+  `_defaultControllers` cache; R21 `BlockCaretAdornment` focus-loss handler; R35 H/L
+  delegate to `TryMoveArrow`; R36 `MaxEscapeAttempts`; R37 redundant `_isInputMode`
+  re-set dropped; R38 `editor-view-opened` exactly once; R39 text-motion sample
+  sanitized); Phase 6 (R22 non-query fzf debounce; R23 fzf cancellation-task
+  observation; R40 `ResultMapper` instance class; R41 single read in `PreviewRenderer`;
+  R42 `IsAvailable` cached; R43 `LineIndex` binary search; R44 `SetText`-skip guard);
+  Phase 7 (R28 `[MyExtension]` banner prefix; R29 `OnViewClosed` delegates; R30
+  `NavigationSettings.Invalidate()`; R45 n16 disposition recorded — no code); Phase 8
+  (R24 timing test deleted; R47 deterministic IsAvailableBounded test; R48 behavior-based
+  GrepFinder test); Phase 9 (R25/R26/R27/R50/R51 docs drift). New/changed diagnostics:
+  `[NeoVisual] Window navigator initialization failed` (R33, renamed from "Window
+  matrix"), `[MyExtension] === Global Keyboard Logger Package STARTED ===` (R28,
+  prefixed). **If this regresses, look first at the `PromptMotionRouter` surface-aware
+  restriction + the `TryPromptMotion` placement routing (Telescope/Overlay/
+  TelescopeOverlay.cs) and the `VimBufferSubscriptions` R3 lifecycle (MyExtension/Vim/
+  Utils/VimBufferSubscriptions.cs) — the two highest-risk changes.**
 
 - **2026-10-02 — Code review findings (98 findings) + Functional restructure** (Lane:
   `bugfix` + behavior-preserving restructure, unit-only, e2e deferred; 34 delegations, 0
@@ -611,9 +666,9 @@ Top of the queue, in priority order:
   Root cause: `WindowManager.IsToolWindow` is driven by VS's `SEID_WindowFrame`
   selection event and goes **stale** when focus moves to an editor.
   **Change summary:** new `MyExtension/ToolWindows/FocusGuard.cs` (pure:
-  `HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`); `VimModeTracker`
+  `ShouldRouteToolWindowKey`/`IsTyping`); `VimModeTracker`
   gained event-driven `IsEditorFocused`; `InputHandler` gates
-  `HasToolWindowActionKeys`/routing/`ExitToolWindowInputMode`/`IsTyping` on
+  `ShouldRouteToolWindowKey`/routing/`ExitToolWindowInputMode`/`IsTyping` on
   `EditorFocusedVeto` (= `IsEditorFocused && controller not input-mode &&
   !IsTextInputType`, so the Command Window / an input-mode controller is never
   vetoed — DEVIATION **D4**, which fixed a fail-twice `neovisual-textinput-motions`
@@ -1011,6 +1066,12 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 > F37, F38, F39, F40, F41, F44, F46** — do NOT double-execute these; the consolidation
 > plan resolves them. **Still open (NOT subsumed):** F5, F8, F9, F13, F14, F43
 > (F22 + F12 + F15 were FIXED 2026-09-28 — see the Done section).
+>
+> **2026-10-02 — COVERED-BY the Code review fixes (51 findings) plan** (the FIRST
+> pending item + `docs/implementation_plan.md`): **F5→R3, F7→R4, F8/F9→R22/R42,
+> F10→R2, F14→R45** (documented/accepted n16) — do NOT double-execute these; the
+> 51-findings plan resolves them. **Still open (NOT subsumed):** F13 (no-seam dedup),
+> F43 (not RED-provable).
 
 ### Critical
 

@@ -318,10 +318,17 @@ namespace MyExtension.Input
                     // Normal mode: i/I enter input mode (the controller may position the caret
                     // first, e.g. I = insert at line start in text-input windows); hjkl move the
                     // focused surface; the controller's action keys (e.g. Solution Explorer
-                    // o/r/m/a, text-input w/b/e) act on it. Shift is NOT gated here so text-input
-                    // controllers can tell I/i and A/a apart — they return false for any key they
-                    // do not consume, which then falls through to VS.
-                    if (!ctrl && !alt)
+                    // o/r/m/a, text-input w/b/e) act on it. R10: shift is gated for NON-text-input
+                    // controllers (Shift+O/R/M/A/G in Solution Explorer must not fire tree actions
+                    // and swallow the key); text-input controllers still need shift to tell I/i and
+                    // A/a apart, so they are exempt from the shift gate.
+                    if (!ctrl && !alt && FocusGuard.ShouldRouteToolWindowKey(
+                        _windowManager.IsToolWindow,
+                        _vsVim.IsEditorFocused,
+                        _windowManager.CurrentController?.IsInputMode == true,
+                        _windowManager.IsTextInputType,
+                        _windowManager.TextInputSurfaceFocused,
+                        shift))
                     {
                         // A controller-specific insert key (text-input I = insert at line start) is
                         // handled by TryMove first; the generic 'i' below is the plain-insert
@@ -413,8 +420,12 @@ namespace MyExtension.Input
             }
 
             // Any modifier chord is a candidate simple shortcut (Ctrl+H, ...), and while a leader
-            // sequence is in progress ANY key can extend or break it — both handled.
-            if (IsLeaderActive || ctrl || shift || alt)
+            // sequence is in progress ANY key can extend or break it — both handled. R11: shift
+            // alone is NOT interesting here — every uppercase letter typed in the editor would
+            // otherwise run the full HandleKey path (hot-path cost). Shift is only interesting when
+            // a tool window with action keys is in normal mode (the tool-window branch below) or a
+            // leader sequence is active (IsLeaderActive above).
+            if (IsLeaderActive || ctrl || alt)
             {
                 return true;
             }

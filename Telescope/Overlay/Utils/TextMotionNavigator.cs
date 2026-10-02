@@ -147,34 +147,10 @@ namespace Telescope.Overlay
         /// <summary>Jumps the caret to the start of the given 1-based line (clamped to the file).</summary>
         public void MoveToLine(int line)
         {
-            if (line <= 1)
-            {
-                MoveTo(0);
-                return;
-            }
-
-            int current = 1;
-            int target = _text.Length; // default: last line start when the requested line is past the end
-            int lastNewline = -1;
-            for (int i = 0; i < _text.Length; i++)
-            {
-                if (_text[i] == '\n')
-                {
-                    current++;
-                    lastNewline = i;
-                    if (current == line)
-                    {
-                        target = i + 1;
-                        break;
-                    }
-                }
-            }
-            if (current < line)
-            {
-                // Requested line is past the last newline (single-line text or short file).
-                target = lastNewline < 0 ? 0 : lastNewline + 1;
-            }
-            MoveTo(target);
+            // R43: use the LineIndex binary-search line lookup (built by SetText) instead of an
+            // O(n) linear scan. LineStart clamps: line <= 1 -> 0, line past the last line -> the
+            // last line's start, matching the previous scan's behavior.
+            MoveTo(_lineIndex?.LineStart(line) ?? 0);
         }
 
         /// <summary>Insert position just after the caret character (a) — enter insert here.</summary>

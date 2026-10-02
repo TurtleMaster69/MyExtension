@@ -30,31 +30,23 @@ namespace MyExtension.ToolWindows
         /// Returns the PRIMARY file of a project item's file-name list. EnvDTE's
         /// <c>ProjectItem.FileNames</c> is 1-based and <c>FileNames[1]</c> is the primary file's
         /// full path; the list is passed in 0-based order, so the primary is <c>fileNames[0]</c>.
+        /// R9: an empty list (a corrupt project item) resolves to null instead of throwing
+        /// <c>IndexOutOfRangeException</c>.
         /// </summary>
-        public static string PrimaryFilePath(System.Collections.Generic.IReadOnlyList<string> fileNames)
+        public static string? PrimaryFilePath(System.Collections.Generic.IReadOnlyList<string> fileNames)
         {
-            return fileNames[0];
+            return fileNames.Count > 0 ? fileNames[0] : null;
         }
 
         public static string? FirstSourceFilePath(
             System.Collections.Generic.IReadOnlyList<HierarchyNode> nodes)
         {
-            foreach (var n in nodes)
-            {
-                // m26: a physical file is returned only when its name ends .cs (OrdinalIgnoreCase,
-                // matching HierarchyForestBuilder.Build); non-.cs files are skipped so `g` never
-                // selects e.g. a .resx.
-                if (n.Kind == PhysicalFileKind &&
-                    n.Name.EndsWith(".cs", System.StringComparison.OrdinalIgnoreCase))
-                    return n.FilePath;                                       // physical .cs file -> return path
-                if (n.Kind == PhysicalFolderKind && n.Children != null)      // folder -> recurse (in order)
-                {
-                    var hit = FirstSourceFilePath(n.Children);
-                    if (hit != null) return hit;
-                }
-                // any other kind (project/solution/virtual-folder/references/unknown) -> SKIP, no recursion
-            }
-            return null;                                                       // empty / no reachable file -> null
+            // R19: delegate to the shared HierarchyWalker (single-source the walk + the .cs
+            // filter) instead of re-implementing the recursion here. FirstPathEndingWith walks the
+            // forest depth-first in tree order and returns the first path ending .cs
+            // (OrdinalIgnoreCase, matching HierarchyForestBuilder.Build), so `g` never selects
+            // e.g. a .resx.
+            return HierarchyWalker.FirstPathEndingWith(nodes, ".cs");
         }
 
         public static string? FirstPathMatching(

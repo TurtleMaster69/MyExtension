@@ -349,3 +349,93 @@ final entry).
 - **Scenarios:** full 35-scenario suite.
 - **Assert:** no behavior change after the folder/namespace restructure (all
   diagnostics byte-identical).
+
+---
+
+# E2E queue (deferred — Code review fixes, 51 findings / 10 phases)
+
+The 51-findings plan (`docs/implementation_plan.md`, 2026-10-02) is executed in the
+**unit-only lane**: every fix is RED-proven by unit tests (or build + existing suites
+for no-seam items), so the e2e gate is the listed scenarios staying GREEN on a capable
+machine (one that can boot the VS Experimental Instance). This file queues those
+gates. **Status: QUEUED** — none executed on the unit-only machine (2026-10-02).
+
+Each entry asserts: the listed scenarios stay GREEN + `git diff` shows no log-literal
+drift. Diagnostics depended on: the existing `[Telescope]`/`[NeoVisual]`/`[Hook]`/
+`[MyExtension]` lines (unchanged) plus the plan's documented changes (R33 renamed
+"Window matrix initialization failed" → "Window navigator initialization failed"; R28
+prefixed the startup banner with `[MyExtension]`).
+
+Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
+final entry).
+
+## E2E-CR51-1 — R1 (prompt selection navigation + a/A/I placements)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-navigate` + `telescope-wrap` + `telescope-mode`.
+- **Assert:** j/k move the selection and g/G jump in the prompt (`results count=...`
+  `selected=...` after j/k; G→last, gg→first); `a`/`A`/`I` enter insert mode with the
+  correct placements (`Focus prompt => True, mode=insert` after `a`; `key=I mode=normal
+  handled=True`).
+
+## E2E-CR51-2 — R2 (preview document cache)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-preview`.
+- **Assert:** preview caret/scroll preserved across selection changes in the same file
+  (`preview caret=... line=...` unchanged; no scroll reset; `preview tokens=...` once per
+  content change).
+
+## E2E-CR51-3 — R3 (VimModeSource buffer-subscription lifecycle)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-editor-insert` + a multi-view scenario.
+- **Assert:** closing a non-focused view does NOT kill the focused view's `SwitchedMode`
+  subscription (`vim-mode=Insert|Normal|Replace` unchanged).
+
+## E2E-CR51-4 — R4 (per-frame fault isolation)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-window-nav`.
+- **Assert:** navigation survives a stale frame (`navigate direction=L/R/D/U` +
+  `navigate activated index=...`).
+
+## E2E-CR51-5 — R5 (telescope-mode i/a post-tap assertions)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-mode`.
+- **Assert:** the hardened `i`/`a` assertions are real (a re-introduced
+  prompt-interception bug fails the gate) — `Focus prompt => True, mode=insert` post-tap.
+
+## E2E-CR51-6 — R10/R11 (shift gating + IsKeyOfInterest narrowing)
+
+- **Status:** QUEUED
+- **Scenarios:** all `neovisual-explorer-*` + `neovisual-editor-insert`.
+- **Assert:** Shift+O/R/M/A/G do NOT fire tree actions; uppercase typing in the editor is
+  not swallowed (`vim-mode=...` unchanged).
+
+## E2E-CR51-7 — R22/R23 (fzf debounce + cancellation observation)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-search`.
+- **Assert:** the non-query-driven fzf path is debounced; overlay close mid-filter
+  produces no `UnobservedTaskException` noise (`fzf filter failed:` unchanged).
+
+## E2E-CR51-8 — R38 (editor-view-opened dedupe)
+
+- **Status:** QUEUED
+- **Scenarios:** `explorer-open-navigation`.
+- **Assert:** `editor-view-opened file=...` emitted exactly once per open.
+
+## E2E-CR51-9 — R33/R28 (renamed diagnostic + prefixed banner)
+
+- **Status:** QUEUED
+- **Scenarios:** full suite.
+- **Assert:** the renamed "Window navigator initialization failed" + prefixed
+  `[MyExtension]` startup banner do not break any assertion.
+
+## E2E-CR51-10 — R49 (self-seeding subsets)
+
+- **Status:** QUEUED
+- **Scenarios:** `-Tests seed-leak` alone.
+- **Assert:** `-Tests seed-leak` alone runs green (self-seeding subsets).

@@ -17,6 +17,15 @@ namespace MyExtension.Navigation
 
         private NavigationSettings _settings;
 
+        // R32: the linked-window filter is cached across navigations, keyed by the adapters list
+        // reference. WindowManager re-enumerates the adapters on focus change (a new list), so the
+        // cache is invalidated exactly when the window set can change; while the adapters are stable
+        // the linked filter is stable (navigation keeps the active window within the same linked
+        // group), so the O(n) COM LinkedWindowFrame/Type/Caption reads in LinkedTo run once per
+        // window-set change instead of per keystroke.
+        private static List<WindowFrameAdapter>? _cachedLinked;
+        private static IReadOnlyList<WindowFrameAdapter>? _cachedLinkedSource;
+
         /// <summary>
         /// initalize windowmatrix and track windows; no filtering. The active window is taken from
         /// <paramref name="currentFrame"/> (the cached frame tracked by <see cref="WindowManager"/>)
@@ -64,7 +73,7 @@ namespace MyExtension.Navigation
             catch (Exception ex)
             {
                 Telescope.Logging.NeoVisualLog.Log(
-                    $"{Telescope.Logging.DiagnosticLog.NeoVisual}Window matrix initialization failed: {ex.Message}\n{ex.StackTrace}");
+                    $"{Telescope.Logging.DiagnosticLog.NeoVisual}Window navigator initialization failed: {ex.Message}\n{ex.StackTrace}");
                 _activeWindows = new List<WindowFrameAdapter>();
                 _activeWindow = null!;
             }
@@ -81,7 +90,14 @@ namespace MyExtension.Navigation
             {
                 return new List<WindowFrameAdapter>();
             }
-            return WindowFrameAdapter.LinkedTo(active, adapters).ToList();
+            if (ReferenceEquals(_cachedLinkedSource, adapters) && _cachedLinked != null)
+            {
+                return _cachedLinked;
+            }
+            var linked = WindowFrameAdapter.LinkedTo(active, adapters).ToList();
+            _cachedLinked = linked;
+            _cachedLinkedSource = adapters;
+            return linked;
         }
 
         /// <summary>

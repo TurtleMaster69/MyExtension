@@ -171,6 +171,12 @@ namespace Telescope.Filter
                     var winner = await Task.WhenAny(all, timeout);
                     if (cancellationToken.IsCancellationRequested)
                     {
+                        // R23: observe the pending ReadToEndAsync tasks on cancellation (mirror the
+                        // timeout path's fault-only continuation) so overlay close mid-filter produces
+                        // no UnobservedTaskException noise. The killed process's pipe reads may stay
+                        // pending, so do NOT await them — attach a fault-only continuation instead.
+                        _ = all.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        AwaitedReadCount += 2;
                         return lines; // silent — overlay discards
                     }
                     if (winner == timeout)

@@ -58,6 +58,59 @@ namespace NeoVisual.Tests
             return count;
         }
 
+        // R20 (BP-26): minimal IVsMonitorSelection fake so a WindowManager can be constructed
+        // hermetically (the ctor AdviseSelectionEvents + GetCurrentElementValue). GetCurrentElementValue
+        // returns a null frame, so OnWindowFocusChanged early-returns and the manager is inert — the
+        // test only needs the instance to invoke the private GetController via reflection.
+        private sealed class FakeMonitorSelection : IVsMonitorSelection
+        {
+            public int AdviseSelectionEvents(IVsSelectionEvents pSink, out uint pdwCookie)
+            {
+                pdwCookie = 1;
+                return 0; // S_OK
+            }
+
+            public int UnadviseSelectionEvents(uint dwCookie) => 0;
+
+            public int GetCurrentElementValue(uint elementid, out object pvarValue)
+            {
+                pvarValue = null!;
+                return 0; // S_OK
+            }
+
+            public int GetCurrentSelection(out IntPtr ppHier, out uint pitemid, out IVsMultiItemSelect ppMIS, out IntPtr ppSC)
+            {
+                ppHier = IntPtr.Zero;
+                pitemid = 0;
+                ppMIS = null!;
+                ppSC = IntPtr.Zero;
+                return 0;
+            }
+
+            public int IsCmdUIContextActive(uint dwCmdUICookie, out int pfActive)
+            {
+                pfActive = 0;
+                return 0;
+            }
+
+            public int SetCmdUIContext(uint dwCmdUICookie, int fActive) => 0;
+
+            public int GetCmdUIContextCookie(ref Guid rguidCmdUI, out uint pdwCmdUICookie)
+            {
+                pdwCmdUICookie = 0;
+                return 0;
+            }
+
+            public int GetSelectionInfo(out uint pnHier, out uint pnItemid, out uint pnMIS, out uint pnSC)
+            {
+                pnHier = 0;
+                pnItemid = 0;
+                pnMIS = 0;
+                pnSC = 0;
+                return 0;
+            }
+        }
+
         // ================================================================
         // KeybindingConfig — leader key + binding parsing
         // ================================================================
@@ -342,6 +395,37 @@ namespace NeoVisual.Tests
                 "a registered controller wins over the default");
         }
 
+        public static void Run_WindowManager_DefaultControllerCache_ReturnsCachedInstance()
+        {
+            // R20 (BP-26): ResolveController/DefaultControllerFor create a fresh default controller
+            // on every dictionary miss — the "mode remembered per type" guarantee holds only because
+            // package init eagerly registers every enum value. The fix caches per-type default
+            // instances in an INSTANCE-scoped _defaultControllers dictionary on WindowManager
+            // (populated on miss in GetController; NOT a static cache — the R40 class of issue).
+            // RED: today a fresh instance is created per miss, so two GetController calls for the
+            // same type return DIFFERENT instances. GetController is private + WindowManager is
+            // VS-coupled (IVsMonitorSelection), so the test drives it via a fake monitor selection
+            // + reflection (the only hermetic path to the instance cache). The ctor calls
+            // RefreshCurrentWindow (ThreadHelper.ThrowIfNotOnUIThread), so mark this thread as the
+            // UI thread first (the MTA test host is not the UI thread by default) by pointing
+            // ThreadHelper's uiThreadDispatcher at the current thread's dispatcher.
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            uiThreadField!.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+            var manager = new WindowManager(new FakeMonitorSelection());
+            var method = typeof(WindowManager).GetMethod(
+                "GetController",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(method != null, "WindowManager.GetController must exist (private instance)");
+
+            var first = method!.Invoke(manager, new object[] { ToolWindowType.Toolbox });
+            var second = method.Invoke(manager, new object[] { ToolWindowType.Toolbox });
+
+            Assert.True(ReferenceEquals(first, second),
+                "the per-type default controller must be cached (same instance per type) — R20");
+        }
+
         // ================================================================
         // HierarchyResolver — select-first-source-file resolution (pure seam)
         // ================================================================
@@ -450,6 +534,17 @@ namespace NeoVisual.Tests
             // (CS0117).
             var fileNames = new List<string> { "Form1.cs", "Form1.Designer.cs", "Form1.resx" };
             Assert.Equal("Form1.cs", HierarchyResolver.PrimaryFilePath(fileNames));
+        }
+
+        public static void Run_HierarchyResolver_PrimaryFilePath_EmptyReturnsNull()
+        {
+            // R9 (BP-22): PrimaryFilePath does `fileNames[0]` with no empty-list guard ->
+            // IndexOutOfRangeException on a corrupt project item (an empty FileNames list). The fix
+            // adds an empty-list guard (return null/empty). RED: today an empty list throws
+            // IndexOutOfRangeException, so this test fails with that exception (the missing
+            // empty-list guard).
+            Assert.True(HierarchyResolver.PrimaryFilePath(new List<string>()) == null,
+                "an empty file-name list must resolve to null (not throw IndexOutOfRangeException)");
         }
 
         public static void Run_HierarchyResolver_FirstSourceFile_PrefersCsOverNonCs()
@@ -685,6 +780,41 @@ namespace NeoVisual.Tests
                 "re-attaching a view after detach re-subscribes it to the new buffer");
         }
 
+        public static void Run_VimBufferSubscriptions_UnsubscribeRemovesClosedAndRefcount()
+        {
+            // R3 (BP-3): the lifecycle bookkeeping — UnsubscribeBuffer removes the Closed
+            // subscription + the buffer from the subscribed set; OnBufferClosed decrements the
+            // refcount to 0 and removes the entry; no double-decrement with Detach.
+            var subs = new VimBufferSubscriptions();
+            var viewA = new FakeTextView();
+            var viewB = new FakeTextView();
+            var bufferA = new object();
+            var bufferB = new object();
+            var textBuffer = new object(); // shared text buffer (split view)
+
+            subs.Attach(viewA, bufferA, textBuffer);
+            subs.Attach(viewB, bufferB, textBuffer);
+            subs.MarkClosedSubscribed(bufferA);
+            subs.MarkClosedSubscribed(bufferB);
+
+            // UnsubscribeBuffer removes the Closed subscription + the buffer from the subscribed
+            // set: after unsubscribing bufferA, a second UnsubscribeBuffer is a no-op (already
+            // removed) — the refcount drops 2 -> 1 (not last).
+            Assert.False(subs.UnsubscribeBuffer(bufferA),
+                "UnsubscribeBuffer removes the Closed sub (refcount 2 -> 1, not last)");
+            Assert.False(subs.UnsubscribeBuffer(bufferA),
+                "a second UnsubscribeBuffer is a no-op (Closed sub already removed)");
+
+            // OnBufferClosed decrements the refcount to 0 and removes the entry (last view).
+            Assert.True(subs.OnBufferClosed(bufferB),
+                "OnBufferClosed decrements the refcount to 0 and removes the entry");
+
+            // No double-decrement with Detach: after OnBufferClosed removed bufferB (and
+            // UnsubscribeBuffer removed bufferA), Detach must not decrement again.
+            Assert.False(subs.Detach(viewB), "Detach after OnBufferClosed must not double-decrement");
+            Assert.False(subs.Detach(viewA), "Detach after UnsubscribeBuffer must not double-decrement");
+        }
+
         // ================================================================
         // ActionTable — ActionKeys == _actions.Keys incl. hjkl (BP-2/T2)
         // RED: hjkl are not in ActionKeys today (SolutionExplorer =
@@ -833,6 +963,27 @@ namespace NeoVisual.Tests
             Assert.False(guard.TryConsume(13), "a fresh record is consumed once (no double consume)");
         }
 
+        public static void Run_InjectedKeyGuard_StaleRecordExpiredAtRecord()
+        {
+            // R12 (BP-12): the TTL is checked on consume, not on record — a >1s UI stall between
+            // Press's Record and the injected key-down expires the record -> re-injection storm.
+            // The fix checks/expires the TTL at Record time: a stale record must be dropped when a
+            // new Record arrives (the new Record starts fresh at count 1). RED: today Record carries
+            // the stale record's count forward (count 2), so TWO consumes succeed — the stale
+            // record survives into the next Record.
+            var now = DateTime.UtcNow;
+            var guard = new InjectedKeyGuard(TimeSpan.FromMilliseconds(100), () => now);
+            guard.Record(13);          // record at T0
+            now = now.AddSeconds(1);   // advance past the TTL (the record is now stale)
+            guard.Record(13);          // a NEW Record arrives while the old one is stale
+
+            // The stale record must NOT be carried forward: the new Record starts fresh (count 1),
+            // so a single consume succeeds and a second fails.
+            Assert.True(guard.TryConsume(13), "the fresh record consumes once");
+            Assert.False(guard.TryConsume(13),
+                "the stale record must not be carried into the next Record (count 1, not 2)");
+        }
+
         // ================================================================
         // KeyInjection — SimulateOnly (interrupting bugfix, BP-1)
         // RED: `SimulateOnly` does not exist yet -> compile error
@@ -870,8 +1021,7 @@ namespace NeoVisual.Tests
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused tool window must not route keys");
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: false, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused action keys must not be interesting");
         }
 
@@ -881,32 +1031,38 @@ namespace NeoVisual.Tests
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "tree-focused tool window routes keys");
             Assert.True(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "tree-focused action keys are interesting");
         }
 
         public static void Run_FocusGuard_InputModeBlocksActionKeys()
         {
+            // The pre-filter's action-key-interest decision is the composite
+            // ShouldRouteToolWindowKey(...) && !isInputMode && actionKeyCount > 0 (the deleted
+            // HasToolWindowActionKeys was exactly this). In input mode the !isInputMode gate blocks it.
+            bool isInputMode = true;
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: true, actionKeyCount: PositiveActionKeyCount, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: isInputMode, isTextInputSurface: false, textInputSurfaceFocused: false) && !isInputMode,
                 "input-mode tool window has no action-key pre-filter");
         }
 
         public static void Run_FocusGuard_ZeroActionKeysBlocks()
         {
+            // The pre-filter's action-key-interest decision is the composite
+            // ShouldRouteToolWindowKey(...) && !isInputMode && actionKeyCount > 0 (the deleted
+            // HasToolWindowActionKeys was exactly this). Zero action keys -> the actionKeyCount > 0
+            // gate blocks it.
+            bool isInputMode = false;
+            int actionKeyCount = 0;
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: 0, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: isInputMode, isTextInputSurface: false, textInputSurfaceFocused: false) && !isInputMode && actionKeyCount > 0,
                 "zero action keys is never interesting");
         }
 
         public static void Run_FocusGuard_NonToolWindowBlocks()
         {
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: false, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: false, isTextInputSurface: false, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "non-tool-window has no action-key pre-filter");
             Assert.False(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
@@ -951,14 +1107,14 @@ namespace NeoVisual.Tests
         public static void Run_FocusGuard_TruthTable_ActionKeysTextInputSurface()
         {
             Assert.True(
-                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: true),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
                 "text-input-surface action keys are interesting despite the stale editor flag");
         }
 
         public static void Run_FocusGuard_TruthTable_ActionKeysEditorVeto()
         {
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: false, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused action keys are not interesting");
         }
 
@@ -986,8 +1142,7 @@ namespace NeoVisual.Tests
             // With the editor focused and the text-input surface NOT focused, routing must be off
             // (the current isTextInputSurface exemption leaks — it returns TRUE here).
             Assert.False(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: false),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: false),
                 "editor-focused, non-focused text-input surface must not expose action keys");
             Assert.False(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: false),
@@ -999,8 +1154,7 @@ namespace NeoVisual.Tests
             // D4 preservation: a text-input surface that genuinely holds focus owns the keyboard
             // even when the editor-focus flag is stale.
             Assert.True(
-                FocusGuard.HasToolWindowActionKeys(
-                    isToolWindow: true, isInputMode: false, actionKeyCount: PositiveActionKeyCount, editorFocused: true, isTextInputSurface: true, textInputSurfaceFocused: true),
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
                 "genuinely-focused text-input surface action keys are interesting");
             Assert.True(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
@@ -1035,7 +1189,7 @@ namespace NeoVisual.Tests
         {
             // M5: the single-source ownsKeyboard routing. The caller computes ONE ownsKeyboard
             // bool (from the cached _windowManager.IsTextInputType + input mode + focused) and
-            // passes it into the guard, so EditorFocusedVeto and HasToolWindowActionKeys read
+            // passes it into the guard, so EditorFocusedVeto and ShouldRouteToolWindowKey read
             // the same source. A text-input window that owns the keyboard is NOT vetoed by a
             // stale editor-focus flag; a navigation window that does not own the keyboard IS
             // vetoed.
@@ -1048,6 +1202,22 @@ namespace NeoVisual.Tests
             Assert.False(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, ownsKeyboard: false),
                 "a navigation window that does not own the keyboard is vetoed by the editor flag");
+        }
+
+        public static void Run_FocusGuard_ShiftGatesActionKeysForNonTextInput()
+        {
+            // R10 (BP-10): action-key routing gates only !ctrl && !alt, not shift — Shift+O/R/M/A/G
+            // in Solution Explorer fire the same tree actions and swallow the key. The fix gates
+            // shift for non-text-input controllers (text-input controllers still need shift to tell
+            // I/i and A/a apart), extractable to FocusGuard (pure). RED: today the guard has no
+            // shift awareness — a non-text-input controller's action keys are interesting regardless
+            // of shift, so this returns true and the Assert.False fails. The fix adds a shiftHeld
+            // param to the guard; the build-agent updates this call to pass shiftHeld: true.
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(
+                    isToolWindow: true, editorFocused: false, isInputMode: false,
+                    isTextInputSurface: false, textInputSurfaceFocused: false, shiftHeld: true),
+                "shift+action-key must not be interesting for a non-text-input controller (R10)");
         }
 
         // ================================================================

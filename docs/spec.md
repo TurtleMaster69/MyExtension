@@ -73,7 +73,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g select-first-source-file, h/l fold expand/collapse, j/k navigate, i focuses the search box. |
 | `MyExtension/ToolWindows/Utils/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam: `HierarchyNode` + `FirstSourceFilePath` (physical-file/folder Kind-GUID classification, folder recursion) used by `SolutionExplorerController`'s `g` action. |
 | `MyExtension/ToolWindows/Utils/FocusKeeper.cs` | Re-select/refocus keeper that defeats VS's hover-preview focus steal. |
-| `MyExtension/ToolWindows/Utils/FocusGuard.cs` | Pure tool-window key-routing guard (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`/`OwnsKeyboard`): action keys only consume while the tool window holds focus — never leak into a focused editor. |
+| `MyExtension/ToolWindows/Utils/FocusGuard.cs` | Pure tool-window key-routing guard (`ShouldRouteToolWindowKey`/`IsTyping`/`OwnsKeyboard`): action keys only consume while the tool window holds focus — never leak into a focused editor. |
 | `MyExtension/ToolWindows/Utils/HierarchyForestBuilder.cs` | Pure tree-forest builder for the Solution Explorer walk. |
 | `MyExtension/ToolWindows/ToolWindowControllerBase.cs` | Shared base for tool-window controllers (text-motion action wiring). |
 | `MyExtension/Adornments/BlockCaretAdornment.cs` | Draws a block caret over an editor-view text-input window in normal mode. |
@@ -155,7 +155,7 @@ the **closest** window (no chained-movement behavior).
 Each tool window gets an `IToolWindowController`. In **normal mode** `InputHandler`
 routes `hjkl` + `controller.ActionKeys` to `TryMove`; `i` enters input mode; Esc
 exits it. The hook pre-filter (`IsInteresting`) returns true for any key while a
-tool window with action keys is in normal mode (`InputHandler.HasToolWindowActionKeys`).
+tool window with action keys is in normal mode (`InputHandler.ShouldRouteToolWindowKey`).
 
 **net472 has no `IReadOnlySet<T>`** — `ActionKeys` is `IReadOnlyCollection<Keys>`.
 Pure logic is extracted into dependency-free classes (the `OverlayKeyHandler` /
@@ -245,7 +245,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **151 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **153 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -257,7 +257,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), and the pane-failure fallback (`PaneFailureTracker`).
-- `dotnet run --project tests/NeoVisual.Tests` — **158 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **163 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -400,13 +400,14 @@ The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 
 ### Pending (user-requested, NOT yet implemented)
 
-- **Telescope finder**: fzf — with preview pane. (Scope deferred by user
-  2026-09-19; the overlay already uses fzf internally as its filter engine.)
+- **Telescope finder**: fzf — with preview pane. (Scope DECIDED 2026-09-28:
+  fuzzy content finder + fuzzy file finder; status PLANNED, not executed. The
+  overlay already uses fzf internally as its filter engine.)
 
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (151) and
-  `dotnet run --project tests/NeoVisual.Tests` (158).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (153) and
+  `dotnet run --project tests/NeoVisual.Tests` (163).
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

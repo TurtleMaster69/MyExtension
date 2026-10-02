@@ -37,8 +37,6 @@ namespace MyExtension.ToolWindows
 
         public TextInputToolWindowController(ToolWindowType type) : base(type)
         {
-            // Text-input surfaces default to insert mode so the user can type immediately.
-            _isInputMode = true;
             _actions = new Dictionary<Keys, Func<bool>>
             {
                 [Keys.A] = TextMotion(Keys.A),

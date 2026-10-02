@@ -63,13 +63,30 @@ namespace MyExtension.Navigation
             }
             List<WindowFrameAdapter> adapters = new List<WindowFrameAdapter>();
 
-            IEnumWindowFrames toolFramesEnum;
-            ErrorHandler.ThrowOnFailure(uiShell.GetToolWindowEnum(out toolFramesEnum));
-            adapters.AddRange(ExtractFrames(toolFramesEnum));
+            // R4: per-enumeration fault isolation — one stale frame must not abort the whole
+            // enumeration (which would escape into the hook path). Each enumeration is wrapped so
+            // a failure degrades to the frames collected so far, mirroring the null-uiShell path.
+            try
+            {
+                IEnumWindowFrames toolFramesEnum;
+                ErrorHandler.ThrowOnFailure(uiShell.GetToolWindowEnum(out toolFramesEnum));
+                adapters.AddRange(ExtractFrames(toolFramesEnum));
+            }
+            catch (Exception ex)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window frame enumeration failed: {ex.Message}");
+            }
 
-            IEnumWindowFrames documentFramesEnum;
-            ErrorHandler.ThrowOnFailure(uiShell.GetDocumentWindowEnum(out documentFramesEnum));
-            adapters.AddRange(ExtractFrames(documentFramesEnum));
+            try
+            {
+                IEnumWindowFrames documentFramesEnum;
+                ErrorHandler.ThrowOnFailure(uiShell.GetDocumentWindowEnum(out documentFramesEnum));
+                adapters.AddRange(ExtractFrames(documentFramesEnum));
+            }
+            catch (Exception ex)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window frame enumeration failed: {ex.Message}");
+            }
 
             return adapters;
         }
@@ -148,8 +165,27 @@ namespace MyExtension.Navigation
                 ErrorHandler.ThrowOnFailure(ok);
                 if (fetched == 1)
                 {
-                    yield return new WindowFrameAdapter(frame[0], VsShellUtilities.GetWindowObject(frame[0]));
+                    // R4: per-frame fault isolation — one stale frame's GetWindowObject must not
+                    // abort the whole enumeration; skip the bad frame (log once).
+                    WindowFrameAdapter? adapter = TryCreateAdapter(frame[0]);
+                    if (adapter != null)
+                    {
+                        yield return adapter;
+                    }
                 }
+            }
+        }
+
+        private static WindowFrameAdapter? TryCreateAdapter(IVsWindowFrame frame)
+        {
+            try
+            {
+                return new WindowFrameAdapter(frame, VsShellUtilities.GetWindowObject(frame));
+            }
+            catch (Exception ex)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window frame skipped: {ex.Message}");
+                return null;
             }
         }
 

@@ -32,8 +32,6 @@ namespace MyExtension.ToolWindows
         public SolutionExplorerController(Func<EnvDTE.DTE> dteFactory) : base(ToolWindowType.SolutionExplorer)
         {
             _dteFactory = dteFactory;
-            // Solution Explorer is a tree, not a text-input surface: start in normal mode.
-            _isInputMode = false;
             _actions = new System.Collections.Generic.Dictionary<Keys, Func<bool>>
             {
                 [Keys.I] = () => { FocusSearchBox(); return true; },
@@ -43,8 +41,8 @@ namespace MyExtension.ToolWindows
                 [Keys.M] = () => { MoveSelected(); return true; },
                 [Keys.A] = () => { AddItem(); return true; },
                 [Keys.G] = () => { SelectFirstSourceFile(); return true; },
-                [Keys.H] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(GeneralToolWindowController.KeyToArrowVk(Keys.H)); return true; },
-                [Keys.L] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(GeneralToolWindowController.KeyToArrowVk(Keys.L)); return true; },
+                [Keys.H] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse"); return GeneralToolWindowController.TryMoveArrow(Keys.H); },
+                [Keys.L] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand"); return GeneralToolWindowController.TryMoveArrow(Keys.L); },
                 [Keys.J] = () => GeneralToolWindowController.TryMoveArrow(Keys.J),
                 [Keys.K] = () => GeneralToolWindowController.TryMoveArrow(Keys.K),
             };
@@ -57,13 +55,16 @@ namespace MyExtension.ToolWindows
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             // Capture the typed query BEFORE any focus action: the first Escape clears the search
-            // box's text, so reading it afterwards would always yield empty.
-            string query = TextMotionHelper.FindFocusedTextBox()?.Text ?? string.Empty;
+            // box's text, so reading it afterwards would always yield empty. R17: resolve the
+            // focused box once and reuse it for the post-exit focus check (base.ExitInputMode does
+            // not move focus, so the box is unchanged between the two reads).
+            var focusedBox = TextMotionHelper.FindFocusedTextBox();
+            string query = focusedBox?.Text ?? string.Empty;
             base.ExitInputMode();
             // If we came out of input mode while the search box still had focus (i focused it),
             // return focus to the tree so j/k/h/l continue to navigate the tree, not type into
             // the search box.
-            if (TextMotionHelper.FindFocusedTextBox() != null)
+            if (focusedBox != null)
             {
                 ReturnFocusToTree(query);
             }
@@ -153,9 +154,12 @@ namespace MyExtension.ToolWindows
             // through so it types into the search box (no tree actions, no j/k arrow injection). The
             // gate is mandatory: without it the merged helper's arrow fallback would swallow h/l in
             // the tree and replace the collapse/expand diagnostics with toolwindow-move.
-            if (TextMotionHelper.FindFocusedTextBox() != null)
+            // R17: resolve the focused box once and reuse it (TryMoveFocusedSurface no longer
+            // re-walks the visual tree).
+            var focusedBox = TextMotionHelper.FindFocusedTextBox();
+            if (focusedBox != null)
             {
-                return TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode);
+                return TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode, focusedBox);
             }
 
             return _actions.TryGetValue(key, out var action) && action();
@@ -215,13 +219,21 @@ namespace MyExtension.ToolWindows
                 // path as the `select file=` diagnostic (the injected-Enter chain in the harness
                 // would otherwise race VS's hover-preview, which opens a different tree item).
                 // Activate when a document for this file already exists, else ItemOperations.OpenFile.
-                // NOTE: activating an ALREADY-CREATED text view does NOT raise TextViewCreated, so
-                // editor-view-opened cannot be left to that side effect here — we emit it directly
-                // for the file we open (below), which is truthful and order-deterministic.
+                // R38: editor-view-opened is emitted exactly once per open — activating an
+                // ALREADY-CREATED text view raises no TextViewCreated, so we emit it directly here;
+                // a NEWLY-opened file's view is reported by VimModeTracker.TextViewCreated instead
+                // (emitting it here too would double-count).
                 EnvDTE.Document? doc = null;
                 try { doc = dte.Documents.Item(first); } catch { doc = null; }
-                if (doc != null) { doc.Activate(); }
-                else { dte.ItemOperations.OpenFile(first); }
+                if (doc != null)
+                {
+                    doc.Activate();
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
+                }
+                else
+                {
+                    dte.ItemOperations.OpenFile(first);
+                }
 
                 // Keep the Solution Explorer tree focused + the selection pinned for ~1.5s: VS's
                 // hover-preview (armed by the tree expansion) opens the tree's current item in the
@@ -242,12 +254,6 @@ namespace MyExtension.ToolWindows
                     return true;
                 });
 
-                // Emit editor-view-opened for the file we just opened/activated — this is the SAME
-                // diagnostic/format VimModeTracker.TextViewCreated emits, but it is produced here
-                // deterministically (activating an already-created view raises no TextViewCreated).
-                // Mirrors solution-explorer select/open; `editor-view-opened file=` is verified by
-                // `explorer-open-navigation` / `explorer-open-searchbox`.
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select file={first}");
             });
         }
@@ -334,7 +340,13 @@ namespace MyExtension.ToolWindows
                         {
                             fileNames.Add(pi.FileNames[i]);
                         }
-                        string fullPath = HierarchyResolver.PrimaryFilePath(fileNames);
+                        string? fullPath = HierarchyResolver.PrimaryFilePath(fileNames);
+                        if (fullPath == null)
+                        {
+                            // R9: a corrupt project item with an empty FileNames list — skip it
+                            // (no primary path to map).
+                            continue;
+                        }
                         result.Add(new HierarchyItemInfo(kind, pi.Name, fullPath, null));
                         pathToItem[fullPath] = child;
                     }

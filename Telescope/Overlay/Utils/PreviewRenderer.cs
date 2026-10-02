@@ -37,6 +37,10 @@ namespace Telescope.Overlay
         // re-tokenizes only on content change (the FlowDocument rebuild stays the renderer's job).
         private readonly PreviewTokenCache _tokenCache = new PreviewTokenCache();
 
+        // R2: mtime-keyed "content changed?" decision — the FlowDocument + line pointers are rebuilt
+        // only when the file's content changes (mirrors PreviewTokenCache; holds NO WPF types).
+        private readonly PreviewDocumentCache _documentCache = new PreviewDocumentCache();
+
         public void Show(RichTextBox previewBox, TextMotionNavigator navigator, IFileLocation location)
         {
             if (!System.IO.File.Exists(location.FilePath))
@@ -67,6 +71,15 @@ namespace Telescope.Overlay
         {
             content ??= string.Empty;
             navigator.SetText(content);
+
+            // R2: the FlowDocument + line pointers are rebuilt only when the file's content changed
+            // (mtime-keyed decision). Moving the selection between hits in the same file keeps the
+            // existing document; MoveToLine/ApplyCaret remain the per-selection work. A null path
+            // (empty content) always rebuilds so the preview clears.
+            if (path != null && !_documentCache.ShouldRebuild(path))
+            {
+                return;
+            }
 
             var doc = new FlowDocument
             {

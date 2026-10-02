@@ -24,6 +24,11 @@ namespace MyExtension.ToolWindows
         /// <summary>White block caret brush for WPF TextBoxes in normal mode (visible on dark themes).</summary>
         public static readonly DrawingBrush BlockCaretBrush = BlockCaretStyle.CreateBlockBrush();
 
+        // R18: the tool-window motions (h/l/w/b/e/a/A/I) only need the text around the caret, so
+        // the navigator runs over a caret-relative slice instead of the whole buffer — avoids the
+        // O(n) GetText() copy + LineIndex build per motion key in a long console buffer.
+        private const int MotionSliceRadius = 4096;
+
         /// <summary>The WPF TextBox currently holding focus (walking the visual/logical tree), or null.
         /// Wrapped so it degrades to "no text box" on non-STA threads (hermetic unit tests run on
         /// the MTA, where <c>Keyboard.FocusedElement</c> throws).</summary>
@@ -69,6 +74,21 @@ namespace MyExtension.ToolWindows
         /// </summary>
         public static bool TryMoveFocusedSurface(Keys key, ref bool isInputMode)
         {
+            return TryMoveFocusedSurface(key, ref isInputMode, FindFocusedTextBox());
+        }
+
+        /// <summary>
+        /// Applies a normal-mode vim motion to the focused text surface, if any: a WPF TextBox
+        /// (modern tool windows), else a VS editor text view (the Command Window / Immediate Window
+        /// input is editor-hosted), else a WinForms text box (legacy tool windows), else an
+        /// arrow-key fallback for h/l. Returns true when a surface was focused and the key was a
+        /// motion (h/l/w/b/e/a/A/I); <paramref name="isInputMode"/> is set true for the a/A/I insert
+        /// placements. Logs the motion for the E2E harness. <paramref name="focusedBox"/> is the
+        /// already-resolved WPF text box (R17 — the caller resolves it once so the visual tree is
+        /// not walked twice per routed key).
+        /// </summary>
+        public static bool TryMoveFocusedSurface(Keys key, ref bool isInputMode, System.Windows.Controls.TextBox? focusedBox)
+        {
             // Physical shift state (GetAsyncKeyState, like the hook itself) — NOT WPF's
             // Keyboard.Modifiers, which lags behind injected keys because our hook callback runs
             // before WPF dispatches the Shift key-down message.
@@ -79,11 +99,12 @@ namespace MyExtension.ToolWindows
                 return false;
             }
 
-            if (FindFocusedTextBox() is System.Windows.Controls.TextBox wpf)
+            if (focusedBox != null)
             {
-                return ApplyMotionToBox(wpf.Text, wpf.CaretIndex,
-                    caret => wpf.CaretIndex = caret,
-                    key, motion.Value, styleCaret: true, wpf, null, ref isInputMode);
+                string text = focusedBox.Text;
+                return ApplyMotionToBox(text, focusedBox.CaretIndex, text.Length, 0, Sample(text),
+                    caret => focusedBox.CaretIndex = caret,
+                    key, motion.Value, styleCaret: true, focusedBox, null, ref isInputMode);
             }
 
             if (Keyboard.FocusedElement is IWpfTextView view)
@@ -91,9 +112,16 @@ namespace MyExtension.ToolWindows
                 try
                 {
                     var snapshot = view.TextSnapshot;
-                    string text = snapshot.GetText();
                     int caret = view.Caret.Position.BufferPosition.Position;
-                    return ApplyMotionToBox(text, caret,
+                    int fullLength = snapshot.Length;
+                    // R18: fetch a caret-relative slice instead of the whole buffer — the
+                    // tool-window motions only need the text around the caret, so the O(n)
+                    // GetText() copy + LineIndex build run over a bounded slice, not the full
+                    // buffer.
+                    int start = Math.Max(0, caret - MotionSliceRadius);
+                    int length = Math.Min(fullLength - start, MotionSliceRadius * 2);
+                    string text = snapshot.GetText(start, length);
+                    return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(snapshot),
                         c => view.Caret.MoveTo(new SnapshotPoint(snapshot, Math.Max(0, Math.Min(c, snapshot.Length)))),
                         key, motion.Value, styleCaret: false, null, view, ref isInputMode);
                 }
@@ -105,7 +133,8 @@ namespace MyExtension.ToolWindows
 
             if (FindFocusedWinFormsTextBox() is System.Windows.Forms.TextBoxBase win)
             {
-                return ApplyMotionToBox(win.Text, win.SelectionStart,
+                string text = win.Text;
+                return ApplyMotionToBox(text, win.SelectionStart, text.Length, 0, Sample(text),
                     caret => { win.SelectionStart = caret; win.SelectionLength = 0; },
                     key, motion.Value, styleCaret: false, null, null, ref isInputMode);
             }
@@ -130,9 +159,13 @@ namespace MyExtension.ToolWindows
         /// motion so the E2E harness can assert caret positions. <paramref name="focusedBox"/> is the
         /// already-resolved WPF text box (m15 — no second visual-tree walk for the caret style);
         /// <paramref name="editorView"/> is the already-resolved VS editor view, styled on insert
-        /// placements so the block caret doesn't persist in insert mode (m24).
+        /// placements so the block caret doesn't persist in insert mode (m24). R18: <paramref name="text"/>
+        /// may be a caret-relative slice of the buffer — <paramref name="fullLength"/> (for the
+        /// <c>len=</c> diagnostic), <paramref name="offset"/> (to map the resulting caret back to
+        /// full-buffer coordinates) and <paramref name="sample"/> (the first 30 chars of the full
+        /// buffer, for the <c>text=</c> diagnostic) keep the emitted log line byte-identical.
         /// </summary>
-        private static bool ApplyMotionToBox(string text, int caret, Action<int> applyCaret, Keys key, TextMotion motion, bool styleCaret, System.Windows.Controls.TextBox? focusedBox, IWpfTextView? editorView, ref bool isInputMode)
+        private static bool ApplyMotionToBox(string text, int caret, int fullLength, int offset, string sample, Action<int> applyCaret, Keys key, TextMotion motion, bool styleCaret, System.Windows.Controls.TextBox? focusedBox, IWpfTextView? editorView, ref bool isInputMode)
         {
             var navigator = new TextMotionNavigator();
             navigator.SetText(text);
@@ -143,7 +176,10 @@ namespace MyExtension.ToolWindows
                 return false;
             }
 
-            int newCaret = navigator.Caret;
+            // InsertStart (I) must land at the true start of the buffer (position 0), not the
+            // slice start — the navigator only knows the caret-relative slice, so map it
+            // explicitly (all other motions map back via the slice offset).
+            int newCaret = insertPlacement == CaretPlacement.Start ? 0 : navigator.Caret + offset;
 
             if (insertPlacement != null)
             {
@@ -170,10 +206,41 @@ namespace MyExtension.ToolWindows
                 {
                     ApplyEditorViewCaret(editorView, false);
                 }
-                string sample = text.Length > 30 ? text.Substring(0, 30) : text;
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={text.Length} text='{sample}'");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={fullLength} text='{sample}'");
             }
             return true;
+        }
+
+        /// <summary>The first 30 chars of a full text buffer (the <c>text=</c> log sample), with
+        /// newlines/control chars replaced by spaces so the sample never splits the log line (R39).</summary>
+        private static string Sample(string text)
+        {
+            return SanitizeSample(text.Length > 30 ? text.Substring(0, 30) : text);
+        }
+
+        /// <summary>The first 30 chars of an editor snapshot (the <c>text=</c> log sample), read
+        /// without materializing the whole buffer.</summary>
+        private static string Sample(ITextSnapshot snapshot)
+        {
+            int length = Math.Min(30, snapshot.Length);
+            return SanitizeSample(snapshot.GetText(0, length));
+        }
+
+        /// <summary>Replaces control characters (newlines, tabs, ...) with spaces so a sample can
+        /// never split the <c>[NeoVisual]</c> log line (R39).</summary>
+        private static string SanitizeSample(string sample)
+        {
+            var chars = sample.ToCharArray();
+            bool dirty = false;
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (char.IsControl(chars[i]))
+                {
+                    chars[i] = ' ';
+                    dirty = true;
+                }
+            }
+            return dirty ? new string(chars) : sample;
         }
 
         private static string MotionName(TextMotion motion)

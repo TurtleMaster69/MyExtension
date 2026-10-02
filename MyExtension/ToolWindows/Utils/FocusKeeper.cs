@@ -12,8 +12,13 @@ namespace MyExtension.ToolWindows
     /// </summary>
     internal static class FocusKeeper
     {
-        public static void Run(TimeSpan interval, int durationMs, Func<int, bool> tick)
+        // R8: the current keeper timer, cancelled when a new Run starts (stacked keepers would
+        // otherwise race — g then i→Esc re-selects the wrong node).
+        private static DispatcherTimer? _current;
+
+        public static IDisposable Run(TimeSpan interval, int durationMs, Func<int, bool> tick)
         {
+            _current?.Stop();
             var keeper = new DispatcherTimer(DispatcherPriority.Normal);
             keeper.Interval = interval;
             // Monotonic clock (m8): Environment.TickCount (int) wraps every ~24.9 days; net472 has
@@ -33,9 +38,39 @@ namespace MyExtension.ToolWindows
                 if (!keepRunning || stopwatch.ElapsedMilliseconds >= durationMs)
                 {
                     keeper.Stop();
+                    if (ReferenceEquals(_current, keeper))
+                    {
+                        _current = null;
+                    }
                 }
             };
+            _current = keeper;
             keeper.Start();
+            return new KeeperHandle(keeper);
+        }
+
+        private sealed class KeeperHandle : IDisposable
+        {
+            private DispatcherTimer? _timer;
+
+            public KeeperHandle(DispatcherTimer timer)
+            {
+                _timer = timer;
+            }
+
+            public void Dispose()
+            {
+                if (_timer == null)
+                {
+                    return;
+                }
+                _timer.Stop();
+                if (ReferenceEquals(_current, _timer))
+                {
+                    _current = null;
+                }
+                _timer = null;
+            }
         }
     }
 
@@ -46,6 +81,9 @@ namespace MyExtension.ToolWindows
     /// </summary>
     internal static class FocusKeeperSchedule
     {
+        /// <summary>Maximum Escape injections while the search box still has focus (bounds the loop).</summary>
+        private const int MaxEscapeAttempts = 4;
+
         public enum Decision
         {
             InjectEscape,
@@ -59,7 +97,7 @@ namespace MyExtension.ToolWindows
             {
                 return Decision.Stop;
             }
-            if (searchBoxFocused && escapeAttempts < 4)
+            if (searchBoxFocused && escapeAttempts < MaxEscapeAttempts)
             {
                 return Decision.InjectEscape;
             }

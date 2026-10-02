@@ -84,7 +84,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   and the pane-failure fallback (`PaneFailureTracker`).
   `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
   `-- LineIndex`, `-- FocusTarget`, `-- Syntax` run subsets.
-  Currently **151 tests, all passing**.
+  Currently **153 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -99,7 +99,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
   `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-  run subsets. Currently **158 tests, all passing**.
+  run subsets. Currently **163 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -311,8 +311,9 @@ Done and tested (live + unit):
   `ThreadHelper.JoinableTaskFactory.Run`. — `telescope-implementation` live test passes.
 
 Pending (user-requested, NOT yet implemented):
-- **Telescope finder**: fzf — with preview pane. (Scope deferred by user
-  2026-09-19; the overlay already uses fzf internally as its filter engine.)
+- **Telescope finder**: fzf — with preview pane. (Scope DECIDED 2026-09-28:
+  fuzzy content finder + fuzzy file finder; status PLANNED, not executed. The
+  overlay already uses fzf internally as its filter engine.)
 
 ## Hard requirements that are easy to violate
 

@@ -214,6 +214,15 @@ function Assert-NewLogLine([string]$logPath, [string]$pattern, [string]$what, [i
     }
 }
 
+function Assert-NewLogLineAfter([string]$logPath, [int]$fromIndex, [string]$pattern, [string]$what, [int]$maxMs = 3000) {
+    # R5: assertion over lines appended AFTER a caller-supplied absolute log index (a snapshot taken
+    # immediately BEFORE the key under test), so it can only be satisfied by a NEW diagnostic emitted
+    # by that key — not by an earlier line inside the fixed per-scenario baseline window.
+    if (-not (Wait-NewLogLineAfter $logPath $fromIndex $pattern $maxMs)) {
+        throw "never saw: $what (pattern: $pattern)"
+    }
+}
+
 function Assert-NoEnterStorm([string]$logPath, [string]$what) {
     # Fail-fast (F1): the Enter/o -> OpenSelected() re-injection storm fires ~30 'solution-explorer
     # open' lines in ~100ms. A legitimate walk presses Enter/o at most once per loop iteration

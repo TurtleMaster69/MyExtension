@@ -43,15 +43,18 @@
 #
 # Scenario ordering + self-seeding (m63): scenarios run in REGISTRATION ORDER (the order they are
 # defined below), and the suite is deliberately order-dependent:
-#   - seed-leak is registered LAST and must stay last — it byte-compares the whole seed tree to the
-#     bootstrap expected-result copy, so it only passes after every other scenario has run.
+#   - seed-leak is registered LAST and must stay last — in a FULL-SUITE run it byte-compares the
+#     whole seed tree to the bootstrap expected-result copy, so it only passes after every other
+#     scenario has run.
 #   - neovisual-editor-insert (which intentionally writes Beta.cs) must run BEFORE seed-leak so its
 #     expected-result refresh is in place before the final leak check.
 #   - neovisual-explorer-move-editor-focus opens Gamma.cs (reserved for it) and must not run after
 #     another scenario that opens it.
 # SUBSETS ARE SELF-SEEDING: every run (full suite or a -Tests subset) reseeds the scratch solution
 # from the canonical map and re-snapshots the expected-result tree during bootstrap, so a subset
-# never depends on state left by a previous run. Only -NoBootstrap (explicit reuse) skips the reseed.
+# never depends on state left by a previous run — `-Tests seed-leak` alone works standalone because
+# the bootstrap starts it from a clean canonical seed. Only -NoBootstrap (explicit reuse) skips the
+# reseed.
 #
 # Exit code: 0 = all selected scenarios passed, 1 = any failed.
 #
@@ -581,11 +584,17 @@ Register-Scenario 'telescope-mode' {
     Assert-OverlayFocused $vs
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
     Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc handled in insert mode'
+    # R5: snapshot the log index BEFORE the i/a tap so the assertion can only be satisfied by a NEW
+    # 'Focus prompt => True, mode=insert' emitted by the tap itself — not the Open-Telescope line
+    # (Reset-LogBaseline runs before Open-Telescope, so the Open-Telescope line is inside the
+    # fixed search window and would otherwise satisfy these assertions as false positives).
+    $idxBeforeI = Get-LogCacheIndex $logPath
     Send-Tap $script:VkI;                                              # i (back to insert)
-    Assert-NewLogLine $logPath 'Focus prompt => True, mode=insert' 'i returns to insert mode'
+    Assert-NewLogLineAfter $logPath $idxBeforeI "$($script:PfxTel)Focus prompt => True, mode=insert" 'i returns to insert mode'
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # normal again
+    $idxBeforeA = Get-LogCacheIndex $logPath
     Send-Tap $script:VkA;                                              # a (append insert)
-    Assert-NewLogLine $logPath 'Focus prompt => True, mode=insert' 'a returns to insert mode'
+    Assert-NewLogLineAfter $logPath $idxBeforeA "$($script:PfxTel)Focus prompt => True, mode=insert" 'a returns to insert mode'
     Close-Telescope $vs $logPath
 }
 
@@ -1638,6 +1647,26 @@ if ($SelfCheck) {
             Write-Pass 'SelfCheck: seed reset + consistency check pass, and corruption is detected'
         } finally {
             if (Test-Path $tmpSeed) { Remove-Item $tmpSeed -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+
+        # (2b) R49 — seed-leak standalone: a fresh reseed + expected-tree snapshot passes
+        # Assert-NoSeedLeak (proving `-Tests seed-leak` alone works standalone), and a modified
+        # seed file makes it throw.
+        $tmpSeed2 = Join-Path $env:TEMP ("selfcheck_seedleak_" + [guid]::NewGuid().ToString('N'))
+        $tmpExpected = Join-Path $env:TEMP ("selfcheck_seedleak_exp_" + [guid]::NewGuid().ToString('N'))
+        try {
+            Reset-ScratchSolution $tmpSeed2
+            Write-SeedExpected $tmpSeed2 $tmpExpected
+            Assert-NoSeedLeak $tmpSeed2 $tmpExpected
+            $beta2 = Join-Path $tmpSeed2 'Probe\Beta.cs'
+            [System.IO.File]::AppendAllText($beta2, "// LEAK`r`n")
+            $threw = $false
+            try { Assert-NoSeedLeak $tmpSeed2 $tmpExpected } catch { $threw = $true }
+            if (-not $threw) { throw 'SelfCheck: Assert-NoSeedLeak did not throw on a modified seed' }
+            Write-Pass 'SelfCheck: seed-leak standalone (fresh reseed -> no leak; modified seed -> leak detected)'
+        } finally {
+            if (Test-Path $tmpSeed2) { Remove-Item $tmpSeed2 -Recurse -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $tmpExpected) { Remove-Item $tmpExpected -Recurse -Force -ErrorAction SilentlyContinue }
         }
 
         # (3) Stub Send-Tap/Bring-ToForeground (and the overlay waits) and assert the emitted VK

@@ -22,6 +22,13 @@ namespace MyExtension.ToolWindows
         // unregistered type falls back to a PER-TYPE default instance (see ResolveController), so
         // mode is remembered per window type and never leaks across windows (m22).
         private readonly Dictionary<ToolWindowType, IToolWindowController> _controllers = new();
+
+        // R20: instance-scoped cache of the per-type DEFAULT controllers, populated on miss in
+        // GetController. NOT static (static mutable state is the R40 class of issue) — the cache
+        // lives on the WindowManager instance so two GetController calls for the same type return
+        // the SAME instance ("mode remembered per type" no longer depends on package init eagerly
+        // registering every enum value).
+        private readonly Dictionary<ToolWindowType, IToolWindowController> _defaultControllers = new();
     
         public IVsWindowFrame? CurrentWindow { get; private set; }
     
@@ -173,8 +180,23 @@ namespace MyExtension.ToolWindows
 
         private IToolWindowController? GetController(ToolWindowType type)
         {
-            // Return a stable per-type controller so mode is remembered per window type.
-            return ResolveController(_controllers, type);
+            // Return a stable per-type controller so mode is remembered per window type. R20: the
+            // per-type DEFAULT instances are cached in an INSTANCE-scoped dictionary (populated on
+            // miss) so two GetController calls for the same type return the SAME instance.
+            if (_controllers.TryGetValue(type, out var registered))
+            {
+                return registered;
+            }
+            if (_defaultControllers.TryGetValue(type, out var cached))
+            {
+                return cached;
+            }
+            var created = DefaultControllerFor(type);
+            if (created != null)
+            {
+                _defaultControllers[type] = created;
+            }
+            return created;
         }
     
         /// <summary>
@@ -224,7 +246,17 @@ namespace MyExtension.ToolWindows
             Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
             _adaptersDirty = true;
             RefreshCurrentWindow();
-            if (CurrentWindow == null) { return; }
+            if (CurrentWindow == null)
+            {
+                // R7: reset the stale frame-derived state before the null-return so a null frame
+                // does not leave _isToolWindow/_type/_isTextInputType/_textInputSurfaceFocused
+                // from the previous frame.
+                _isToolWindow = false;
+                _type = ToolWindowType.Unknown;
+                _isTextInputType = false;
+                _textInputSurfaceFocused = false;
+                return;
+            }
             int hr = CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
             if (hr == VSConstants.S_OK && value != null && (__WindowFrameTypeFlags)(int)value == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
             {

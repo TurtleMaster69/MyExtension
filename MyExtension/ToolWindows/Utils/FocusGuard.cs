@@ -29,9 +29,8 @@ namespace MyExtension.ToolWindows
         /// Find, ...) owns its keyboard even when the editor-focus flag is stale, so it is exempt
         /// from the editor veto.
         /// </summary>
-        public static bool HasToolWindowActionKeys(
-            bool isToolWindow, bool isInputMode, int actionKeyCount, bool editorFocused, bool isTextInputSurface, bool textInputSurfaceFocused)
-            => isToolWindow && !isInputMode && actionKeyCount > 0 && (!editorFocused || OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused));
+        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool ownsKeyboard)
+            => isToolWindow && !(editorFocused && !ownsKeyboard);
 
         /// <summary>
         /// True when a key should be routed to the focused tool window's controller. False when an
@@ -39,16 +38,17 @@ namespace MyExtension.ToolWindows
         /// A tool window that owns the keyboard (input mode, or a genuinely focused text-input
         /// surface) is exempt from the editor veto.
         /// </summary>
-        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool ownsKeyboard)
-            => isToolWindow && !(editorFocused && !ownsKeyboard);
-
-        /// <summary>
-        /// Backward-compatible 5-arg form: computes the single <c>ownsKeyboard</c> exemption from
-        /// the raw inputs and delegates to the 3-arg overload, so all routing formulations read one
-        /// source.
-        /// </summary>
         public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused)
             => ShouldRouteToolWindowKey(isToolWindow, editorFocused, OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused));
+
+        /// <summary>
+        /// R10: shift-aware routing — shift gates the action keys of NON-text-input controllers
+        /// (<c>Shift+O/R/M/A/G</c> in Solution Explorer must not fire tree actions and swallow the
+        /// key); text-input controllers still need shift to tell <c>I</c>/<c>i</c> and <c>A</c>/<c>a</c>
+        /// apart, so they are exempt from the shift gate.
+        /// </summary>
+        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused, bool shiftHeld)
+            => isToolWindow && !(editorFocused && !OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused)) && !(shiftHeld && !isTextInputSurface);
 
         /// <summary>
         /// True when the user is typing, so the leader key must type a literal space. A tool window

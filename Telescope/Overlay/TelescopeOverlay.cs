@@ -57,6 +57,7 @@ namespace Telescope.Overlay
         private readonly TextMotionNavigator _previewNavigator = new();
         private readonly TextMotionNavigator _promptNavigator = new();
         private readonly PreviewRenderer _previewRenderer = new();
+        private readonly ResultMapper _resultMapper = new();
         private bool _activationHandled;
         private CancellationTokenSource? _filterCts;
 
@@ -400,7 +401,7 @@ namespace Telescope.Overlay
                         return;
                     }
 
-                    var items = ResultMapper.MapBack(matched, snapshot);
+                    var items = _resultMapper.MapBack(matched, snapshot);
 
                     _results = items;
                     _keyHandler.SetResults(items.Count);
@@ -588,16 +589,30 @@ namespace Telescope.Overlay
         /// <summary>
         /// Applies a normal-mode prompt text motion (h/l/w/b/e/0/$) to the prompt box's caret,
         /// mirroring the text-input tool-window motions. Returns true when the key was consumed.
+        /// R1: the insert placements (a/A/I) are routed here via the <c>insertPlacement</c> out
+        /// param — a→Current, A→End, I→Start, i→Current — bypassing OverlayKeyHandler's
+        /// OverlayKey.A→End / OverlayKey.I→Current mapping (the R1 placement bug). R44: the
+        /// <see cref="TextMotionNavigator.SetText"/> rebuild is skipped when the prompt text is
+        /// unchanged (normal-mode motions do not change it), so no LineIndex is rebuilt per keystroke.
         /// </summary>
         private bool TryPromptMotion(Key key)
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-            if (!PromptMotionRouter.ShouldConsume(key, shift, out _))
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out CaretPlacement? insertPlacement))
             {
+                if (insertPlacement != null)
+                {
+                    EnterInsert(insertPlacement.Value);
+                    return true;
+                }
                 return false;
             }
 
-            _promptNavigator.SetText(_promptBox.Text);
+            string text = _promptBox.Text;
+            if (_promptNavigator.Text != text)
+            {
+                _promptNavigator.SetText(text);
+            }
             _promptNavigator.MoveTo(_promptBox.CaretIndex);
 
             if (!TextMotionDispatcher.Handle(key, shift, _promptNavigator, out _))
@@ -625,7 +640,8 @@ namespace Telescope.Overlay
         private bool HandlePreviewKey(Key key)
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-            if (!PromptMotionRouter.ShouldConsume(key, shift, out _))
+            // R1: the preview surface keeps the FULL motion set (j/k/g/G navigate the code).
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out _, previewSurface: true))
             {
                 return false;
             }

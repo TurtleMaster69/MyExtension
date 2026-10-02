@@ -58,7 +58,7 @@ namespace MyExtension.Package
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
-            NeoVisualLog.Log("=== Global Keyboard Logger Package STARTED ===");
+            NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.MyExtension}=== Global Keyboard Logger Package STARTED ===");
             await base.InitializeAsync(cancellationToken, progress);
 
             // Configure the per-run log file (env-driven), start a fresh log for this instance,
@@ -145,7 +145,13 @@ namespace MyExtension.Package
                         // The shell/main window is still configuring during early init and steals
                         // focus when it finishes. For testing, wait until the shell is fully
                         // initialized so the environment is stable (and won't grab focus) before
-                        // we open the solution/hook.
+                        // we open the solution/hook. R13: this wait exists only for e2e focus
+                        // stability — gate it on the harness env vars so normal (non-test) runs
+                        // skip the up-to-20s dead-key delay.
+                        if (!IsHarnessRun())
+                        {
+                            return Task.CompletedTask;
+                        }
                         return WaitForShellInitializedAsync(cancellationToken);
                     }),
                     ("auto-open-solution", () =>
@@ -182,6 +188,18 @@ namespace MyExtension.Package
         private void RunInitStep(string name, Action step)
         {
             InitSteps.RunSync(name, step, msg => NeoVisualLog.Log(msg));
+        }
+
+        /// <summary>
+        /// True when this is a harness (e2e) run — the harness sets
+        /// <c>NEOVISUAL_TEST_SOLUTION</c> / <c>NEOVISUAL_LOG_DIR</c>. R13: the shell-wait init
+        /// step is gated on this so normal (non-test) runs skip the up-to-20s wait that exists
+        /// only for e2e focus stability.
+        /// </summary>
+        private static bool IsHarnessRun()
+        {
+            return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NEOVISUAL_TEST_SOLUTION"))
+                || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR"));
         }
 
         /// <summary>

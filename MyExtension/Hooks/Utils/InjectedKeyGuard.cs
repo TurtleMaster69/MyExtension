@@ -66,7 +66,13 @@ namespace MyExtension.Hooks
         public void Record(int vk)
         {
             _pending.TryGetValue(vk, out PendingRecord record);
-            _pending[vk] = new PendingRecord(record.Count + 1, _clock());
+            // R12: the TTL is checked at RECORD time, not consume time — a >1s UI stall between
+            // Press's Record and the injected key-down would otherwise expire the record on consume
+            // and cause a re-injection storm. A stale record (older than the TTL) is dropped when a
+            // new Record arrives: the new Record starts fresh at count 1 instead of carrying the
+            // stale record's count forward.
+            int count = record.Count > 0 && _clock() - record.Timestamp <= _ttl ? record.Count + 1 : 1;
+            _pending[vk] = new PendingRecord(count, _clock());
         }
 
         /// <summary>

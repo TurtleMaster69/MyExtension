@@ -24,6 +24,15 @@ namespace MyExtension.Navigation
             return _cached;
         }
 
+        // R30: the cache was never invalidated — FromSystemDpi read SystemDpiX once and cached it
+        // forever, leaving stale divide tolerances after a mid-session scaling change. Invalidate()
+        // is the DPI-source seam: a DPI-change signal (e.g. WM_DPICHANGED) calls it so the next
+        // FromSystemDpi re-reads the system DPI.
+        public static void Invalidate()
+        {
+            _cached = null;
+        }
+
         public static NavigationSettings FromDpi(int systemDpiX, int systemDpiY)
         {
             int xDivide = (int)(NavigationConstants.DefaultLogicalXWindowDivide * (systemDpiX / (double)DpiAwareness.DefaultLogicalDpi) * NavigationConstants.DefaultLogicalSelectorScale);

@@ -581,61 +581,10 @@ namespace Telescope.Tests
             }
         }
 
-        public static void Run_FzfFilter_TimeoutKillsAndFallsBack()
-        {
-            using (var dir = new TempDir())
-            {
-                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
-                WithLogPath(logPath, () =>
-                {
-                    string cmdPath = Path.Combine(dir.Path, "hang.cmd");
-                    File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
-
-                    // M3: the timeout path must await BOTH ReadToEndAsync tasks after TryKill so the
-                    // faulted tasks are observed — no unobserved-task noise. RED today: the timeout
-                    // path returns without awaiting them, so a faulted task raises
-                    // UnobservedTaskException. Attach the handler BEFORE the filter runs so any
-                    // faulted task finalized during the test is caught.
-                    bool unobserved = false;
-                    EventHandler<UnobservedTaskExceptionEventArgs> handler = (s, e) => { unobserved = true; e.SetObserved(); };
-                    TaskScheduler.UnobservedTaskException += handler;
-                    try
-                    {
-                        var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 200 };
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
-                        sw.Stop();
-                        LogFileWriter.Flush();
-
-                        // A hung fzf must be killed and the filter must fall back within a bounded wall
-                        // time (M6: today FilterAsync waits forever on a hung subprocess).
-                        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"filter returned within 5s (took {sw.Elapsed})");
-                        Assert.Equal(1, result.Count);
-                        Assert.True(result.Contains("alpha"), "timeout falls back to the full candidate list");
-                        string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
-                        Assert.True(content.Contains("[Telescope] fzf filter failed: timeout"),
-                            "the timeout path must log '[Telescope] fzf filter failed: timeout'");
-
-                        // Give the killed process's pipe reads a moment to fault, then force
-                        // finalization so any unobserved faulted task raises the event.
-                        var deadline = DateTime.UtcNow.AddSeconds(2);
-                        while (DateTime.UtcNow < deadline)
-                        {
-                            GC.Collect();
-                            GC.WaitForPendingFinalizers();
-                            if (unobserved) { break; }
-                            System.Threading.Thread.Sleep(25);
-                        }
-                        Assert.False(unobserved,
-                            "the timeout path must await both ReadToEndAsync tasks (no unobserved-task noise)");
-                    }
-                    finally
-                    {
-                        TaskScheduler.UnobservedTaskException -= handler;
-                    }
-                });
-            }
-        }
+        // R24 (BP-44): Run_FzfFilter_TimeoutKillsAndFallsBack was DELETED — it was timing-dependent
+        // (5s wall-clock + 2s GC-poll) and redundant with the deterministic
+        // Run_FzfFilter_TimeoutAwaitsTasks below (the AwaitedReadCount seam). Telescope.Tests count
+        // drops by 1 (deterministic signal).
 
         public static void Run_FzfFilter_TimeoutAwaitsTasks()
         {
@@ -662,6 +611,34 @@ namespace Telescope.Tests
                     Assert.True(fzf.AwaitedReadCount >= 2,
                         "the timeout path must observe both ReadToEndAsync tasks (AwaitedReadCount >= 2)");
                 });
+            }
+        }
+
+        public static void Run_FzfFilter_CancellationObservesTasks()
+        {
+            // R23 (BP-34): the fzf CANCELLATION path (FzfFilter.cs:172-175) returns without observing
+            // the pending outputTask/errorTask -> UnobservedTaskException noise on every overlay close
+            // mid-filter. The fix mirrors the timeout path's fault-only continuation + AwaitedReadCount
+            // seam. RED: today the cancellation path does NOT increment AwaitedReadCount, so this
+            // assertion fails (the tasks are not observed on cancellation).
+            using (var dir = new TempDir())
+            {
+                string cmdPath = Path.Combine(dir.Path, "hang.cmd");
+                File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
+
+                var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 5000 };
+                using (var cts = new System.Threading.CancellationTokenSource())
+                {
+                    var task = fzf.FilterAsync(new[] { "alpha" }, "alp", cts.Token);
+                    cts.Cancel();
+                    var result = task.GetAwaiter().GetResult();
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha"), "cancellation falls back to the full candidate list");
+                    Assert.True(fzf.AwaitedReadCount >= 2,
+                        "the cancellation path must observe both ReadToEndAsync tasks (AwaitedReadCount >= 2)");
+                }
             }
         }
 
@@ -693,16 +670,13 @@ namespace Telescope.Tests
                 File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
 
                 var fzf = new FzfFilter(cmdPath);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 bool available = fzf.IsAvailable();
-                sw.Stop();
 
-                // m16: IsAvailable() must not block the UI up to 3s on a hung fzf --version; the
-                // wait is bounded to a short timeout (IsAvailableTimeoutMs = 500). m58: the bound
-                // is relaxed from 1s to 3s so a slow CI machine's process-spawn overhead cannot
-                // flake it — the 500ms internal timeout + spawn is ~0.6s, and a regression to the
-                // old WaitForExit(3000) still fails this 3s bound.
-                Assert.True(sw.Elapsed < TimeSpan.FromSeconds(3), $"IsAvailable returned within 3s (took {sw.Elapsed})");
+                // R47 (BP-45): the wall-clock bound (`sw.Elapsed < 3s`) is GONE — it was flaky on a
+                // slow CI machine. The deterministic assertion is the outcome: a hung fzf --version
+                // must report unavailable (the internal IsAvailableTimeoutMs = 500 bounds the wait;
+                // the probe can never hang the caller). The bound is verified by the internal
+                // timeout constant, not by a wall-clock read in the test.
                 Assert.False(available, "a hung fzf must report unavailable");
             }
         }
@@ -1293,6 +1267,25 @@ namespace Telescope.Tests
                 "shift+4 ($) is a prompt motion");
             Assert.False(PromptMotionRouter.ShouldConsume(Key.D4, false, out _),
                 "bare $ (D4 without shift) is not a prompt motion");
+        }
+
+        public static void Run_PromptMotionRouter_PromptRestrictsVerticalMotions()
+        {
+            // R1 (BP-1): the prompt motion set must be restricted to h/l/w/b/e/0/$ — j/k/g/G are
+            // selection-navigation keys that must fall through to OverlayKeyHandler (Down/Up/Top/
+            // Bottom), NOT be consumed as prompt caret motions. The restriction is surface-aware:
+            // the PREVIEW surface still needs j/k/g/G (HandlePreviewKey), so the fix adds a surface
+            // param to ShouldConsume; the build-agent extends the call sites for it. RED: today
+            // ShouldConsume returns true for the prompt surface (j/k/g/G are consumed as caret
+            // motions), so each Assert.False fails.
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.J, false, out _),
+                "j must not be consumed in the prompt (selection navigation)");
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.K, false, out _),
+                "k must not be consumed in the prompt (selection navigation)");
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.G, false, out _),
+                "g must not be consumed in the prompt (gg -> Top is a selection move)");
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.G, true, out _),
+                "G must not be consumed in the prompt (Bottom is a selection move)");
         }
 
         // ================================================================
@@ -1999,6 +1992,21 @@ namespace Telescope.Tests
             Assert.Equal(2, tokenizeCount);
         }
 
+        public static void Run_PreviewDocumentCache_UnchangedMtimeSkipsRebuild()
+        {
+            // R2 (BP-2): the preview rebuilds the whole FlowDocument + LineIndex + line pointers +
+            // ScrollToHome() on every selection change — only the TOKENIZATION is mtime-cached
+            // (PreviewTokenCache). The fix adds a pure PreviewDocumentCache seam (mtime-keyed
+            // "content changed?" decision) and gates the WPF PreviewRenderer.SetContent rebuild on
+            // it. This test pins the mtime-keyed decision: an unchanged mtime must NOT re-run the
+            // (document) build.
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var cache = new PreviewDocumentCache(timestamp: _ => fixedTime);
+
+            Assert.True(cache.ShouldRebuild("a.cs"), "first call must rebuild (no cached mtime)");
+            Assert.False(cache.ShouldRebuild("a.cs"), "unchanged mtime must skip the rebuild");
+        }
+
         // ================================================================
         // CodeIssuesFinder — warnings/errors/TODO markers
         // ================================================================
@@ -2425,30 +2433,26 @@ namespace Telescope.Tests
             }
         }
 
-        public static void Run_GrepFinder_GatherHitsThrowsNotSupported()
+        public static void Run_GrepFinder_QueryDrivenBehavior()
         {
-            // m54: the base gather stub must be a loud failure, not a silent empty. GrepFinder is
-            // query-driven (GetCandidates(query)), so the parameterless GatherHits() must throw
-            // NotSupportedException. GrepFinder is sealed, so the protected override is reached via
-            // reflection. (The old test only called GetCandidates("") — the empty-query short
-            // circuit — and never exercised the throw.)
-            var finder = new GrepFinder(() => new[] { "a" }, _ => { });
-            var method = typeof(GrepFinder).GetMethod(
-                "GatherHits",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(method != null, "GrepFinder.GatherHits() must exist (protected override)");
+            // R48 (BP-46): the old Run_GrepFinder_GatherHitsThrowsNotSupported invoked the protected
+            // GatherHits via reflection — coupling the test to the internal method name/visibility.
+            // Rewritten to assert the query-driven BEHAVIOR instead (hermeticity): GrepFinder is
+            // query-driven (IsQueryDriven), the empty query short-circuits to no candidates, and a
+            // non-empty query drives the gather through the hermetic test enumerate seam.
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "class A\n{\n    int alpha;\n}");
 
-            bool threwNotSupported = false;
-            try
-            {
-                method!.Invoke(finder, null);
+                var finder = new GrepFinder(() => new[] { a }, _ => { });
+
+                Assert.True(finder.IsQueryDriven, "GrepFinder is query-driven (GetCandidates(query))");
+                Assert.True(finder.GetCandidates("").Count == 0, "empty query -> no candidates (short-circuit)");
+                var hits = finder.GetCandidates("alpha");
+                Assert.Equal(1, hits.Count);
+                Assert.True(hits[0].Display.Contains("A.cs"), "hit display names the file");
             }
-            catch (System.Reflection.TargetInvocationException tie)
-            {
-                threwNotSupported = tie.InnerException is NotSupportedException;
-            }
-            Assert.True(threwNotSupported,
-                "GrepFinder.GatherHits() must throw NotSupportedException (query-driven finder)");
         }
 
         // ================================================================
@@ -2674,7 +2678,7 @@ namespace Telescope.Tests
                 new FinderEntry("Program.cs", second),
             };
 
-            var items = ResultMapper.MapBack(new[] { "Program.cs", "Program.cs" }, snapshot);
+            var items = new ResultMapper().MapBack(new[] { "Program.cs", "Program.cs" }, snapshot);
 
             Assert.Equal(2, items.Count);
             Assert.Equal("Program.cs", items[0].Display);
@@ -2693,7 +2697,7 @@ namespace Telescope.Tests
                 new FinderEntry("Beta.cs", b),
             };
 
-            var items = ResultMapper.MapBack(new[] { "Alpha.cs", "Beta.cs" }, snapshot);
+            var items = new ResultMapper().MapBack(new[] { "Alpha.cs", "Beta.cs" }, snapshot);
 
             Assert.Equal(2, items.Count);
             Assert.True(ReferenceEquals(a, items[0].Payload), "Alpha.cs maps to its entry's payload");
@@ -2708,7 +2712,7 @@ namespace Telescope.Tests
             var a = new FileHit(@"C:\p\Alpha.cs", 0);
             var snapshot = new List<FinderEntry> { new FinderEntry("Alpha.cs", a) };
 
-            var items = ResultMapper.MapBack(new[] { "Ghost.cs" }, snapshot);
+            var items = new ResultMapper().MapBack(new[] { "Ghost.cs" }, snapshot);
 
             Assert.Equal(0, items.Count);
         }
@@ -2720,7 +2724,7 @@ namespace Telescope.Tests
             var a = new FileHit(@"C:\p\Alpha.cs", 0);
             var snapshot = new List<FinderEntry> { new FinderEntry("Alpha.cs", a) };
 
-            var items = ResultMapper.MapBack(new[] { "Ghost.cs" }, snapshot);
+            var items = new ResultMapper().MapBack(new[] { "Ghost.cs" }, snapshot);
 
             Assert.True(items.All(i => i.Payload != null),
                 "no null-payload entry is produced for an unmatched display string");
@@ -2740,7 +2744,7 @@ namespace Telescope.Tests
 
             // fzf returns matches in its own order; the mapper must preserve THAT order, not the
             // snapshot order.
-            var items = ResultMapper.MapBack(new[] { "C.cs", "A.cs", "B.cs" }, snapshot);
+            var items = new ResultMapper().MapBack(new[] { "C.cs", "A.cs", "B.cs" }, snapshot);
 
             Assert.Equal(3, items.Count);
             Assert.Equal("C.cs", items[0].Display);

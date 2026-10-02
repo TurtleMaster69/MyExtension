@@ -11,7 +11,8 @@ namespace Telescope.Logging
     /// <list type="bullet">
     /// <item>the Visual Studio Output window pane <b>NeoVisual</b>, and</item>
     /// <item>a plain-text log file at <c>%APPDATA%\MyExtension\neovisual.log</c> (see <see cref="LogFileWriter"/>), and</item>
-    /// <item>the debugger output (<see cref="Debug.WriteLine"/>).</item>
+    /// <item>the debugger output (<see cref="Debug.WriteLine"/>) — opt-in via
+    /// <c>NEOVISUAL_DEBUG_DUP=1</c> (N65/BP-61).</item>
     /// </list>
     ///
     /// <para/>
@@ -29,6 +30,17 @@ namespace Telescope.Logging
         private static readonly object PaneSync = new object();
         private static readonly PaneFailureTracker _paneFailureTracker = new PaneFailureTracker();
         private static IVsOutputWindowPane? _pane;
+
+        // N65/BP-61: the Debug.WriteLine duplication (-> NeoVisualTraceListener -> the debug-output
+        // file) is opt-in so every NeoVisualLog line is not unconditionally duplicated.
+        private static readonly bool DebugDuplicationEnabled = IsDebugDuplicationEnabled();
+
+        private static bool IsDebugDuplicationEnabled()
+        {
+            string? value = Environment.GetEnvironmentVariable("NEOVISUAL_DEBUG_DUP");
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        }
 
         /// <summary>NeoVisual structured log file path (delegates to <see cref="LogFileWriter"/>).</summary>
         public static string LogPath
@@ -99,7 +111,10 @@ namespace Telescope.Logging
             // line here lands in BOTH per-run files: the exp (NeoVisual) file and the main
             // (debug) file, keeping them comparable.
             LogFileWriter.Write(message);
-            System.Diagnostics.Debug.WriteLine(message);
+            if (DebugDuplicationEnabled)
+            {
+                System.Diagnostics.Debug.WriteLine(message);
+            }
             WriteToPane(message);
         }
 
@@ -130,7 +145,7 @@ namespace Telescope.Logging
         {
             lock (PaneSync)
             {
-                if (_pane != null || !_paneFailureTracker.ShouldRetry())
+                if (_pane != null)
                 {
                     return;
                 }
@@ -149,7 +164,7 @@ namespace Telescope.Logging
                 if (outputWindow == null)
                 {
                     // M12: a null GetGlobalService result (pre-package-init) must not permanently
-                    // disable the pane — the retry latch stays open so a later call retries.
+                    // disable the pane — a later UI-thread call retries.
                     return;
                 }
                 Guid paneGuid = PaneGuid;
@@ -165,7 +180,6 @@ namespace Telescope.Logging
                 lock (PaneSync)
                 {
                     _pane = null;
-                    _paneFailureTracker.RecordAttempt();
                 }
             }
         }

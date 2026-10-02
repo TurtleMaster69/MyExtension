@@ -42,25 +42,43 @@ namespace Telescope.Overlay
     /// </summary>
     internal static class TextMotionDispatcher
     {
+        /// <summary>
+        /// Canonical key identity shared by both surfaces (N36/BP-49): each surface translates its
+        /// native key type to this once, then the single <see cref="MapMotion"/> table maps it to a
+        /// motion — so the WinForms and WPF mappings cannot drift.
+        /// </summary>
+        private enum MotionKey
+        {
+            H,
+            L,
+            W,
+            B,
+            E,
+            A,
+            I,
+            J,
+            K,
+            D0,
+            D4,
+            G,
+        }
+
         /// <summary>Maps a WinForms <see cref="Keys"/> value (plus shift state) to a text motion.</summary>
         public static TextMotion? MapKey(Keys key, bool shift)
         {
+            MotionKey? canonical;
             switch (key)
             {
-                case Keys.H: return TextMotion.Left;
-                case Keys.L: return TextMotion.Right;
-                case Keys.W: return TextMotion.NextWord;
-                case Keys.B: return TextMotion.PrevWord;
-                case Keys.E: return TextMotion.EndWord;
-                case Keys.A:
-                    // A (Shift+a) = insert at end of line; a = insert after the caret.
-                    return shift ? TextMotion.InsertEnd : TextMotion.InsertAfter;
-                case Keys.I:
-                    // I (Shift+i) = insert at start of line; a bare i is the generic insert.
-                    return shift ? TextMotion.InsertStart : (TextMotion?)null;
-                default:
-                    return null;
+                case Keys.H: canonical = MotionKey.H; break;
+                case Keys.L: canonical = MotionKey.L; break;
+                case Keys.W: canonical = MotionKey.W; break;
+                case Keys.B: canonical = MotionKey.B; break;
+                case Keys.E: canonical = MotionKey.E; break;
+                case Keys.A: canonical = MotionKey.A; break;
+                case Keys.I: canonical = MotionKey.I; break;
+                default: canonical = null; break;
             }
+            return canonical == null ? null : MapMotion(canonical.Value, shift);
         }
 
         /// <summary>
@@ -71,24 +89,52 @@ namespace Telescope.Overlay
         /// </summary>
         public static TextMotion? MapKey(Key key, bool shift)
         {
+            MotionKey? canonical;
             switch (key)
             {
-                case Key.H: return TextMotion.Left;
-                case Key.L: return TextMotion.Right;
-                case Key.J: return TextMotion.Down;
-                case Key.K: return TextMotion.Up;
-                case Key.W: return TextMotion.NextWord;
-                case Key.B: return TextMotion.PrevWord;
-                case Key.E: return TextMotion.EndWord;
-                case Key.D0: return TextMotion.LineStart; // 0
-                case Key.D4:
+                case Key.H: canonical = MotionKey.H; break;
+                case Key.L: canonical = MotionKey.L; break;
+                case Key.J: canonical = MotionKey.J; break;
+                case Key.K: canonical = MotionKey.K; break;
+                case Key.W: canonical = MotionKey.W; break;
+                case Key.B: canonical = MotionKey.B; break;
+                case Key.E: canonical = MotionKey.E; break;
+                case Key.D0: canonical = MotionKey.D0; break;
+                case Key.D4: canonical = MotionKey.D4; break;
+                case Key.G: canonical = MotionKey.G; break;
+                case Key.A: canonical = MotionKey.A; break;
+                case Key.I: canonical = MotionKey.I; break;
+                default: canonical = null; break;
+            }
+            return canonical == null ? null : MapMotion(canonical.Value, shift);
+        }
+
+        /// <summary>
+        /// The single canonical key→motion table (N36/BP-49). Both surfaces translate their native
+        /// key to <see cref="MotionKey"/> and delegate here, so the mappings cannot drift.
+        /// </summary>
+        private static TextMotion? MapMotion(MotionKey key, bool shift)
+        {
+            switch (key)
+            {
+                case MotionKey.H: return TextMotion.Left;
+                case MotionKey.L: return TextMotion.Right;
+                case MotionKey.J: return TextMotion.Down;
+                case MotionKey.K: return TextMotion.Up;
+                case MotionKey.W: return TextMotion.NextWord;
+                case MotionKey.B: return TextMotion.PrevWord;
+                case MotionKey.E: return TextMotion.EndWord;
+                case MotionKey.D0: return TextMotion.LineStart; // 0
+                case MotionKey.D4:
                     // $ drift fix: bare $ (D4 without shift) is not a motion.
                     return shift ? TextMotion.LineEnd : (TextMotion?)null;
-                case Key.G:
+                case MotionKey.G:
                     return shift ? TextMotion.Bottom : TextMotion.Top;
-                case Key.A:
+                case MotionKey.A:
+                    // A (Shift+a) = insert at end of line; a = insert after the caret.
                     return shift ? TextMotion.InsertEnd : TextMotion.InsertAfter;
-                case Key.I:
+                case MotionKey.I:
+                    // I (Shift+i) = insert at start of line; a bare i is the generic insert.
                     return shift ? TextMotion.InsertStart : (TextMotion?)null;
                 default:
                     return null;

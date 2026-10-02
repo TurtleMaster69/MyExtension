@@ -19,9 +19,13 @@
    known-failing commands.
 2. **Try the command if you think it's the optimal tool** — if it's not in the index and seems like the
    right tool, run it once. One attempt is cheap; the failure data is valuable.
-3. **If it fails** (permission denied, error, wrong output), append an entry to the **Failure log**
-   (bottom) with CMD, RESULT, REASON, ALTERNATIVE, NEEDS-PERMISSION, AGENT, DATE — then move on to the
-   alternative. Never retry the same failing command repeatedly in one session.
+3. **If it fails** (permission denied, error, wrong output) — whether a **shell command** or a **tool
+   call** (especially the `lsp` tool) — append an entry to the **Failure log** (bottom) with
+   CMD/OPERATION, RESULT, REASON, ALTERNATIVE, NEEDS-PERMISSION, AGENT, DATE — then move on to the
+   alternative. Never retry the same failing command/call repeatedly in one session. For an `lsp`
+   failure, record the exact operation + params (e.g. `lsp incomingCalls file=... line=... char=...`)
+   and classify REASON as `misuse` (bad params/position) vs `server` (no server / crash) so misuse can
+   be fixed later.
 4. **The user decides on permissions.** The Failure log is reviewed by the user, who grants permissions
    for commands that are the optimal tool and fixes or rejects the rest. Do not grant yourself
    permissions — log and move on.
@@ -33,6 +37,8 @@
      that would make it work, if it makes sense).
    - `misuse` — you used it wrong (bad args/flags/order). Record the correct usage.
    - `wrong-tool` — a different tool does this better. Record the alternative.
+   - `server` — the tool's backing service failed (e.g. the `lsp` tool reports no server, or the
+     language server crashed). Record the operation + params.
    - `other` — anything else (missing binary, environment, etc.).
 7. **Prefer the opencode tools over bash** for file work: every bash invocation pays a pwsh spawn on
    this machine before the command runs, while the opencode `read`/`glob`/`grep`/`list` tools run
@@ -51,12 +57,13 @@
 | `pwsh tools/harness/test-e2e.ps1 -Tests <names>` | run a subset of e2e scenarios | allowed; `-NoBootstrap` reuses an already-booted instance (same code state only) |
 | `pwsh tools/harness/test-e2e.ps1 -List` | list registered scenarios | allowed; cheap no-VS parse check |
 | `pwsh tools/lint/check-doc-refs.ps1` | doc-reference lint (unresolved backticked refs) | allowed; ~2s, no VS |
+| `lsp` tool (opencode) | symbol navigation (definition/references/hover/symbols/implementations/direct callers) | requires `"lsp": true` in config + `OPENCODE_EXPERIMENTAL_LSP_TOOL=true`; see `.opencode/LSP-SETUP.md` |
 | `trailmark --version` / `uv run trailmark --version` | boot Trailmark (code graph) | allowed; if missing, install with `uv tool install trailmark` |
 | `uv run --with trailmark python -` | run a Trailmark query snippet | allowed; always parse with `language="c_sharp"` (the CLI default `python` yields an empty graph here) |
 | `git status` / `git diff` / `git log` / `git show` | inspect repo state | allowed (read-only) |
 | `git add <paths>` / `git commit -m "<msg>"` | stage + commit the GREEN change set (neovim_hub's atomic-commit policy) | allowed; push/merge/pull remain denied |
 | `rg --no-ignore -n <pattern> <path>` | search including gitignored paths | allowed; the `grep` tool cannot reach gitignored paths |
-| `Get-ChildItem ...` / `ls ...` / `dir ...` | list files/folders | allowed |
+| `Get-ChildItem ...` / `ls ...` / `dir ...` | list files/folders | permission-dependent — agents with `bash: {"*": deny, "rg *": allow}` are denied it; use the `read` (directory) or `glob` tool instead |
 
 ## Known-bad commands (do not retry — use the alternative)
 
@@ -69,15 +76,18 @@
 | `curl ...` / `wget ...` / `Invoke-WebRequest ...` / `irm ...` / `iwr ...` | prompts (ask) and is usually the wrong tool | wrong-tool | `webfetch` tool, or delegate to `skill-researcher` | no |
 | `dotnet run` (no `--project`) | this is a VSIX — a plain `dotnet run` does not work | misuse | `dotnet build`, or `dotnet run --project tests/<Project>` for the offline suites | no |
 | `dotnet test ...` / `vstest.console ...` | this repo's tests are hermetic `dotnet run` projects, not vstest | wrong-tool | `dotnet run --project tests/Telescope.Tests` / `tests/NeoVisual.Tests` | no |
-| `grep -rn <symbol> <dir>` to find where a symbol is defined/called | wasteful — scans every file | wrong-tool | LSP `lsp` tool (`goToDefinition`/`findReferences`) or `trailmark` (code graph) | no |
+| `grep -rn <symbol> <dir>` to find where a symbol is defined/called | wasteful — scans every file | wrong-tool | LSP `lsp` tool: `goToDefinition` (defined) / `incomingCalls` (called) / `findReferences` | no |
 | `cat <file>` (bash) | bash denied; `read` tool is better | wrong-tool | `read` tool | no |
+| `head ...` (bash) | `head` is NOT installed on this machine (Unix tool) | other | `Select-Object -First N` (pwsh) | no |
+| `pwsh tools/harness/test-e2e.ps1 -Tests a,b,c` | the `[string[]]` array does not bind through the native `pwsh` boundary (arrives as one string → "Unknown scenario(s)") | misuse | `& tools/harness/test-e2e.ps1 -Tests a,b,c` (call operator) | no |
 
 ## Correct tool per task (avoid wrong-tool waste)
 
 | task | correct tool | why not grep/bash |
 |---|---|---|
-| find where a symbol is defined / called / referenced | LSP `lsp` tool (`goToDefinition`, `findReferences`, `hover`) or `trailmark` (code graph) | grep scans every file; LSP/trailmark index the code once |
-| map call paths / blast radius / entry points | `trailmark` (code graph) | structural query, not text search |
+| find where a symbol is defined / referenced / implemented; type info; file/workspace symbols | LSP `lsp` tool (`goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`) | Roslyn-resolved; grep scans every file and misses overloads/partials |
+| **direct** callers/callees of a symbol | LSP `lsp` tool (`incomingCalls`/`outgoingCalls`) | Roslyn-resolved; dodges Trailmark's `proxy.unresolved` trap |
+| map transitive call paths / blast radius / taint / complexity / entry points | `trailmark` (code graph) | graph-level query LSP cannot answer (LSP call hierarchy is one hop) |
 | list files / inventory a directory | `read` tool (directory) or `glob` tool | no shell spawn; `glob` avoids PowerShell's slow object pipeline |
 | search file contents | `grep` tool | allowed for every agent; bash `grep` is not installed (use `rg` if bash needed) |
 | read a file (or a slice) | `read` tool (with `offset`/`limit`) | no shell spawn; `offset`/`limit` reads only the slice |

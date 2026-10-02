@@ -91,18 +91,25 @@ namespace MyExtension.Navigation
             }
 
             // properties window props differ when from activeWindow; if this is fixed, lhs == rhs should suffice. 
-            if (lhs.Caption == rhs.Caption &&
-                (
-                (lhs.Type == vsWindowType.vsWindowTypeToolWindow && rhs.Type == vsWindowType.vsWindowTypeProperties) ||
-                (lhs.Type == vsWindowType.vsWindowTypeProperties && rhs.Type == vsWindowType.vsWindowTypeToolWindow)
-                )
-                )
+            if (lhs.Caption == rhs.Caption && MatchesPropertiesQuirk(lhs.Caption, lhs.Type, rhs.Type))
             {
                 return true;
             }
 
             return false;
 
+        }
+
+        /// <summary>
+        /// N7/N14: the Properties-window quirk — a ToolWindow and a Properties window with the same
+        /// caption are treated as the same window (their IVsShell/DTE identities differ). Single
+        /// source so <see cref="CompareWindows"/> and <see cref="WindowFrameAdapter.LinkedTo"/>
+        /// cannot diverge.
+        /// </summary>
+        public static bool MatchesPropertiesQuirk(string caption, vsWindowType type, vsWindowType otherType)
+        {
+            return (type == vsWindowType.vsWindowTypeToolWindow && otherType == vsWindowType.vsWindowTypeProperties) ||
+                   (type == vsWindowType.vsWindowTypeProperties && otherType == vsWindowType.vsWindowTypeToolWindow);
         }
 
     }

@@ -71,14 +71,16 @@ namespace Telescope.Filter
         /// <summary>
         /// Returns true when the configured <c>fzf</c> executable can be found and runs. Used to
         /// degrade gracefully (show the unfiltered list + a warning) when fzf is missing.
+        /// N38/BP-52: the bounded <c>fzf --version</c> probe runs inside <see cref="Task.Run"/> so
+        /// the UI thread is not blocked; the result is cached once per session.
         /// </summary>
-        public bool IsAvailable()
+        public async Task<bool> IsAvailableAsync()
         {
             if (_availability.HasValue)
             {
                 return _availability.Value;
             }
-            _availability = ProbeIsAvailable();
+            _availability = await Task.Run(ProbeIsAvailable).ConfigureAwait(false);
             return _availability.Value;
         }
 
@@ -121,6 +123,14 @@ namespace Telescope.Filter
             var lines = candidates as IReadOnlyList<string> ?? candidates.ToList();
 
             if (string.IsNullOrWhiteSpace(query))
+            {
+                return lines;
+            }
+
+            // N39/BP-53: when the cached availability is false, return the unfiltered list WITHOUT
+            // spawning fzf (today every keystroke attempted p.Start() -> Win32Exception + a
+            // `fzf filter failed` log when fzf is missing).
+            if (_availability == false)
             {
                 return lines;
             }
@@ -230,11 +240,40 @@ namespace Telescope.Filter
             }
         }
 
+        /// <summary>
+        /// Quotes a single argument for the Windows command line (N45/BP-59). Backslashes are
+        /// literal unless they precede a quote: a backslash run immediately before a quote is
+        /// doubled, then the quote is escaped with one more backslash. Trailing backslashes are
+        /// doubled before the closing quote. net472-compatible (no
+        /// <c>ProcessStartInfo.ArgumentList</c>).
+        /// </summary>
         internal static string QuoteArg(string value)
         {
-            string escaped = value.Replace("\"", "\\\"");
-            int trailing = escaped.Length - escaped.TrimEnd('\\').Length;
-            return "\"" + escaped + new string('\\', trailing) + "\"";
+            var sb = new StringBuilder(value.Length + 2);
+            sb.Append('"');
+            int backslashes = 0;
+            foreach (char c in value)
+            {
+                if (c == '\\')
+                {
+                    backslashes++;
+                }
+                else if (c == '"')
+                {
+                    sb.Append('\\', backslashes * 2 + 1);
+                    sb.Append('"');
+                    backslashes = 0;
+                }
+                else
+                {
+                    sb.Append('\\', backslashes);
+                    sb.Append(c);
+                    backslashes = 0;
+                }
+            }
+            sb.Append('\\', backslashes * 2);
+            sb.Append('"');
+            return sb.ToString();
         }
     }
 }

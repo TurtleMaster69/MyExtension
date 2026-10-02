@@ -281,15 +281,19 @@ namespace MyExtension.Package
         /// (the read/write source of truth from the find-references engine) is public in older Roslyn
         /// but internal in Roslyn 4.14+ (VS 17.14) — the property name is stable across both, so it is
         /// read via reflection, mirroring the extension's VsVim interop pattern. False on any failure.
+        /// N27/BP-51: the <see cref="System.Reflection.PropertyInfo"/> is resolved once per type
+        /// (static cache) instead of per reference location.
         /// </summary>
+        private static readonly System.Reflection.PropertyInfo? IsWrittenToProperty =
+            typeof(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation).GetProperty(
+                "IsWrittenTo",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
         public static bool IsWriteLocation(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation loc)
         {
             try
             {
-                var property = typeof(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation).GetProperty(
-                    "IsWrittenTo",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-                return property != null && property.GetValue(loc, null) is bool b && b;
+                return IsWrittenToProperty != null && IsWrittenToProperty.GetValue(loc, null) is bool b && b;
             }
             catch
             {

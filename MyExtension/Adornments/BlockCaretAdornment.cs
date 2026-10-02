@@ -77,6 +77,13 @@ namespace MyExtension.Adornments
                 }
                 _active = value;
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}block-caret active={_active}");
+                if (!_active)
+                {
+                    // N4: deactivation must remove OUR adornment. Update() early-returns when
+                    // inactive (the hot-path guard), so without this the block would persist and
+                    // the `block-caret active=False` diagnostic would lie.
+                    _layer.RemoveAdornmentsByTag(AdornmentTag);
+                }
                 Update();
             }
         }

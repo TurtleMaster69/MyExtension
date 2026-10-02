@@ -100,7 +100,7 @@ namespace Telescope.Finders
                 _ => "INFO",
             };
             string file = Path.GetFileName(issue.FilePath);
-            string display = $"[{marker}] line {issue.LineNumber}: {issue.Text} — {file}";
+            string display = $"[{marker}] line {issue.LineNumber}: {SanitizeDisplay(issue.Text)} — {file}";
             return new FinderEntry(display, issue);
         }
 
@@ -122,6 +122,22 @@ namespace Telescope.Finders
         }
 
         protected override string OpenErrorNoun => "issue";
+
+        /// <summary>Max length of the issue text embedded in a result row (N42/BP-56).</summary>
+        private const int MaxDisplayTextLength = 200;
+
+        /// <summary>
+        /// Sanitizes an Error List description for a single result row: control characters become
+        /// spaces (so a multi-line description cannot break fzf/ResultMapper or the results TextBox)
+        /// and the text is bounded (N42/BP-56).
+        /// </summary>
+        private static string SanitizeDisplay(string? text)
+        {
+            string sanitized = DiagnosticLog.SanitizeText(text);
+            return sanitized.Length > MaxDisplayTextLength
+                ? sanitized.Substring(0, MaxDisplayTextLength)
+                : sanitized;
+        }
 
         private void CollectTodos(string path, List<CodeIssue> issues)
         {

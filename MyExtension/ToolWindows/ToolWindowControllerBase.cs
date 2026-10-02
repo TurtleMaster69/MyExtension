@@ -15,6 +15,10 @@ namespace MyExtension.ToolWindows
         protected readonly ToolWindowType _type;
         protected bool _isInputMode;
 
+        // N62: the action-key table + its TryMove lookup are single-sourced here; subclasses
+        // populate _actions and only override TryMove when they need custom routing.
+        protected readonly Dictionary<Keys, Func<bool>> _actions = new Dictionary<Keys, Func<bool>>();
+
         protected ToolWindowControllerBase(ToolWindowType type)
         {
             _type = type;
@@ -42,8 +46,18 @@ namespace MyExtension.ToolWindows
         protected virtual void OnModeChanged() { }
 
         /// <summary>Shared vim text-motion action wiring for the focused text surface (search box /
-        /// text-input window): routes the key through <see cref="TextMotionHelper.TryMoveFocusedSurface"/>.</summary>
-        protected Func<bool> TextMotion(Keys key) => () => TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode);
+        /// text-input window): routes the key through <see cref="TextMotionHelper.TryMoveFocusedSurface"/>.
+        /// N21: an a/A/I insert placement enters input mode through <see cref="EnterInputMode"/> so
+        /// the mode-change side effects (caret restyle) fire — never by mutating the flag directly.</summary>
+        protected Func<bool> TextMotion(Keys key) => () =>
+        {
+            bool handled = TextMotionHelper.TryMoveFocusedSurface(key, out bool enteredInputMode);
+            if (handled && enteredInputMode)
+            {
+                EnterInputMode();
+            }
+            return handled;
+        };
 
         /// <summary>
         /// Adds the shared w/b/e vim text-motion action wiring to <paramref name="actions"/> (m16 —
@@ -56,8 +70,11 @@ namespace MyExtension.ToolWindows
             actions[Keys.E] = TextMotion(Keys.E);
         }
 
-        public abstract bool TryMove(Keys key);
+        public virtual bool TryMove(Keys key)
+        {
+            return _actions.TryGetValue(key, out var action) && action();
+        }
 
-        public abstract IReadOnlyCollection<Keys> ActionKeys { get; }
+        public virtual IReadOnlyCollection<Keys> ActionKeys => _actions.Keys;
     }
 }

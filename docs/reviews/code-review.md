@@ -68,7 +68,7 @@ The other sharp edges cluster into: (1) the **Vim buffer-subscription lifecycle*
 | N52 | minor | `tools/harness/test-e2e.ps1:716-731,800-815` | `neovisual-explorer-open`/`-open-o` use a "try l/j/Enter until ANY file opens" loop — order-dependent, doesn't pin WHICH file opens |
 | N53 | minor | `tools/harness/test-e2e.ps1:1080-1083` | `neovisual-editor-insert` updates the seed-expected copy in a `finally`, so even a FAILED marker assertion records the wrong content as expected |
 | N54 | minor | `docs/reviews/architecture-review.md:269,284,313,318,395` | F1/F16/F45 still presented as open with no FIXED annotation (all fixed per `docs/progress.md`) |
-| N55 | minor | `docs/reviews/code-review.md:66` | R50's premise is no longer true — `architecture-review.md:263` now uses the post-restructure names |
+| N55 | minor | `docs/reviews/code-review.md:9,188` | The prior-review docs-drift reference is stale — `architecture-review.md:263` now uses the post-restructure names |
 | N56 | nit | `MyExtension/Input/Utils/KeybindingConfig.cs:75` | `Load`/`LoadDefaults`/`LoadFromJson` are three near-identical methods each building the merge prologue |
 | N57 | nit | `MyExtension/Hooks/GlobalKeyboardHook.cs:6` (+ `TelescopeLauncher.cs:5`, `MyExtensionPackage.cs:8`) | Unused `using System.Diagnostics;` |
 | N58 | nit | `MyExtension/Hooks/GlobalKeyboardHook.cs:66` | Ctor inlines `NeoVisualLog.Log($"{DiagnosticLog.Hook}starting")` instead of the `Log()` helper that prepends the prefix |

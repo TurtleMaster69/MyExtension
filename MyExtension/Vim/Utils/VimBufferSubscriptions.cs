@@ -68,11 +68,15 @@ namespace MyExtension.Vim
             }
             object? buffer = _map.TryGetValue(view, out var b) ? b : null;
             _map.Remove(view);
-            if (buffer != null && _closedSubscribed.Remove(buffer))
+            if (buffer == null)
             {
-                return DecrementRefCount(buffer);
+                return false;
             }
-            return false;
+            // N3: decrement regardless of _closedSubscribed membership — a shared-text-buffer
+            // second view is never Closed-subscribed (VimModeSource early-returns before
+            // MarkClosedSubscribed), so its refcount would otherwise be stuck at 1.
+            _closedSubscribed.Remove(buffer);
+            return DecrementRefCount(buffer);
         }
 
         /// <summary>Returns the buffer <paramref name="view"/> is subscribed to, or null.</summary>
@@ -127,6 +131,8 @@ namespace MyExtension.Vim
                 if (count <= 1)
                 {
                     _textBufferRefCounts.Remove(textBuffer);
+                    // N3: drop the buffer->textBuffer entry at refcount 0 (no per-session leak).
+                    _bufferToTextBuffer.Remove(buffer);
                     return true;
                 }
                 _textBufferRefCounts[textBuffer] = count - 1;

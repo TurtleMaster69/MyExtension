@@ -249,6 +249,25 @@ function Get-ActiveDocumentPath([int]$devenvPid) {
     return ''
 }
 
+function Get-LastLogMatch([string]$logPath, [string]$pattern) {
+    # N52: return the first capture group of the LAST line matching $pattern (harness-only). Used to
+    # pin the exact path a diagnostic reported (e.g. `solution-explorer select file=<path>`) so the
+    # explorer-open scenarios assert WHICH file opens, not "ANY file".
+    if (-not (Test-Path $logPath)) { return '' }
+    $m = ''
+    $fs = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $reader = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8, $true, 1024, $true)
+        try {
+            while (-not $reader.EndOfStream) {
+                $ln = $reader.ReadLine()
+                if ($null -ne $ln -and $ln -match $pattern) { $m = $Matches[1] }
+            }
+        } finally { $reader.Dispose() }
+    } finally { $fs.Dispose() }
+    return $m
+}
+
 function Focus-SolutionExplorer([int]$devenvPid) {
     # A successful `o`/Enter moves keyboard focus to the opened document, so a walk loop cannot keep
     # navigating the tree. Re-focus the Solution Explorer tree with the native command the controller
@@ -515,7 +534,11 @@ Register-Scenario 'telescope-open' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
     Open-Telescope $vs $logPath
-    Assert-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 'prompt focused in insert mode'
+    # N9: the helper's own wait line ('Focus prompt => True, mode=insert') must NOT satisfy this
+    # gate. Send an explicit Escape in insert mode and assert the fresh post-tap line the helper
+    # does NOT confirm — a re-introduced prompt-focus/mode bug fails here.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc handled in insert mode (fresh post-tap line)'
     Close-Telescope $vs $logPath
 }
 
@@ -540,16 +563,17 @@ Register-Scenario 'telescope-navigate' {
     Open-Telescope $vs $logPath
     Assert-OverlayFocused $vs
 
+    # N9: the helper's own wait line ('open finder=Files') must NOT satisfy this gate. Send an
+    # explicit Escape in insert mode and assert the fresh post-tap line the helper does NOT confirm.
+    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode (fresh post-tap line)'
+
     # Sanity: the scratch solution must expose several files, otherwise this scenario is vacuous.
-    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Files candidates=(\d+)" 'overlay listed candidates'
     $cand = 0
     $lines = Get-Content $logPath
     foreach ($ln in $lines) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 4) { throw "expected >=4 candidate files for navigation, found $cand" }
 
-    # Insert -> normal, then j moves down one file at a time across multiple results.
-    Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
-    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode'
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200              # j
     Assert-NewLogLine $logPath 'results count=(\d+) selected=1' 'j moved selection to 1'
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200              # j again
@@ -567,8 +591,9 @@ Register-Scenario 'telescope-navigate' {
     Assert-NewLogLine $logPath 'results count=(\d+) selected=0' 'gg moved selection back to the first entry'
 
     # i returns to INSERT (search) mode: the prompt becomes editable and typing filters again.
+    $idxBeforeI = Get-LogCacheIndex $logPath
     Send-Tap $script:VkI; Start-Sleep -Milliseconds 300              # i
-    Assert-NewLogLine $logPath 'Focus prompt => True, mode=insert' 'i returned to insert (search) mode'
+    Assert-NewLogLineAfter $logPath $idxBeforeI 'Focus prompt => True, mode=insert' 'i returned to insert (search) mode'
     Send-Text 'alpha'
     Assert-NewLogLine $logPath "promptChanged query='alpha'" 'typing after i filtered results again'
     Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'alpha matched exactly one file'
@@ -580,10 +605,12 @@ Register-Scenario 'telescope-mode' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
     Open-Telescope $vs $logPath
-    Assert-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 'starts in insert mode'
     Assert-OverlayFocused $vs
+    # N9: the helper's own wait line ('Focus prompt => True, mode=insert') must NOT satisfy this
+    # gate. Send an explicit Escape in insert mode and assert the fresh post-tap line the helper
+    # does NOT confirm — a re-introduced prompt-focus/mode bug fails here.
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
-    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc handled in insert mode'
+    Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc handled in insert mode (fresh post-tap line)'
     # R5: snapshot the log index BEFORE the i/a tap so the assertion can only be satisfied by a NEW
     # 'Focus prompt => True, mode=insert' emitted by the tap itself — not the Open-Telescope line
     # (Reset-LogBaseline runs before Open-Telescope, so the Open-Telescope line is inside the
@@ -697,7 +724,10 @@ Register-Scenario 'neovisual-explorer-toggle' {
 }
 
 # --- neovisual-explorer-open --------------------------------------------
-# In Solution Explorer, l expands a collapsed folder, h collapses it, and Enter opens a file.
+# In Solution Explorer, Enter opens the selected file. N52: pin WHICH file opens — `g`
+# deterministically selects the FIRST source file under the project (programmatic UIHierarchy
+# select, no order-dependent l/j walk) and logs its full path; Enter then opens that exact
+# selected item. Assert the specific path, not "ANY file".
 Register-Scenario 'neovisual-explorer-open' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
@@ -706,32 +736,21 @@ Register-Scenario 'neovisual-explorer-open' {
     # Ensure Solution Explorer is open and focused (toggle until the open log appears).
     Ensure-SolutionExplorerOpen $vs $logPath
 
-    # Walk the tree: expand (l), step down (j), and try Enter; repeat until Enter opens something.
-    # The tree is solution -> project -> files, so several expand+down steps are needed. The success
-    # signal is Enter routed (`solution-explorer open`) AND the editor gaining focus right after the
-    # key (a NEW `vim-mode=`/`editor-view-opened` line) — NOT the old new-text-view-only
-    # `editor-view-opened` gate, which false-failed when VS REUSED an already-open tab. A tree action
-    # never focuses the editor, so a genuinely FAILED Enter (no open) still fails.
-    $openedView = $false
-    for ($step = 0; $step -lt 8 -and -not $openedView; $step++) {
-        # A previous Enter may have moved focus to the opened document; re-focus the tree so l/j
-        # reach it (same pattern as neovisual-explorer-open-o).
-        Focus-SolutionExplorer $vs.Id
-        Start-Sleep -Milliseconds 250
-        Send-Tap $script:VkL; Start-Sleep -Milliseconds 250   # l -> expand current fold
-        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 250   # j -> move into the next node
-        Assert-VsFocused $vs 'explorer open (Enter)'   # F16: keys must land in the VS instance
-        $preKey = Get-LogCacheIndex $logPath
-        Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 400
-        # Success = Enter routed (`solution-explorer open`) AND the editor gained focus right after
-        # the key (a NEW `vim-mode=`/`editor-view-opened` line after the snapshot). See open-o for
-        # the rationale (view-independent; detects reuse of an already-open tab).
-        if ((Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)solution-explorer open" 1500) -and
-            (Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)(vim-mode=|editor-view-opened)" 3000)) { $openedView = $true }
-    }
-    if (-not $openedView) { throw 'could not open a file from Solution Explorer (Enter was not routed, or the editor never took focus)' }
+    # g -> deterministically select + open the first source file; capture its full path.
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer select file=(.+\.cs)" 'g selected the first source file'
+    $selected = Get-LastLogMatch $logPath "$($script:PfxNeo)solution-explorer select file=(.+\.cs)"
+    if (-not $selected) { throw 'g did not log a selected source file path' }
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=$([regex]::Escape($selected))" 'g opened the selected source file'
+
+    # Enter -> open the selected item; pin WHICH file (the same path g selected).
+    Assert-VsFocused $vs 'explorer open (Enter)'
+    $preKey = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)solution-explorer open" 'Enter fired solution-explorer open'
+    $active = Wait-ActiveDocumentMatch $vs.Id ([regex]::Escape($selected)) 3000
+    if (-not $active) { throw "Enter did not open the selected file: $selected" }
     Assert-NoEnterStorm $logPath 'neovisual-explorer-open'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'Enter fired solution-explorer open'
 }
 
 # --- neovisual-explorer-collapse ----------------------------------------
@@ -783,6 +802,9 @@ Register-Scenario 'neovisual-explorer-add' {
 # --- neovisual-explorer-open-o ------------------------------------------
 # In Solution Explorer the o key opens the selected item (the same action as Enter, per the
 # SolutionExplorerController action keys — covers Run_SolutionExplorer_ActionKeys' o branch).
+# N52: pin WHICH file opens — `g` deterministically selects the FIRST source file under the
+# project (programmatic UIHierarchy select, no order-dependent l/j walk) and logs its full path;
+# `o` then opens that exact selected item. Assert the specific path, not "ANY file".
 Register-Scenario 'neovisual-explorer-open-o' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
@@ -790,33 +812,21 @@ Register-Scenario 'neovisual-explorer-open-o' {
     Assert-VsFocused $vs 'explorer open (o)'
     Ensure-SolutionExplorerOpen $vs $logPath
 
-    # Walk the tree exactly like neovisual-explorer-open but open with o instead of Enter. The
-    # success signal is `o` routed (`solution-explorer open`) AND the editor gaining focus right after
-    # the key (a NEW `vim-mode=`/`editor-view-opened` line) — NOT the old new-text-view-only
-    # `editor-view-opened` gate, which false-failed deterministically once the walk reached an
-    # already-open item (VS reused the tab). A tree action (move/expand) never focuses the editor, so
-    # a genuinely FAILED `o` (no open at all) still fails.
-    $openedView = $false
-    for ($step = 0; $step -lt 8 -and -not $openedView; $step++) {
-        # A previous `o` may have moved focus to the opened document; re-focus the tree so l/j reach it.
-        Focus-SolutionExplorer $vs.Id
-        Start-Sleep -Milliseconds 250
-        Send-Tap $script:VkL; Start-Sleep -Milliseconds 250   # l -> expand current fold
-        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 250   # j -> move into the next node
-        Assert-VsFocused $vs 'explorer open (o)'       # F16: keys must land in the VS instance
-        $preKey = Get-LogCacheIndex $logPath
-        Send-Tap $script:VkO; Start-Sleep -Milliseconds 400   # o -> open
-        # Success = o routed (existing `solution-explorer open` diagnostic) AND the editor GAINED
-        # FOCUS right after the key (a NEW `vim-mode=`/`editor-view-opened` line after the snapshot).
-        # The focus line is view-independent — it also fires when VS REUSES an already-open tab,
-        # which is what the old editor-view-opened-only gate false-failed on — and a tree action
-        # never focuses the editor. A genuinely FAILED o (not routed / never opens anything) fails.
-        if ((Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)solution-explorer open" 1500) -and
-            (Wait-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)(vim-mode=|editor-view-opened)" 3000)) { $openedView = $true }
-    }
-    if (-not $openedView) { throw 'could not open a file from Solution Explorer with o (o was not routed, or the editor never took focus)' }
+    # g -> deterministically select + open the first source file; capture its full path.
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer select file=(.+\.cs)" 'g selected the first source file'
+    $selected = Get-LastLogMatch $logPath "$($script:PfxNeo)solution-explorer select file=(.+\.cs)"
+    if (-not $selected) { throw 'g did not log a selected source file path' }
+    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=$([regex]::Escape($selected))" 'g opened the selected source file'
+
+    # o -> open the selected item; pin WHICH file (the same path g selected).
+    Assert-VsFocused $vs 'explorer open (o)'
+    $preKey = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkO; Start-Sleep -Milliseconds 800   # o -> open
+    Assert-NewLogLineAfter $logPath $preKey "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
+    $active = Wait-ActiveDocumentMatch $vs.Id ([regex]::Escape($selected)) 3000
+    if (-not $active) { throw "o did not open the selected file: $selected" }
     Assert-NoEnterStorm $logPath 'neovisual-explorer-open-o'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
 }
 
 # --- neovisual-explorer-move --------------------------------------------
@@ -1061,26 +1071,20 @@ Register-Scenario 'neovisual-editor-insert' {
 
     $probeDir = Join-Path (Join-Path $env:TEMP 'telescope_scratch') 'Probe'
     $file = Join-Path $probeDir 'Beta.cs'
-    # This scenario INTENTIONALLY writes Beta.cs (the Space+W save above). Record the observed
-    # post-save content as the expected RESULT **in a finally** — i.e. atomically with the write,
-    # before any assertion can throw. This keeps the no-ignorelist seed-leak guard coupled to the
-    # ACTUAL write rather than to this scenario's success: if this scenario flakes (its own
-    # known-RED marker assertion throws), seed-leak must still see the expected post-save content,
-    # not a stale bootstrap copy. Any OTHER or LATER change to any seed (including Beta.cs) still
-    # fails at seed-leak.
-    try {
-        if (-not (Test-Path $file)) { throw "editor file missing: $file" }
-        $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
-        if (-not $content) { throw 'editor file is empty after save' }
-        if (-not $content.Contains($marker)) {
-            $preview = if ($content.Length -gt 200) { $content.Substring(0, 200) } else { $content }
-            throw "typed text was swallowed/not inserted (file lacks marker '$marker'). Content: $preview"
-        }
-        Write-Pass "typed text reached the editor (file contains '$marker')"
-    } finally {
-        $scratchRoot = Split-Path $probeDir -Parent
-        Update-SeedExpected $scratchRoot (Join-Path $logDir 'seed-expected') 'Probe\Beta.cs'
+    # This scenario INTENTIONALLY writes Beta.cs (the Space+W save above). N53: record the observed
+    # post-save content as the expected RESULT ONLY on success — a FAILED marker assertion must NOT
+    # record the wrong content as expected (that would mask the failure at seed-leak). On failure the
+    # expected copy stays the bootstrap content, so seed-leak still catches the unvalidated write.
+    if (-not (Test-Path $file)) { throw "editor file missing: $file" }
+    $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
+    if (-not $content) { throw 'editor file is empty after save' }
+    if (-not $content.Contains($marker)) {
+        $preview = if ($content.Length -gt 200) { $content.Substring(0, 200) } else { $content }
+        throw "typed text was swallowed/not inserted (file lacks marker '$marker'). Content: $preview"
     }
+    Write-Pass "typed text reached the editor (file contains '$marker')"
+    $scratchRoot = Split-Path $probeDir -Parent
+    Update-SeedExpected $scratchRoot (Join-Path $logDir 'seed-expected') 'Probe\Beta.cs'
 }
 
 # --- neovisual-textinput-motions -----------------------------------------

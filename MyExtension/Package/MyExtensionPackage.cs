@@ -5,7 +5,6 @@ using MyExtension.ToolWindows;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Design;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -98,7 +97,7 @@ namespace MyExtension.Package
                             () => ((System.IServiceProvider)this).GetService(typeof(Microsoft.VisualStudio.TextManager.Interop.SVsTextManager))
                                 as Microsoft.VisualStudio.TextManager.Interop.IVsTextManager,
                             () => VsServices.Mef<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>(this));
-                        _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)!));
+                        _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)!, fileCache));
                         _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this)!, fileCache));
                         _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this)!, fileCache));
                         _telescope.RegisterFinder(new ReferencesFinder(
@@ -165,7 +164,14 @@ namespace MyExtension.Package
                     {
                         // m8: the package's _launcher (constructed once in the "telescope" step) is
                         // injected through the hook into InputHandler — no second TelescopeLauncher.
-                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager, _launcher!);
+                        // N69: a failed telescope step leaves _launcher null; fail the hook step with
+                        // a clear message (logged as `[MyExtension] init hook failed: ...`) instead
+                        // of crashing with an ArgumentNullException.
+                        if (_launcher == null)
+                        {
+                            throw new InvalidOperationException("Telescope launcher was not initialized.");
+                        }
+                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager, _launcher);
                         return Task.CompletedTask;
                     }),
                     ("command", () => RegisterTelescopeCommandAsync(cancellationToken)),

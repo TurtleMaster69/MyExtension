@@ -479,23 +479,6 @@ namespace Telescope.Tests
             }
         }
 
-        public static void Run_PaneFailureTracker_RetryAfterFailure()
-        {
-            // m51: a transient pane-init failure must not permanently disable the pane. The retry
-            // latch (extracted from NeoVisualLog.EnsurePane's _paneInitTried) must allow a later
-            // call to retry after a recorded failure.
-            // RED: `PaneFailureTracker.ShouldRetry()` / `RecordAttempt()` do not exist yet ->
-            //      compile error (CS0117) — the tracker today only has the one-time ShouldEmit().
-            var tracker = new PaneFailureTracker();
-
-            // A pane-init attempt fails (EnsurePane's CreatePane throws) — record the failure.
-            tracker.RecordAttempt();
-
-            // After a recorded failure the tracker must say a retry is warranted (the pane is not
-            // permanently disabled).
-            Assert.True(tracker.ShouldRetry(), "after a recorded failure, ShouldRetry() must return true");
-        }
-
         public static void Run_FzfFilter_FilterMatchesPrefix()
         {
             // m57: hermetic fzf stub — no fzf-on-PATH Mystery Guest. The stub mimics
@@ -653,12 +636,24 @@ namespace Telescope.Tests
             Assert.Equal("\"\"", FzfFilter.QuoteArg(""));
         }
 
+        public static void Run_FzfFilter_QuoteArg_BackslashBeforeQuote()
+        {
+            // N45 (BP-59): a backslash run immediately BEFORE a quote (in the middle of the string)
+            // must be doubled, then the quote escaped (Windows argv rules). RED today: the odd
+            // backslash before the quote is lost — QuoteArg(@"C:\"") returns "C:\\"" instead of
+            // "C:\\\"".
+            Assert.Equal("\"C:\\\\\\\"\"", FzfFilter.QuoteArg("C:\\\""));
+            Assert.Equal("\"a\\\\\\\"b\"", FzfFilter.QuoteArg("a\\\"b"));
+            // The trailing-backslash path must not regress (the existing test also pins it).
+            Assert.Equal("\"foo\\\\\"", FzfFilter.QuoteArg("foo\\"));
+        }
+
         public static void Run_FzfFilter_IsAvailableFalseForMissingPath()
         {
             using (var dir = new TempDir())
             {
                 var fzf = new FzfFilter(Path.Combine(dir.Path, "missing-fzf.exe"));
-                Assert.False(fzf.IsAvailable(), "a missing fzf path must report unavailable");
+                Assert.False(fzf.IsAvailableAsync().GetAwaiter().GetResult(), "a missing fzf path must report unavailable");
             }
         }
 
@@ -670,7 +665,7 @@ namespace Telescope.Tests
                 File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
 
                 var fzf = new FzfFilter(cmdPath);
-                bool available = fzf.IsAvailable();
+                bool available = fzf.IsAvailableAsync().GetAwaiter().GetResult();
 
                 // R47 (BP-45): the wall-clock bound (`sw.Elapsed < 3s`) is GONE — it was flaky on a
                 // slow CI machine. The deterministic assertion is the outcome: a hung fzf --version
@@ -678,6 +673,33 @@ namespace Telescope.Tests
                 // the probe can never hang the caller). The bound is verified by the internal
                 // timeout constant, not by a wall-clock read in the test.
                 Assert.False(available, "a hung fzf must report unavailable");
+            }
+        }
+
+        public static void Run_FzfFilter_FilterAsyncSkipsSpawnWhenUnavailable()
+        {
+            // N39 (BP-53): FilterAsync must check the cached availability and return the unfiltered
+            // list WITHOUT spawning when fzf is unavailable — today every keystroke attempts
+            // p.Start() -> Win32Exception + a `fzf filter failed` log. RED today: the failure log
+            // is emitted even though IsAvailable() already cached false.
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var fzf = new FzfFilter(Path.Combine(dir.Path, "missing-fzf.exe"));
+                    Assert.False(fzf.IsAvailableAsync().GetAwaiter().GetResult(), "a missing fzf path must report unavailable (cached)");
+
+                    var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None)
+                        .GetAwaiter().GetResult();
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha"), "unavailable fzf returns the unfiltered list");
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.False(content.Contains("fzf filter failed:"),
+                        "FilterAsync must not spawn fzf when the cached availability is false (no per-keystroke failure log)");
+                });
             }
         }
 
@@ -844,14 +866,16 @@ namespace Telescope.Tests
         public static void Run_CaretPlacement_EnumValues()
         {
             var names = Enum.GetNames(typeof(CaretPlacement));
-            Assert.Equal(3, names.Length);
+            Assert.Equal(4, names.Length);
             Assert.True(names.Contains("Current"), "Current member exists");
             Assert.True(names.Contains("End"), "End member exists");
             Assert.True(names.Contains("Start"), "Start member exists");
+            Assert.True(names.Contains("AfterCaret"), "AfterCaret member exists");
             // n2: pin the enum VALUES (declaration order in OverlayKeyHandler.cs:51-56).
             Assert.Equal(0, (int)CaretPlacement.Current);
             Assert.Equal(1, (int)CaretPlacement.End);
             Assert.Equal(2, (int)CaretPlacement.Start);
+            Assert.Equal(3, (int)CaretPlacement.AfterCaret);
         }
 
         // ================================================================
@@ -1218,6 +1242,28 @@ namespace Telescope.Tests
             Assert.Equal(2, n.LineNumber);
         }
 
+        public static void Run_TextMotionNavigator_DownAtLastLineNoOp()
+        {
+            // N66 (BP-62): Down() on the last line must stay at the last position (no-op), not
+            // jump to _text.Length. RED today: Down() moves the caret to _text.Length.
+            var n = new TextMotionNavigator();
+            n.SetText("abc\ndef");
+            n.MoveTo(5); // on the last line ("def"), caret at 'e'
+            n.Down();
+            Assert.Equal(5, n.Caret);
+        }
+
+        public static void Run_TextMotionNavigator_UpAtFirstLineNoOp()
+        {
+            // N66 (BP-62): Up() on the first line must stay put, not jump to 0. RED today: Up()
+            // moves the caret to 0.
+            var n = new TextMotionNavigator();
+            n.SetText("abc\ndef");
+            n.MoveTo(1); // first line, caret at 'b'
+            n.Up();
+            Assert.Equal(1, n.Caret);
+        }
+
         // ================================================================
         // PromptMotionRouter — prompt/preview motion routing seam (M1/m52)
         // RED: `PromptMotionRouter` does not exist yet -> compile error (CS0246)
@@ -1235,10 +1281,12 @@ namespace Telescope.Tests
             // -> compile error (CS0246).
             CaretPlacement? placement;
 
-            // a (bare) -> InsertAfter, placement Current.
+            // a (bare) -> InsertAfter, placement AfterCaret (N31/BP-44: a inserts AFTER the caret,
+            // distinct from i's Current). RED today: PromptMotionRouter maps bare a to Current and
+            // CaretPlacement.AfterCaret does not exist -> compile error.
             Assert.False(PromptMotionRouter.ShouldConsume(Key.A, false, out placement),
                 "bare a is an insert placement, not a prompt motion");
-            Assert.Equal(CaretPlacement.Current, placement);
+            Assert.Equal(CaretPlacement.AfterCaret, placement);
 
             // A (shift) -> InsertEnd, placement End.
             Assert.False(PromptMotionRouter.ShouldConsume(Key.A, true, out placement),
@@ -1913,6 +1961,17 @@ namespace Telescope.Tests
             Assert.True(str.Text.Contains("line1"), "verbatim string spans lines");
         }
 
+        public static void Run_Syntax_InterpolatedVerbatimString()
+        {
+            // N67 (BP-63): $@"..." (interpolated verbatim) must tokenize as a String. RED today:
+            // the '$' + '"' branch misses it (next is '@', not '"'), so '$' renders as Default and
+            // the string starts at '@'.
+            var segs = SyntaxHighlighter.Tokenize("var s = $@\"line1\nline2\";");
+            var str = segs.FirstOrDefault(s => s.Category == SyntaxCategory.String);
+            Assert.True(str.Text.StartsWith("$@\""), $"interpolated verbatim string captured, got '{str.Text}'");
+            Assert.True(str.Text.Contains("line1"), "interpolated verbatim string spans lines");
+        }
+
         public static void Run_Syntax_Numbers()
         {
             var segs = SyntaxHighlighter.Tokenize("var x = 42; var y = 0xFF; var z = 1.5e3; var f = 100L;");
@@ -1994,16 +2053,19 @@ namespace Telescope.Tests
 
         public static void Run_PreviewDocumentCache_UnchangedMtimeSkipsRebuild()
         {
-            // R2 (BP-2): the preview rebuilds the whole FlowDocument + LineIndex + line pointers +
-            // ScrollToHome() on every selection change — only the TOKENIZATION is mtime-cached
-            // (PreviewTokenCache). The fix adds a pure PreviewDocumentCache seam (mtime-keyed
-            // "content changed?" decision) and gates the WPF PreviewRenderer.SetContent rebuild on
-            // it. This test pins the mtime-keyed decision: an unchanged mtime must NOT re-run the
-            // (document) build.
+            // R2 (BP-2) + N33/BP-46: the preview rebuilds the whole FlowDocument + LineIndex + line
+            // pointers + ScrollToHome() on every selection change — only the TOKENIZATION is
+            // mtime-cached (PreviewTokenCache). The rebuild decision is now served from the
+            // surviving PreviewTokenCache (ShouldRebuild), which subsumes the deleted
+            // PreviewDocumentCache. This test pins the mtime-keyed decision: an unchanged mtime
+            // must NOT re-run the (document) build.
             var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            var cache = new PreviewDocumentCache(timestamp: _ => fixedTime);
+            var cache = new PreviewTokenCache(
+                timestamp: _ => fixedTime,
+                contentReader: _ => "int x = 1; // c");
 
             Assert.True(cache.ShouldRebuild("a.cs"), "first call must rebuild (no cached mtime)");
+            cache.GetSegments("a.cs", SyntaxHighlighter.Tokenize);
             Assert.False(cache.ShouldRebuild("a.cs"), "unchanged mtime must skip the rebuild");
         }
 
@@ -2497,20 +2559,24 @@ namespace Telescope.Tests
 
         public static void Run_FileContentCache_EvictsOldest()
         {
-            // M13: with a maxEntries cap, inserting N+1 entries must evict the least-recently-used
-            // (oldest) entry. RED today: the cap is stored but no eviction happens, so the oldest
-            // entry is still served from the cache.
+            // M13 / N8 (BP-8): with a maxEntries cap, inserting N+1 entries must evict the
+            // least-recently-used (oldest) entry. The timestamp is a per-PATH STABLE value (not
+            // DateTime.UtcNow, which can share a key across a ~15ms clock tick and flake; not a
+            // per-CALL counter, which would make the re-read always miss and the assertion vacuous).
             int reads = 0;
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var index = new Dictionary<string, int> { ["a"] = 0, ["b"] = 1, ["c"] = 2 };
             var cache = new FileContentCache(
                 maxEntries: 2,
-                timestamp: _ => DateTime.UtcNow,
+                timestamp: p => fixedTime.AddSeconds(index[p]),
                 reader: _ => { reads++; return new[] { "line" }; });
 
             cache.GetLines("a");
             cache.GetLines("b");
             cache.GetLines("c"); // cap 2 exceeded -> the oldest ("a") must be evicted
 
-            // Re-reading the evicted oldest entry must hit the reader again (cache miss).
+            // Re-reading the evicted oldest entry must hit the reader again (cache miss). With
+            // eviction removed, "a" would still be cached (same stable timestamp) and this fails.
             int before = reads;
             cache.GetLines("a");
             Assert.Equal(before + 1, reads);
@@ -2651,10 +2717,11 @@ namespace Telescope.Tests
 
         public static void Run_FilterFailureLog_Format()
         {
-            // m14: Format() must return the UNPREFIXED message ("filter failed: boom"); the caller
-            // (TelescopeOverlay) adds the [Telescope] prefix via TelescopeLog.Log. RED today: the
-            // format embeds the "[Telescope] " prefix, so this exact-match assertion fails.
-            Assert.Equal("filter failed: boom", FilterFailureLog.Format(new Exception("boom")));
+            // N41/N63 (BP-55): Format() must return the PREFIXED line so a wrong logger cannot
+            // silently break the `filter failed:` contract; the caller switches to
+            // NeoVisualLog.Log (which adds no prefix) so the prefix is emitted exactly once.
+            // RED today: Format() returns the unprefixed "filter failed: boom".
+            Assert.Equal("[Telescope] filter failed: boom", FilterFailureLog.Format(new Exception("boom")));
         }
 
         // ================================================================
@@ -2715,19 +2782,6 @@ namespace Telescope.Tests
             var items = new ResultMapper().MapBack(new[] { "Ghost.cs" }, snapshot);
 
             Assert.Equal(0, items.Count);
-        }
-
-        public static void Run_ResultMapper_UnknownStringSkippedOrLogged()
-        {
-            // M11: an unmatched display string does not produce a null-payload entry that silently
-            // no-ops. RED today: the null-payload entry is produced (Payload == null).
-            var a = new FileHit(@"C:\p\Alpha.cs", 0);
-            var snapshot = new List<FinderEntry> { new FinderEntry("Alpha.cs", a) };
-
-            var items = new ResultMapper().MapBack(new[] { "Ghost.cs" }, snapshot);
-
-            Assert.True(items.All(i => i.Payload != null),
-                "no null-payload entry is produced for an unmatched display string");
         }
 
         public static void Run_ResultMapper_OrderPreserved()
@@ -2802,6 +2856,23 @@ namespace Telescope.Tests
             Assert.Equal(0, first.Count);
             Assert.Equal(0, second.Count);
             Assert.Equal(1, count);
+        }
+
+        public static void Run_ProjectFileCache_ExpiresAfterTtl()
+        {
+            // N44/BP-58: a cached project-file list must expire after a bounded TTL so files
+            // added/removed within a solution are picked up. RED today: the cache is invalidated
+            // only on solution-name change, so the stale list is served forever.
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var cache = new ProjectFileCache(() => now, TimeSpan.FromSeconds(5));
+            var list = new List<string> { @"C:\p\A.cs" };
+            int count = 0;
+
+            cache.Get(() => { count++; return list; });
+            now = now.AddSeconds(6); // past the TTL
+            cache.Get(() => { count++; return list; });
+
+            Assert.Equal(2, count);
         }
 
         // ================================================================

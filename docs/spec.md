@@ -118,7 +118,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Overlay/Utils/PreviewRenderer.cs` | Renders a hit's file into the preview pane (read → tokenize → caret jump → preview diagnostics). |
 | `Telescope/Overlay/Utils/BlockCaretStyle.cs` | Shared frozen white block-caret brush/geometry for the prompt + tool-window + editor-view surfaces. |
 | `Telescope/Logging/Utils/TelescopeLog.cs` | One-line `[Telescope] `-prefixed log helper (prefix centralized in `DiagnosticLog.Telescope`). |
-| `Telescope/Logging/Utils/FilterFailureLog.cs` | Formats the `[Telescope] filter failed: {msg}` line (unprefixed — callers log via `TelescopeLog`). |
+| `Telescope/Logging/Utils/FilterFailureLog.cs` | Formats the `[Telescope] filter failed: {msg}` line (self-contained — `Format()` returns the prefixed line; callers log via `NeoVisualLog.Log`). |
 | `Telescope/Logging/Utils/PaneFailureTracker.cs` | Pure one-time fallback for the NeoVisual Output pane (`[NeoVisual] output pane unavailable: {reason}`). |
 | `MyExtension/Package/RoslynGatherers.cs` | Host-injected Roslyn gatherer seam (`TryGetCaretSymbol`, `GatherReferences`, `GatherImplementations`, `GetCaretOffset`, `ReadLineFromCache`, static `IsWriteLocation`) — the package supplies the DTE/workspace/document factories; the class owns the pure gather + reflection logic. |
 
@@ -245,7 +245,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **153 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **157 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -257,7 +257,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), and the pane-failure fallback (`PaneFailureTracker`).
-- `dotnet run --project tests/NeoVisual.Tests` — **163 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **168 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -407,7 +407,7 @@ The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (153) and
-  `dotnet run --project tests/NeoVisual.Tests` (163).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (157) and
+  `dotnet run --project tests/NeoVisual.Tests` (168).
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

@@ -12,7 +12,6 @@ namespace Telescope.Logging
     internal sealed class PaneFailureTracker
     {
         private bool _emitted;
-        private bool _retryAllowed = true;
 
         /// <summary>Returns true once (the first call), then false forever.</summary>
         public bool ShouldEmit()
@@ -27,17 +26,5 @@ namespace Telescope.Logging
 
         /// <summary>Builds the one-time fallback line for the given failure reason.</summary>
         public string FallbackMessage(string reason) => DiagnosticLog.NeoVisual + "output pane unavailable: " + reason;
-
-        /// <summary>
-        /// True when a pane-init attempt may be (re)tried. A transient failure must not permanently
-        /// disable the pane, so a recorded failure keeps the retry latch open for a later call.
-        /// </summary>
-        public bool ShouldRetry() => _retryAllowed;
-
-        /// <summary>Records a pane-init attempt. A failed attempt keeps the retry latch open.</summary>
-        public void RecordAttempt()
-        {
-            _retryAllowed = true;
-        }
     }
 }

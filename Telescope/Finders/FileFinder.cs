@@ -39,6 +39,14 @@ namespace Telescope.Finders
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
         }
 
+        /// <param name="dteFactory">Returns the top-level DTE automation object (see above).</param>
+        /// <param name="fileCache">Shared project-file enumeration cache (N37/BP-50: amortizes the per-open solution walk).</param>
+        internal FileFinder(Func<DTE> dteFactory, ProjectFileCache fileCache)
+        {
+            _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
+            _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
+        }
+
         /// <summary>Test-only constructor: drives candidate enumeration and opening without DTE.</summary>
         internal FileFinder(Func<IReadOnlyList<string>> candidateSource, Action<string> opener)
         {
@@ -111,7 +119,13 @@ namespace Telescope.Finders
             // The real HitOpener path owns the missing-file no-op (HitOpener guards internally).
             HitOpener.OpenAtLine(hit, (path, line) =>
             {
-                _dteFactory()?.ItemOperations.OpenFile(path);
+                // N68/BP-64: only log when the open actually happened (a null DTE short-circuits it).
+                DTE? dte = _dteFactory();
+                if (dte == null)
+                {
+                    return;
+                }
+                dte.ItemOperations.OpenFile(path);
                 TelescopeLog.Log($"opened file: {path}");
             });
         }

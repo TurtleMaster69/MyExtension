@@ -64,9 +64,12 @@ namespace Telescope.Finders
         public override IReadOnlyList<FinderEntry> GetCandidates(string query)
         {
             // Empty query -> deterministic empty initial state (NO gather log, so the finder-open
-            // line emits only the generic "open finder=Grep candidates=0").
+            // line emits only the generic "open finder=Grep candidates=0"). This is also the
+            // overlay-open path, so warm the shared content cache once here (N32/BP-45) so the
+            // per-query scan hits a warm cache instead of re-reading every file on the UI thread.
             if (string.IsNullOrEmpty(query))
             {
+                WarmContentCache();
                 return Array.Empty<FinderEntry>();
             }
 
@@ -122,6 +125,59 @@ namespace Telescope.Finders
 
             TelescopeLog.Log($"grep hits={hits.Count}");
             return hits.Select(ToEntry).ToList();
+        }
+
+        /// <summary>
+        /// One-time pre-read of the solution's project files into the shared content cache when the
+        /// Grep overlay opens (N32/BP-45), so the per-query scan hits a warm cache. Best-effort:
+        /// unreadable files are skipped. Runs on the UI thread (the overlay-open path).
+        /// </summary>
+        private void WarmContentCache()
+        {
+            if (_testEnumerate != null)
+            {
+                foreach (string path in _fileCache.Get(_testEnumerate))
+                {
+                    WarmFile(path);
+                }
+                return;
+            }
+
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                DTE dte = _dteFactory();
+                if (dte?.Solution != null)
+                {
+                    string? solutionName = dte?.Solution?.FullName;
+                    if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _fileCache.Invalidate();
+                        _cachedSolutionName = solutionName;
+                    }
+                    foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
+                    {
+                        WarmFile(path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                TelescopeLog.Log($"GrepFinder failed to enumerate: {ex.Message}");
+            }
+        }
+
+        private void WarmFile(string path)
+        {
+            try
+            {
+                _contentCache.GetLines(path);
+            }
+            catch
+            {
+                // unreadable/binary file — skip
+            }
         }
 
         protected override FinderEntry ToEntry(GrepHit hit)

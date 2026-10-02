@@ -64,6 +64,50 @@ namespace Telescope.Finders
             return null;
         }
 
+        /// <summary>
+        /// N18: returns the first path whose file name contains <paramref name="query"/>
+        /// (OrdinalIgnoreCase) in tree order. Single-sources the name-contains walk used by
+        /// <c>HierarchyResolver.FirstPathMatching</c>.
+        /// </summary>
+        public static string? FirstPathContaining(IEnumerable<IHierarchyNode> roots, string query)
+        {
+            if (string.IsNullOrEmpty(query))
+            {
+                return null;
+            }
+            foreach (var root in roots)
+            {
+                string? hit = FirstPathContainingCore(root, query);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+            return null;
+        }
+
+        private static string? FirstPathContainingCore(IHierarchyNode? node, string query)
+        {
+            if (node == null)
+            {
+                return null;
+            }
+            if (!string.IsNullOrEmpty(node.Path) &&
+                Path.GetFileName(node.Path!).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return node.Path;
+            }
+            foreach (var child in node.Children)
+            {
+                string? hit = FirstPathContainingCore(child, query);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+            return null;
+        }
+
         private static string? FirstPathEndingWithCore(IHierarchyNode? node, string extension)
         {
             if (node == null)

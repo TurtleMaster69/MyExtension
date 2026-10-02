@@ -31,15 +31,36 @@ namespace Telescope.Overlay
         /// </summary>
         public IReadOnlyList<SyntaxSegment> GetSegments(string path, Func<string, IReadOnlyList<SyntaxSegment>> tokenize)
         {
+            return GetSegments(path, _contentReader(path), tokenize);
+        }
+
+        /// <summary>
+        /// Returns the cached segments when the file's <c>LastWriteTimeUtc</c> is unchanged, else
+        /// tokenizes the supplied <paramref name="content"/> and caches the result (N34/BP-47: the
+        /// caller already read the content, so a cache miss must not read the file a second time).
+        /// </summary>
+        public IReadOnlyList<SyntaxSegment> GetSegments(string path, string content, Func<string, IReadOnlyList<SyntaxSegment>> tokenize)
+        {
             DateTime stamp = _timestamp(path);
             if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stamp)
             {
                 return entry.Segments;
             }
-            string content = _contentReader(path);
             var segments = tokenize(content);
             _entries[path] = new CacheEntry(stamp, segments);
             return segments;
+        }
+
+        /// <summary>
+        /// Returns true when the file's content changed since the last <see cref="GetSegments"/>
+        /// call (mtime differs, or no cached entry yet). The WPF FlowDocument rebuild is gated on
+        /// this — an unchanged mtime skips the rebuild (N33/BP-46: served from this cache, which
+        /// subsumes the deleted <c>PreviewDocumentCache</c>).
+        /// </summary>
+        public bool ShouldRebuild(string path)
+        {
+            DateTime stamp = _timestamp(path);
+            return !(_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stamp);
         }
 
         private sealed class CacheEntry

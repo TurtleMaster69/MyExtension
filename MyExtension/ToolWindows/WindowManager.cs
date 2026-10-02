@@ -109,7 +109,13 @@ namespace MyExtension.ToolWindows
                 CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out object docViewObj);
                 if (!(docViewObj is System.Windows.FrameworkElement frameContent))
                 {
-                    return false;
+                    // The Command Window's DocView is a COM object (not a WPF FrameworkElement), so
+                    // the visual-tree walk below can never match it — yet its focused surface is an
+                    // IWpfTextView. For a text-input tool window a focused editor view IS that
+                    // window's own surface, so it owns the keyboard. Navigation tool windows
+                    // (Solution Explorer) are not text-input, so the editor-veto is unaffected.
+                    return IsTextInputType
+                        && System.Windows.Input.Keyboard.FocusedElement is Microsoft.VisualStudio.Text.Editor.IWpfTextView;
                 }
     
                 var focused = System.Windows.Input.Keyboard.FocusedElement as System.Windows.DependencyObject;
@@ -173,28 +179,35 @@ namespace MyExtension.ToolWindows
         public static IToolWindowController? ResolveController(
             IReadOnlyDictionary<ToolWindowType, IToolWindowController> registered, ToolWindowType type)
         {
-            return registered.TryGetValue(type, out var registeredController)
-                ? registeredController
-                : DefaultControllerFor(type);
+            // N16: delegate to the single resolution path (GetController) so the registered→default
+            // logic exists in exactly one place. The throwaway defaults dictionary keeps this
+            // test-only seam stateless (each call resolves a fresh per-type default).
+            return GetController(registered, new Dictionary<ToolWindowType, IToolWindowController>(), type);
         }
 
         private IToolWindowController? GetController(ToolWindowType type)
+            => GetController(_controllers, _defaultControllers, type);
+
+        private static IToolWindowController? GetController(
+            IReadOnlyDictionary<ToolWindowType, IToolWindowController> registered,
+            Dictionary<ToolWindowType, IToolWindowController> defaults,
+            ToolWindowType type)
         {
             // Return a stable per-type controller so mode is remembered per window type. R20: the
             // per-type DEFAULT instances are cached in an INSTANCE-scoped dictionary (populated on
             // miss) so two GetController calls for the same type return the SAME instance.
-            if (_controllers.TryGetValue(type, out var registered))
+            if (registered.TryGetValue(type, out var registeredController))
             {
-                return registered;
+                return registeredController;
             }
-            if (_defaultControllers.TryGetValue(type, out var cached))
+            if (defaults.TryGetValue(type, out var cached))
             {
                 return cached;
             }
             var created = DefaultControllerFor(type);
             if (created != null)
             {
-                _defaultControllers[type] = created;
+                defaults[type] = created;
             }
             return created;
         }
@@ -258,7 +271,9 @@ namespace MyExtension.ToolWindows
                 return;
             }
             int hr = CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
-            if (hr == VSConstants.S_OK && value != null && (__WindowFrameTypeFlags)(int)value == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
+            // N25: guard the cast — a non-int VSFPROPID_Type value must not throw
+            // InvalidCastException out of the IVsSelectionEvents callback.
+            if (hr == VSConstants.S_OK && value is int typeValue && (__WindowFrameTypeFlags)typeValue == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
             {
                 _isToolWindow = true;
                 CurrentWindow.GetGuidProperty(

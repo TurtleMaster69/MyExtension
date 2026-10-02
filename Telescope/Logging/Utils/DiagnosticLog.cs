@@ -13,5 +13,30 @@ namespace Telescope.Logging
         public const string Hook = "[Hook] ";
         public const string MyExtension = "[MyExtension] ";
         public const string GlobalKeyboard = "[GlobalKeyboard] ";
+
+        /// <summary>
+        /// Replaces control characters (newlines, tabs, ...) with spaces so user-controlled text
+        /// interpolated into a log line can never split it (N43/BP-57, mirroring the R39
+        /// <c>SanitizeSample</c> pattern). Returns the original string when it is already clean.
+        /// </summary>
+        internal static string SanitizeText(string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return text ?? string.Empty;
+            }
+            string value = text!;
+            var chars = value.ToCharArray();
+            bool dirty = false;
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (char.IsControl(chars[i]))
+                {
+                    chars[i] = ' ';
+                    dirty = true;
+                }
+            }
+            return dirty ? new string(chars) : value;
+        }
     }
 }

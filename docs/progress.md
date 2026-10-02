@@ -7,26 +7,17 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (72 findings) — PLANNED 2026-10-02 (unit-only lane; e2e gates E2E-CR72-1..10 queued in `e2e-queue.md`)
+> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (72 findings) — GREEN 2026-10-02 (bugfix lane, **e2e ENABLED**; full 35-scenario suite + both unit suites GREEN)
 
 ## Current state
 
-- **In progress:** none — the **Code review fixes (72 findings)** plan is the FIRST
-  pending item (PLANNED 2026-10-02, not yet executed; unit-only lane, e2e gates
-  E2E-CR72-1..10 queued in `e2e-queue.md`). Prior GREEN: the **Code review fixes
-  (51 findings)** plan (2026-10-02, e2e gates E2E-CR51-1..10 queued); the **Code review
-  findings (98 findings) + Functional restructure** combined plan (2026-10-02, e2e gates
-  E2E-NCR-* queued); the Code review findings (67) + Repository restructure plan
-  (2026-09-30); the Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly
-  bugfix, F22 (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache)
-  (2026-09-28). No known-RED e2e scenario remains.
-- **Next up:** the **Code review fixes (72 findings)** plan (FIRST pending item — see the
-  Pending queue). After it: the still-open Architecture backlog findings **F13** (no-seam
-  dedup) and **F43** (not RED-provable) — the only remaining backlog items after the
-  51-findings plan (which subsumed F5→R3, F7→R4, F8/F9→R22/R42, F10→R2, F14→R45). Also
-  pending: the Telescope `fzf` finder (SCOPE DECIDED 2026-09-28, PLANNED not executed)
-  and the user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop
-  starts it). See the Pending queue + User-requested features sections below.
+- **In progress:** (none — the **Code review fixes (72 findings)** plan reached GREEN
+  2026-10-02; see the Done section).
+- **Next up:** the still-open Architecture backlog findings **F13** (no-seam dedup) and
+  **F43** (not RED-provable) — the only remaining backlog items. Also pending: the
+  Telescope `fzf` finder (SCOPE DECIDED 2026-09-28, PLANNED not executed) and the
+  user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts
+  it). See the Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
@@ -195,18 +186,14 @@ were known-backlog assertion bugs, not regressions).
 
 Top of the queue, in priority order:
 
-> **FIRST ITEM (2026-10-02):** the **Code review fixes (72 findings)** plan — **PENDING**
-> (not yet executed). Source: `docs/reviews/code-review.md` (2026-10-02, 72 findings:
-> 2 critical, 8 major, 45 minor, 17 nit — the user requested fixes for ALL findings,
-> incl. minors/nits). Plan in `docs/implementation_plan.md` (8 phases: 0-7 code-review
-> fixes; 70 BP steps + Verification Trace).
-> **DEFER e2e tests (unit-only lane):** e2e scenarios are queued in `docs/e2e-queue.md`
-> (E2E-CR72-1..10, status QUEUED) — run them on a VS-capable machine after this plan is
-> GREEN. The plan does NOT subsume the still-open Architecture backlog findings
-> (F13/F43 stay in the backlog — no-seam/not-RED-provable). Fix-direction corrections
-> folded in: N1/N2 `Assert.True` polarity (the guard routes in input mode), N37
-> FileFinder-cache scope, N49 delete-redundant-test, N45 backslash-before-quote, N55
-> line ref, N57 unused-using scope.
+> **FIRST ITEM (2026-10-02):** ~~the **Code review fixes (72 findings)** plan~~ —
+> **DONE** (GREEN 2026-10-02, bugfix lane, **e2e ENABLED**; see the Done section). Source:
+> `docs/reviews/code-review.md` (2026-10-02, 72 findings: 2 critical, 8 major, 44 minor,
+> 18 nit — the user requested fixes for ALL findings, incl. minors/nits). Plan in
+> `docs/implementation_plan.md` (8 phases: 0-7 code-review fixes; 70 BP steps + Verification
+> Trace). Full 35-scenario e2e suite + both unit suites GREEN at VERIFY. The plan does NOT
+> subsume the still-open Architecture backlog findings (F13/F43 stay in the backlog —
+> no-seam/not-RED-provable).
 
 > **FIRST ITEM (2026-10-02):** ~~the **Code review fixes (51 findings)** plan~~ —
 > **DONE** (GREEN 2026-10-02, unit-only lane; see the Done section). Source:
@@ -437,6 +424,32 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-02 — Code review fixes (72 findings)** (Lane: `bugfix`, **e2e ENABLED**;
+  12 delegations, 2 VS boots, 1 iteration). All 72 findings (2 critical, 8 major, 44 minor,
+  18 nit) from `docs/reviews/code-review.md` executed per-phase RED→GREEN (Phases 0-7).
+  Final suites: **Telescope.Tests 157, NeoVisual.Tests 168** (both 0 failed); `dotnet build`
+  0 errors; **full 35-scenario e2e suite GREEN** (fresh boot); all harness-health self-checks
+  PASS (check-doc-refs 0 unresolved, check-doc-content 12/12, harness `-List` 35 scenarios,
+  `-SelfCheck` 12/12, `dte-command -SelfTest` PASS).
+  **Change summary:** Phase 0 (N1/N2 corrected tautological FocusGuard tests; N46/N47/N48
+  dedupe; N49 delete; N50 restore static; N8 de-flake); Phase 1 (N4 block-caret deactivation
+  removes the adornment; N3 `VimBufferSubscriptions` map-entry removal + Detach decrement;
+  N28 VsVim resolution latch; N24 `EditorViewOpenedLog` dedupe); Phase 2 (N5 HRESULT check;
+  N6 drop `NavigationSettings` cache; N7/N14 `MatchesPropertiesQuirk`; N11/N12/N15/N59/N60/
+  N72 navigation robustness); Phase 3 (N16/N17/N18/N19/N20/N21/N22/N23/N25/N26/N51/N61/N62/
+  N71 controllers + FocusGuard); Phase 4 (N29/N30/N56/N57/N58/N69/N70 input/hook); Phase 5
+  (N27/N31/N32/N33/N34/N35/N36/N37/N38/N39/N40/N41/N42/N43/N44/N45/N63/N64/N65/N66/N67/N68
+  Telescope overlay/finders/filter/logging); Phase 6 (N9/N10/N52/N53 harness + lint);
+  Phase 7 (N54/N55 docs). New/changed diagnostics: `[Telescope] filter failed: {msg}` now
+  emitted with exactly one prefix (N41/N63); `[NeoVisual] block-caret active=False` now
+  truthful (N4). **If this regresses, look first at the two VERIFY-round-1 regression fixes:
+  `TelescopeOverlay.EnterInsert` (now calls `_keyHandler.EnterInsertMode(placement)` before
+  `FocusPrompt()`) and `WindowManager.ComputeTextInputSurfaceFocused` (COM DocView fallback
+  for a focused `IWpfTextView` on a text-input tool window) — the two highest-risk changes.**
+  Also fixed a pre-existing harness bootstrap bug in `tools/harness/dte-command.ps1`
+  (the runspace arg binding used AddParameter instead of AddArgument) that blocked the e2e
+  bootstrap (introduced `f4450cb`, never e2e-exercised since e2e was deferred).
 
 - **2026-10-02 — Code review fixes (51 findings)** (Lane: `bugfix`, unit-only, e2e
   deferred; 11 delegations, 0 VS boots, 0 iterations). All 51 findings (0 critical, 5

@@ -2,7 +2,6 @@ using Microsoft.VisualStudio.Shell;
 using MyExtension.Hooks;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Telescope.Controller;
 using Telescope.Logging;
 

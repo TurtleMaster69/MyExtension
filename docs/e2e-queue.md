@@ -442,13 +442,14 @@ final entry).
 
 ---
 
-# E2E queue (deferred — Code review fixes, 72 findings / 8 phases)
+# E2E gates (ACTIVE — Code review fixes, 72 findings / 8 phases)
 
 The 72-findings plan (`docs/implementation_plan.md`, 2026-10-02) is executed in the
-**unit-only lane**: every fix is RED-proven by unit tests (or build + existing suites
-for no-seam items), so the e2e gate is the listed scenarios staying GREEN on a capable
-machine (one that can boot the VS Experimental Instance). This file queues those
-gates. **Status: QUEUED** — none executed on the unit-only machine (2026-10-02).
+**bugfix lane with e2e ENABLED** (user instruction 2026-10-02 — this machine boots the
+VS Experimental Instance). Every fix is RED-proven by unit tests (or build + existing
+suites for no-seam items), and the listed e2e gates are RUN at VERIFY (affected
+scenarios during the loop; the full 35-scenario suite as the item's final gate).
+**Status: ACTIVE** — run at VERIFY (2026-10-02).
 
 Each entry asserts: the listed scenarios stay GREEN + `git diff` shows no log-literal
 drift. Diagnostics depended on: the existing `[Telescope]`/`[NeoVisual]`/`[Hook]`/

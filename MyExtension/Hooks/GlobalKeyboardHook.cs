@@ -62,8 +62,9 @@ namespace MyExtension.Hooks
             _inputHandler = new InputHandler(package, telescope, windowManager, launcher);
 
             // Prime the NeoVisual log pane eagerly (on the UI thread) so later any-thread writes
-            // (OutputStringThreadSafe) work without a thread switch.
-            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.Hook}starting");
+            // (OutputStringThreadSafe) work without a thread switch. N58: use the Log() helper
+            // (it prepends the [Hook] prefix) instead of inlining the prefix.
+            Log("starting");
 
             _proc = HookCallback;
             _hookId = SetHook(_proc);

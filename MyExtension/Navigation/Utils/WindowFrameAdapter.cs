@@ -15,9 +15,11 @@ namespace MyExtension.Navigation
     /// </summary>
     sealed class WindowFrameAdapter
     {
-        private EnvDTE.Window _dte;
+        private readonly EnvDTE.Window _dte;
         private readonly IVsWindowFrame4? _frame4;
-        private bool _loggedEmptyRect;
+        // N72: session-scoped so the n19 diagnostic is logged once per session, not once per
+        // adapter instance (adapters are recreated per focus change).
+        private static bool _loggedEmptyRect;
 
         public WindowFrameAdapter(IVsWindowFrame frame, EnvDTE.Window dte)
         {
@@ -38,14 +40,13 @@ namespace MyExtension.Navigation
         public void Activate()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_dte == null) { return; }
             _dte.Activate();
         }
 
         public bool AutoHides()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            return _dte != null && _dte.AutoHides;
+            return _dte.AutoHides;
         }
 
         /// <summary>
@@ -113,40 +114,12 @@ namespace MyExtension.Navigation
             List<EnvDTE.Window> dteWindows = windows.Select(w => w.DteWindow).ToList();
             List<EnvDTE.Window> parentWindows = WindowFrameUtils.GetLinkedWindowsList(activeWindow.LinkedWindowFrame, dteWindows);
 
-            // Precompute a key set over the parent windows (m13) instead of the O(n·m)
-            // CompareWindows COM reads. CompareWindows matches a window when it is reference-equal
-            // to a parent, or shares a caption with a parent of the opposite Properties/ToolWindow
-            // type (the Properties-window quirk), so the set is keyed by caption+type and the
-            // opposite-type lookup is applied per candidate.
-            HashSet<EnvDTE.Window> parentRefs = new HashSet<EnvDTE.Window>(parentWindows);
-            HashSet<string> parentKeys = new HashSet<string>(StringComparer.Ordinal);
-            foreach (EnvDTE.Window parent in parentWindows)
-            {
-                parentKeys.Add(WindowKey(parent));
-            }
-
-            return windows.Where(a =>
-            {
-                EnvDTE.Window w = a.DteWindow;
-                if (parentRefs.Contains(w))
-                {
-                    return true;
-                }
-                if (w.Type == vsWindowType.vsWindowTypeToolWindow)
-                {
-                    return parentKeys.Contains(WindowKey(w.Caption, vsWindowType.vsWindowTypeProperties));
-                }
-                if (w.Type == vsWindowType.vsWindowTypeProperties)
-                {
-                    return parentKeys.Contains(WindowKey(w.Caption, vsWindowType.vsWindowTypeToolWindow));
-                }
-                return false;
-            });
+            // N7/N14: single-source the window comparison (including the Properties-window quirk)
+            // in WindowFrameUtils.CompareWindows — no separate key-set strategy that can diverge.
+            // This runs once per window-set change (BuildActiveWindows caches the result), not per
+            // keystroke.
+            return windows.Where(a => parentWindows.Any(p => WindowFrameUtils.CompareWindows(p, a.DteWindow)));
         }
-
-        private static string WindowKey(EnvDTE.Window window) => WindowKey(window.Caption, window.Type);
-
-        private static string WindowKey(string caption, vsWindowType type) => caption + "\u0000" + (int)type;
 
         private static IEnumerable<WindowFrameAdapter> ExtractFrames(IEnumWindowFrames frames)
         {
@@ -212,11 +185,19 @@ namespace MyExtension.Navigation
         /// </summary>
         internal static WindowRect? TryGetScreenRect(IVsWindowFrame4? frame4)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (frame4 == null)
             {
                 return null;
             }
-            frame4.GetWindowScreenRect(out int left, out int top, out int width, out int height);
+            // N5: a failed GetWindowScreenRect must degrade to null so RefreshRect emits the n19
+            // diagnostic and returns WindowRect.Empty (today the bool result was discarded, yielding
+            // a silent empty/garbage rect without the diagnostic).
+            bool ok = frame4.GetWindowScreenRect(out int left, out int top, out int width, out int height);
+            if (!ok)
+            {
+                return null;
+            }
             return new WindowRect(left, top, width, height);
         }
     }

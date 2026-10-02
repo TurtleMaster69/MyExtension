@@ -38,6 +38,7 @@ namespace Telescope.Overlay
         EnterInsert,      // switch to insert mode, caret at current position
         EnterInsertAppend,// switch to insert mode, caret at end
         EnterInsertStart, // switch to insert mode, caret at start
+        EnterInsertAfter, // switch to insert mode, caret one position after the current caret
         EnterNormal,      // switch to normal mode
         MoveDown,         // selection moved down (wrap)
         MoveUp,           // selection moved up (wrap)
@@ -50,9 +51,10 @@ namespace Telescope.Overlay
     /// </summary>
     internal enum CaretPlacement
     {
-        Current, // i: keep the caret where it is (clamped to the text)
-        End,     // a: caret at the end of the text
-        Start,   // I: caret at the start of the text
+        Current,    // i: keep the caret where it is (clamped to the text)
+        End,        // A: caret at the end of the text
+        Start,      // I: caret at the start of the text
+        AfterCaret, // a: caret one position after the current caret (N31/BP-44)
     }
 
     /// <summary>
@@ -188,6 +190,8 @@ namespace Telescope.Overlay
                     return OverlayAction.EnterInsertAppend;
                 case CaretPlacement.Start:
                     return OverlayAction.EnterInsertStart;
+                case CaretPlacement.AfterCaret:
+                    return OverlayAction.EnterInsertAfter;
                 default:
                     return OverlayAction.EnterInsert;
             }

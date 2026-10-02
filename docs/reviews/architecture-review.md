@@ -266,7 +266,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 
 | id | severity | file:line | problem |
 |----|----------|-----------|---------|
-| F1 | critical | `MyExtension/ToolWindows/SolutionExplorerController.cs:98` | Injected Return re-enters the hook → infinite re-injection storm (Enter-storm); no guard anywhere in the chain |
+| F1 | critical | `MyExtension/ToolWindows/SolutionExplorerController.cs:98` | Injected Return re-enters the hook → infinite re-injection storm (Enter-storm); no guard anywhere in the chain — **FIXED** (2026-09-19, `InjectedKeyGuard`; see `docs/progress.md`) |
 | F2 | major | `MyExtension/Hooks/GlobalKeyboardHook.cs:116` | Per-key `[Hook]` log + `File.AppendAllText`-per-write on the UI thread violate the documented cheap pre-filter contract |
 | F3 | major | `MyExtension/ToolWindows/TextMotionHelper.cs:68` | Vim key→motion dispatch duplicated 4× (two verbatim copies + two overlay copies); one log contract each |
 | F4 | major | `MyExtension/ToolWindows/TextInputToolWindowController.cs:330` | Block caret implemented 3 places; text-input controller paints BLACK vs white elsewhere |
@@ -281,7 +281,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 | F13 | major | `Telescope/Finders/FileFinder.cs:116` | FileFinder re-implements the shared `ProjectFiles` DTE traversal (second walker) |
 | F14 | major | `MyExtension/Input/PopupNavigation.cs:49` | Ctrl+N/P hijacked in every editor — arrow injected with no popup-active check; native VS shortcuts dead |
 | F15 | major | `Telescope/Finders/CodeIssuesFinder.cs:71` | Per-open DTE re-enumeration + `ReadAllLines` of every project file on UI thread; no cache |
-| F16 | major | `tools/harness/test-e2e.ps1:806` | 4 known-bug assertions still red (prompt-motions `e`, `key=Enter`→`Return`, issues `count=1`); no Enter-storm fail-fast guard |
+| F16 | major | `tools/harness/test-e2e.ps1:806` | 4 known-bug assertions still red (prompt-motions `e`, `key=Enter`→`Return`, issues `count=1`); no Enter-storm fail-fast guard — **FIXED** (2026-09-19; see `docs/progress.md`) |
 | F17 | minor | `MyExtension/Input/InputHandler.cs:499` | `GetWindowRect` P/Invoke + `OpenTelescope` duplicated with `MyExtensionPackage.cs:417/401` — resolved by `TelescopeLauncher` |
 | F18 | minor | `MyExtension/Navigation/WindowMatrix.cs:245` | Dead/duplicated code: the unused RemoveWindowsNotAdjacent filter, the private ActivateWindow wrapper, unused ctor/field, `DistinctBy` no production caller, Min-exception-as-control-flow — all removed by N3 |
 | F19 | minor | `MyExtension/Navigation/WindowMatrix.cs:161` | Sort comparer allocates rects per comparison; distance computed twice per candidate |
@@ -310,12 +310,12 @@ drift), which is dangerous because the hub treats it as the single source of tru
 | F42 | minor | `tools/harness/test-e2e.ps1:1105` | On failure kills ALL `devenv` processes on the machine |
 | F43 | minor | `tests/Telescope.Tests/Program.cs:150` | fzf filter test silently PASSES when fzf is not on PATH |
 | F44 | minor | `tools/harness/dte-command.ps1:13` | Hardcoded VS PublicAssemblies paths, no vswhere fallback |
-| F45 | minor | `tests/Telescope.Tests/Program.cs:114` | LogFileWriter test order-dependent on static `_clearedThisProcess`; log-prefix constants not centralized |
+| F45 | minor | `tests/Telescope.Tests/Program.cs:114` | LogFileWriter test order-dependent on static `_clearedThisProcess`; log-prefix constants not centralized — **FIXED** (see `docs/progress.md` F45 status) |
 | F46 | minor | `MyExtension/MyExtension.csproj:31` | Host depends on the "library" for core infra (`NeoVisualLog`, `TelescopeController`); split is not a clean pure/host boundary |
 
 ## Detailed findings
 
-### F1 (critical) — Enter-storm re-injection loop
+### F1 (critical) — Enter-storm re-injection loop — **FIXED** (2026-09-19, `InjectedKeyGuard`; see `docs/progress.md`)
 - **Where:** `MyExtension/ToolWindows/SolutionExplorerController.cs:98` (Enter→`OpenSelected`), `:137` (`KeyInjection.Press(VK_RETURN)`); `MyExtension/Input/InputHandler.cs:283` (`controller.ActionKeys.Contains(key)` re-routes); `MyExtension/Hooks/KeyInjection.cs:17-19` (stale doc claiming "we only ever inject arrows" — VK_RETURN/VK_F2 added at :35-36).
 - **What:** Physical Enter (or `o`) in Solution Explorer normal mode → `TryMove(Enter)` → `OpenSelected()` → injected Return → the injected key-down re-enters `HookCallback` (`IsInteresting` true because Enter is an action key and `ShouldRouteToolWindowKey` covers any key in normal mode) → `HandleKey` → `TryMove(Enter)` again → another injection. Unbounded. Verified by two independent auditors and by hub code reading; `docs/progress.md` already records "~30x in ~100ms".
 - **Why it bites:** Live E2E `neovisual-explorer-open` / `neovisual-explorer-open-o` stay red; every real user pressing Enter or `o` in Solution Explorer hits a recursion that Windows eventually kills by silently removing the low-level hook — after which the extension is dead until VS restarts, with no diagnostic.
@@ -392,7 +392,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 - **Why it bites:** Opening the Issues finder on a real solution is a multi-second UI freeze; consecutive Files/Issues opens duplicate the DTE walk with no shared cache.
 - **Fix:** Cache `ProjectFiles.Enumerate` per session in `TelescopeController` (invalidate on solution change); scan TODO markers lazily/async.
 
-### F16 (major) — Harness still asserts the 4 known-bug expectations
+### F16 (major) — Harness still asserts the 4 known-bug expectations — **FIXED** (2026-09-19; see `docs/progress.md`)
 - **Where:** `tools/harness/test-e2e.ps1:806` (`prompt-motion key=E caret=5` — actual is 4, and the following `w` taps are off by one), `:910` (`key=Enter` — actual `key=Return`), `:764` (`results count=1` — Error List accumulates session warnings), `:441`/`:530` (no Enter-storm fail-fast guard; loops only assert a single occurrence and can pass while storming, failing via ~32 s timeout).
 - **Why it bites:** 4 of 25 scenarios are known-red; `docs/progress.md` already tracks these. The Enter-storm scenario is the worst — it fails slowly with no diagnostic.
 - **Fix:** Apply the corrected expectations from `docs/progress.md` (e→4, w→5/8/12, `key=Return mode=normal handled=True`, `results count=\d+`); add a post-baseline "at most one `solution-explorer open`" assertion and `Assert-VsFocused` inside the walk loop.

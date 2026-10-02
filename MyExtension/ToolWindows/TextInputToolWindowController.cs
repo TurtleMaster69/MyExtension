@@ -33,28 +33,16 @@ namespace MyExtension.ToolWindows
     /// </summary>
     internal sealed class TextInputToolWindowController : ToolWindowControllerBase
     {
-        private readonly Dictionary<Keys, Func<bool>> _actions;
-
         public TextInputToolWindowController(ToolWindowType type) : base(type)
         {
-            _actions = new Dictionary<Keys, Func<bool>>
-            {
-                [Keys.A] = TextMotion(Keys.A),
-                [Keys.H] = TextMotion(Keys.H),
-                [Keys.L] = TextMotion(Keys.L),
-                [Keys.I] = TextMotion(Keys.I),
-            };
+            // N62: the _actions table + TryMove/ActionKeys lookup live in the base.
+            _actions[Keys.A] = TextMotion(Keys.A);
+            _actions[Keys.H] = TextMotion(Keys.H);
+            _actions[Keys.L] = TextMotion(Keys.L);
+            _actions[Keys.I] = TextMotion(Keys.I);
             AddTextMotionKeys(_actions);
         }
 
         protected override void OnModeChanged() => TextMotionHelper.StyleFocusedSurface(_isInputMode);
-
-        /// <summary>The non-hjkl keys routed to normal mode (w/b/e/a/h/l are vim text motions).</summary>
-        public override IReadOnlyCollection<Keys> ActionKeys => _actions.Keys;
-
-        public override bool TryMove(Keys key)
-        {
-            return _actions.TryGetValue(key, out var action) && action();
-        }
     }
 }

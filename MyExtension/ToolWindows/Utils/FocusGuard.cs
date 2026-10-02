@@ -48,7 +48,8 @@ namespace MyExtension.ToolWindows
         /// apart, so they are exempt from the shift gate.
         /// </summary>
         public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused, bool shiftHeld)
-            => isToolWindow && !(editorFocused && !OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused)) && !(shiftHeld && !isTextInputSurface);
+            => ShouldRouteToolWindowKey(isToolWindow, editorFocused, isInputMode, isTextInputSurface, textInputSurfaceFocused)
+               && !(shiftHeld && !isTextInputSurface);
 
         /// <summary>
         /// True when the user is typing, so the leader key must type a literal space. A tool window

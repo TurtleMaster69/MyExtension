@@ -4,8 +4,6 @@ namespace MyExtension.Navigation
 {
     sealed class NavigationSettings
     {
-        private static NavigationSettings? _cached;
-
         public int XDivide { get; }
         public int YDivide { get; }
 
@@ -15,22 +13,12 @@ namespace MyExtension.Navigation
             YDivide = yDivide;
         }
 
+        // N6: no cache — FromSystemDpi re-reads the system DPI per navigation (cheap), so a
+        // mid-session scaling change can never leave stale divide tolerances. The old `_cached`
+        // static + Invalidate() seam had zero callers (verified via Trailmark).
         public static NavigationSettings FromSystemDpi()
         {
-            if (_cached == null)
-            {
-                _cached = FromDpi((int)DpiAwareness.SystemDpiX, (int)DpiAwareness.SystemDpiY);
-            }
-            return _cached;
-        }
-
-        // R30: the cache was never invalidated — FromSystemDpi read SystemDpiX once and cached it
-        // forever, leaving stale divide tolerances after a mid-session scaling change. Invalidate()
-        // is the DPI-source seam: a DPI-change signal (e.g. WM_DPICHANGED) calls it so the next
-        // FromSystemDpi re-reads the system DPI.
-        public static void Invalidate()
-        {
-            _cached = null;
+            return FromDpi((int)DpiAwareness.SystemDpiX, (int)DpiAwareness.SystemDpiY);
         }
 
         public static NavigationSettings FromDpi(int systemDpiX, int systemDpiY)

@@ -2,6 +2,7 @@ using System;
 using System.Windows.Forms;
 using Microsoft.VisualStudio.Shell;
 using MyExtension.Hooks;
+using MyExtension.Vim;
 
 namespace MyExtension.ToolWindows
 {
@@ -24,7 +25,14 @@ namespace MyExtension.ToolWindows
     internal sealed class SolutionExplorerController : ToolWindowControllerBase
     {
         private readonly Func<EnvDTE.DTE> _dteFactory;
-        private readonly System.Collections.Generic.Dictionary<Keys, Func<bool>> _actions;
+
+        // N22: the current focus-keeper handle, disposed before a new keeper starts so a superseded
+        // keeper's queued tick cannot re-assert the old target.
+        private IDisposable? _focusKeeper;
+
+        // N71: the search box resolved by ExitInputMode, passed through OnModeChanged so the caret
+        // restyle does not re-walk the visual tree.
+        private System.Windows.Controls.TextBox? _pendingStyleBox;
 
         /// <summary>How long the focus-keeper re-asserts tree focus/selection (m9 — single source).</summary>
         private const int FocusKeeperDurationMs = 1500;
@@ -32,24 +40,51 @@ namespace MyExtension.ToolWindows
         public SolutionExplorerController(Func<EnvDTE.DTE> dteFactory) : base(ToolWindowType.SolutionExplorer)
         {
             _dteFactory = dteFactory;
-            _actions = new System.Collections.Generic.Dictionary<Keys, Func<bool>>
-            {
-                [Keys.I] = () => { FocusSearchBox(); return true; },
-                [Keys.O] = () => { OpenSelected(); return true; },
-                [Keys.Enter] = () => { OpenSelected(); return true; },
-                [Keys.R] = () => { RenameSelected(); return true; },
-                [Keys.M] = () => { MoveSelected(); return true; },
-                [Keys.A] = () => { AddItem(); return true; },
-                [Keys.G] = () => { SelectFirstSourceFile(); return true; },
-                [Keys.H] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse"); return GeneralToolWindowController.TryMoveArrow(Keys.H); },
-                [Keys.L] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand"); return GeneralToolWindowController.TryMoveArrow(Keys.L); },
-                [Keys.J] = () => GeneralToolWindowController.TryMoveArrow(Keys.J),
-                [Keys.K] = () => GeneralToolWindowController.TryMoveArrow(Keys.K),
-            };
+            // N62: the _actions table + TryMove/ActionKeys lookup live in the base.
+            _actions[Keys.I] = () => { FocusSearchBox(); return true; };
+            _actions[Keys.O] = () => { OpenSelected(); return true; };
+            _actions[Keys.Enter] = () => { OpenSelected(); return true; };
+            _actions[Keys.R] = () => { RenameSelected(); return true; };
+            _actions[Keys.M] = () => { MoveSelected(); return true; };
+            _actions[Keys.A] = () => { AddItem(); return true; };
+            _actions[Keys.G] = () => { SelectFirstSourceFile(); return true; };
+            // N20: all four hjkl keys use one shape (TreeMove); only H/L emit the fold diagnostic.
+            _actions[Keys.H] = TreeMove(Keys.H);
+            _actions[Keys.L] = TreeMove(Keys.L);
+            _actions[Keys.J] = TreeMove(Keys.J);
+            _actions[Keys.K] = TreeMove(Keys.K);
             AddTextMotionKeys(_actions);
         }
 
-        protected override void OnModeChanged() => TextMotionHelper.StyleFocusedSurface(_isInputMode);
+        /// <summary>N20: the shared hjkl→arrow shape for the tree; H/L additionally log the fold
+        /// diagnostic (byte-identical to the previous inline lambdas).</summary>
+        private static Func<bool> TreeMove(Keys key) => () =>
+        {
+            if (key == Keys.H)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse");
+            }
+            else if (key == Keys.L)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand");
+            }
+            return GeneralToolWindowController.TryMoveArrow(key);
+        };
+
+        protected override void OnModeChanged()
+        {
+            // N71: reuse the box ExitInputMode already resolved (no second visual-tree walk).
+            var box = _pendingStyleBox;
+            _pendingStyleBox = null;
+            if (box != null)
+            {
+                TextMotionHelper.StyleFocusedSurface(_isInputMode, box);
+            }
+            else
+            {
+                TextMotionHelper.StyleFocusedSurface(_isInputMode);
+            }
+        }
 
         public override void ExitInputMode()
         {
@@ -60,6 +95,9 @@ namespace MyExtension.ToolWindows
             // not move focus, so the box is unchanged between the two reads).
             var focusedBox = TextMotionHelper.FindFocusedTextBox();
             string query = focusedBox?.Text ?? string.Empty;
+            // N71: pass the already-resolved box through OnModeChanged so the caret restyle does
+            // not re-walk the visual tree per Esc.
+            _pendingStyleBox = focusedBox;
             base.ExitInputMode();
             // If we came out of input mode while the search box still had focus (i focused it),
             // return focus to the tree so j/k/h/l continue to navigate the tree, not type into
@@ -115,7 +153,10 @@ namespace MyExtension.ToolWindows
                 // Hover-preview / async-focus robustness: re-assert tree focus + the matched selection
                 // on a ~100ms DispatcherTimer for ~1.5s, like SelectFirstSourceFile.
                 int escapeAttempts = 0;
-                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
+                // N22: dispose the prior keeper before starting a new one so a superseded keeper's
+                // queued tick cannot re-assert the old target.
+                _focusKeeper?.Dispose();
+                _focusKeeper = FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
                 {
                     // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
                     // re-asserting (the user closed it — don't keep re-opening it).
@@ -159,7 +200,14 @@ namespace MyExtension.ToolWindows
             var focusedBox = TextMotionHelper.FindFocusedTextBox();
             if (focusedBox != null)
             {
-                return TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode, focusedBox);
+                // N21: an a/A/I insert placement enters input mode through EnterInputMode() so the
+                // mode-change side effects (caret restyle) fire.
+                bool handled = TextMotionHelper.TryMoveFocusedSurface(key, out bool enteredInputMode, focusedBox);
+                if (handled && enteredInputMode)
+                {
+                    EnterInputMode();
+                }
+                return handled;
             }
 
             return _actions.TryGetValue(key, out var action) && action();
@@ -228,7 +276,7 @@ namespace MyExtension.ToolWindows
                 if (doc != null)
                 {
                     doc.Activate();
-                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
+                    EditorViewOpenedLog.Emit(first);
                 }
                 else
                 {
@@ -241,7 +289,9 @@ namespace MyExtension.ToolWindows
                 // `o` still reaches the controller. (No per-tick document open: that would spam
                 // editor-view-opened; we emitted exactly one above.)
                 EnvDTE.UIHierarchyItem keepItem = item!;
-                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, _ =>
+                // N22: dispose the prior keeper before starting a new one.
+                _focusKeeper?.Dispose();
+                _focusKeeper = FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, _ =>
                 {
                     // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
                     // re-asserting (the user closed it — don't keep re-opening it).
@@ -308,7 +358,7 @@ namespace MyExtension.ToolWindows
         }
 
         /// <summary>
-        /// DTE adapter: recurses a project node's tree into pure <see cref="HierarchyItemInfo"/>
+        /// DTE adapter: recurses a project node's tree into pure <see cref="HierarchyNode"/>
         /// DTOs plus a full-path → <see cref="EnvDTE.UIHierarchyItem"/> map. This is the ONLY place
         /// <c>pi.Kind</c> / <c>pi.Name</c> / <c>pi.FileNames[i]</c> are read. The caller
         /// must expand the node's <c>UIHierarchyItems</c> first (a collapsed node's children are
@@ -316,11 +366,11 @@ namespace MyExtension.ToolWindows
         /// <c>.cs</c> filter lives in <see cref="HierarchyForestBuilder"/>); everything else
         /// (virtual folders, references, sub-projects) is skipped.
         /// </summary>
-        private static System.Collections.Generic.List<HierarchyItemInfo> MapChildren(
+        private static System.Collections.Generic.List<HierarchyNode> MapChildren(
             EnvDTE.UIHierarchyItem item,
             System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem> pathToItem)
         {
-            var result = new System.Collections.Generic.List<HierarchyItemInfo>();
+            var result = new System.Collections.Generic.List<HierarchyNode>();
             foreach (EnvDTE.UIHierarchyItem child in item.UIHierarchyItems)
             {
                 if (child.Object is EnvDTE.ProjectItem pi)
@@ -329,7 +379,7 @@ namespace MyExtension.ToolWindows
                     if (kind == HierarchyResolver.PhysicalFolderKind)
                     {
                         var children = MapChildren(child, pathToItem);
-                        result.Add(new HierarchyItemInfo(kind, pi.Name, "", children));
+                        result.Add(new HierarchyNode(kind, pi.Name, "", children));
                     }
                     else if (kind == HierarchyResolver.PhysicalFileKind)
                     {
@@ -347,7 +397,7 @@ namespace MyExtension.ToolWindows
                             // (no primary path to map).
                             continue;
                         }
-                        result.Add(new HierarchyItemInfo(kind, pi.Name, fullPath, null));
+                        result.Add(new HierarchyNode(kind, pi.Name, fullPath, null));
                         pathToItem[fullPath] = child;
                     }
                 }

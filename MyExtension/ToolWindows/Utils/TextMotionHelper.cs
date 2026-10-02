@@ -72,9 +72,9 @@ namespace MyExtension.ToolWindows
         /// motion (h/l/w/b/e/a/A/I); <paramref name="isInputMode"/> is set true for the a/A/I insert
         /// placements. Logs the motion for the E2E harness.
         /// </summary>
-        public static bool TryMoveFocusedSurface(Keys key, ref bool isInputMode)
+        public static bool TryMoveFocusedSurface(Keys key, out bool enteredInputMode)
         {
-            return TryMoveFocusedSurface(key, ref isInputMode, FindFocusedTextBox());
+            return TryMoveFocusedSurface(key, out enteredInputMode, FindFocusedTextBox());
         }
 
         /// <summary>
@@ -87,8 +87,9 @@ namespace MyExtension.ToolWindows
         /// already-resolved WPF text box (R17 — the caller resolves it once so the visual tree is
         /// not walked twice per routed key).
         /// </summary>
-        public static bool TryMoveFocusedSurface(Keys key, ref bool isInputMode, System.Windows.Controls.TextBox? focusedBox)
+        public static bool TryMoveFocusedSurface(Keys key, out bool enteredInputMode, System.Windows.Controls.TextBox? focusedBox)
         {
+            enteredInputMode = false;
             // Physical shift state (GetAsyncKeyState, like the hook itself) — NOT WPF's
             // Keyboard.Modifiers, which lags behind injected keys because our hook callback runs
             // before WPF dispatches the Shift key-down message.
@@ -101,10 +102,18 @@ namespace MyExtension.ToolWindows
 
             if (focusedBox != null)
             {
-                string text = focusedBox.Text;
-                return ApplyMotionToBox(text, focusedBox.CaretIndex, text.Length, 0, Sample(text),
-                    caret => focusedBox.CaretIndex = caret,
-                    key, motion.Value, styleCaret: true, focusedBox, null, ref isInputMode);
+                // N19: caret-relative slice (R18) for the WPF path too — the motions only need the
+                // text around the caret, so the O(n) copy + LineIndex build run over a bounded slice.
+                string fullText = focusedBox.Text;
+                int caret = focusedBox.CaretIndex;
+                int fullLength = fullText.Length;
+                int start = Math.Max(0, caret - MotionSliceRadius);
+                int length = Math.Min(fullLength - start, MotionSliceRadius * 2);
+                string text = fullText.Substring(start, length);
+                return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(fullText),
+                    c => focusedBox.CaretIndex = c,
+                    key, motion.Value, styleCaret: true, focusedBox, null, out enteredInputMode,
+                    pos => LineEndIn(fullText, pos));
             }
 
             if (Keyboard.FocusedElement is IWpfTextView view)
@@ -123,7 +132,9 @@ namespace MyExtension.ToolWindows
                     string text = snapshot.GetText(start, length);
                     return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(snapshot),
                         c => view.Caret.MoveTo(new SnapshotPoint(snapshot, Math.Max(0, Math.Min(c, snapshot.Length)))),
-                        key, motion.Value, styleCaret: false, null, view, ref isInputMode);
+                        key, motion.Value, styleCaret: false, null, view, out enteredInputMode,
+                        // N23: A must land at the true line end, not the caret-relative slice boundary.
+                        pos => snapshot.GetLineFromPosition(Math.Max(0, Math.Min(pos, snapshot.Length))).End.Position);
                 }
                 catch
                 {
@@ -133,10 +144,17 @@ namespace MyExtension.ToolWindows
 
             if (FindFocusedWinFormsTextBox() is System.Windows.Forms.TextBoxBase win)
             {
-                string text = win.Text;
-                return ApplyMotionToBox(text, win.SelectionStart, text.Length, 0, Sample(text),
-                    caret => { win.SelectionStart = caret; win.SelectionLength = 0; },
-                    key, motion.Value, styleCaret: false, null, null, ref isInputMode);
+                // N19: caret-relative slice for the WinForms path too.
+                string fullText = win.Text;
+                int caret = win.SelectionStart;
+                int fullLength = fullText.Length;
+                int start = Math.Max(0, caret - MotionSliceRadius);
+                int length = Math.Min(fullLength - start, MotionSliceRadius * 2);
+                string text = fullText.Substring(start, length);
+                return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(fullText),
+                    c => { win.SelectionStart = c; win.SelectionLength = 0; },
+                    key, motion.Value, styleCaret: false, null, null, out enteredInputMode,
+                    pos => LineEndIn(fullText, pos));
             }
 
             // No text box focused — fall back to arrow-key navigation for h/l so the window
@@ -165,8 +183,9 @@ namespace MyExtension.ToolWindows
         /// full-buffer coordinates) and <paramref name="sample"/> (the first 30 chars of the full
         /// buffer, for the <c>text=</c> diagnostic) keep the emitted log line byte-identical.
         /// </summary>
-        private static bool ApplyMotionToBox(string text, int caret, int fullLength, int offset, string sample, Action<int> applyCaret, Keys key, TextMotion motion, bool styleCaret, System.Windows.Controls.TextBox? focusedBox, IWpfTextView? editorView, ref bool isInputMode)
+        private static bool ApplyMotionToBox(string text, int caret, int fullLength, int offset, string sample, Action<int> applyCaret, Keys key, TextMotion motion, bool styleCaret, System.Windows.Controls.TextBox? focusedBox, IWpfTextView? editorView, out bool enteredInputMode, Func<int, int>? lineEndAt = null)
         {
+            enteredInputMode = false;
             var navigator = new TextMotionNavigator();
             navigator.SetText(text);
             navigator.MoveTo(caret);
@@ -178,12 +197,26 @@ namespace MyExtension.ToolWindows
 
             // InsertStart (I) must land at the true start of the buffer (position 0), not the
             // slice start — the navigator only knows the caret-relative slice, so map it
-            // explicitly (all other motions map back via the slice offset).
-            int newCaret = insertPlacement == CaretPlacement.Start ? 0 : navigator.Caret + offset;
+            // explicitly. N23: InsertEnd (A) must land at the true line end (resolved from the
+            // full buffer), not the caret-relative slice boundary. All other motions map back via
+            // the slice offset.
+            int newCaret;
+            if (insertPlacement == CaretPlacement.Start)
+            {
+                newCaret = 0;
+            }
+            else if (insertPlacement == CaretPlacement.End && lineEndAt != null)
+            {
+                newCaret = lineEndAt(caret + offset);
+            }
+            else
+            {
+                newCaret = navigator.Caret + offset;
+            }
 
             if (insertPlacement != null)
             {
-                isInputMode = true;
+                enteredInputMode = true;
                 applyCaret(newCaret);
                 if (styleCaret && focusedBox != null)
                 {
@@ -209,6 +242,17 @@ namespace MyExtension.ToolWindows
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}text-motion key={key} caret={newCaret} len={fullLength} text='{sample}'");
             }
             return true;
+        }
+
+        /// <summary>N23: the true end of the line containing <paramref name="position"/> in the full
+        /// buffer (the next <c>\n</c>, or the buffer end) — used to map <c>A</c> past the
+        /// caret-relative slice boundary.</summary>
+        private static int LineEndIn(string text, int position)
+        {
+            if (position < 0) position = 0;
+            if (position > text.Length) position = text.Length;
+            int nl = text.IndexOf('\n', position);
+            return nl < 0 ? text.Length : nl;
         }
 
         /// <summary>The first 30 chars of a full text buffer (the <c>text=</c> log sample), with
@@ -270,6 +314,20 @@ namespace MyExtension.ToolWindows
             if (FindFocusedTextBox() is System.Windows.Controls.TextBox box)
             {
                 ApplyCaretStyle(box, isInputMode);
+            }
+            if (Keyboard.FocusedElement is IWpfTextView view)
+            {
+                ApplyEditorViewCaret(view, isInputMode);
+            }
+        }
+
+        /// <summary>N71: styles the already-resolved WPF text box (no second visual-tree walk) plus
+        /// the focused editor view.</summary>
+        public static void StyleFocusedSurface(bool isInputMode, System.Windows.Controls.TextBox? focusedBox)
+        {
+            if (focusedBox != null)
+            {
+                ApplyCaretStyle(focusedBox, isInputMode);
             }
             if (Keyboard.FocusedElement is IWpfTextView view)
             {

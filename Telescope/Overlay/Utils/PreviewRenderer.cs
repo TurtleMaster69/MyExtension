@@ -35,11 +35,9 @@ namespace Telescope.Overlay
 
         // M4: mtime-keyed token cache — the tokenized syntax segments are cached so SetContent
         // re-tokenizes only on content change (the FlowDocument rebuild stays the renderer's job).
+        // N33/BP-46: this cache also serves the FlowDocument-rebuild decision (ShouldRebuild),
+        // subsuming the deleted PreviewDocumentCache.
         private readonly PreviewTokenCache _tokenCache = new PreviewTokenCache();
-
-        // R2: mtime-keyed "content changed?" decision — the FlowDocument + line pointers are rebuilt
-        // only when the file's content changes (mirrors PreviewTokenCache; holds NO WPF types).
-        private readonly PreviewDocumentCache _documentCache = new PreviewDocumentCache();
 
         public void Show(RichTextBox previewBox, TextMotionNavigator navigator, IFileLocation location)
         {
@@ -76,7 +74,7 @@ namespace Telescope.Overlay
             // (mtime-keyed decision). Moving the selection between hits in the same file keeps the
             // existing document; MoveToLine/ApplyCaret remain the per-selection work. A null path
             // (empty content) always rebuilds so the preview clears.
-            if (path != null && !_documentCache.ShouldRebuild(path))
+            if (path != null && !_tokenCache.ShouldRebuild(path))
             {
                 return;
             }
@@ -91,8 +89,10 @@ namespace Telescope.Overlay
 
             // M4: the tokenized segments are cached keyed by the file's LastWriteTimeUtc, so
             // moving the selection between hits in the same file does not re-tokenize per change.
+            // N34/BP-47: pass the already-read content through so a cache miss does not read the
+            // file a second time.
             var segments = path != null
-                ? _tokenCache.GetSegments(path, SyntaxHighlighter.Tokenize)
+                ? _tokenCache.GetSegments(path, content, SyntaxHighlighter.Tokenize)
                 : SyntaxHighlighter.Tokenize(content);
             var para = NewPreviewParagraph();
             foreach (var segment in segments)
@@ -167,16 +167,30 @@ namespace Telescope.Overlay
             };
         }
 
+        // N35/BP-48: one frozen brush per syntax category, reused across every FlowDocument
+        // rebuild instead of allocating a new SolidColorBrush per segment.
+        private static readonly SolidColorBrush KeywordBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xc7, 0x92, 0xea)));
+        private static readonly SolidColorBrush StringBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x98, 0xc3, 0x79)));
+        private static readonly SolidColorBrush CommentBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x7f, 0x84, 0x8e)));
+        private static readonly SolidColorBrush NumberBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xd1, 0x9a, 0x66)));
+        private static readonly SolidColorBrush DefaultBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xc9, 0xd1, 0xd9)));
+
+        private static SolidColorBrush Freeze(SolidColorBrush brush)
+        {
+            brush.Freeze();
+            return brush;
+        }
+
         private static SolidColorBrush ColorFor(SyntaxCategory category)
         {
             // One-Dark/GitHub-dark palette that matches the overlay's dark chrome.
             switch (category)
             {
-                case SyntaxCategory.Keyword: return new SolidColorBrush(Color.FromRgb(0xc7, 0x92, 0xea));
-                case SyntaxCategory.String: return new SolidColorBrush(Color.FromRgb(0x98, 0xc3, 0x79));
-                case SyntaxCategory.Comment: return new SolidColorBrush(Color.FromRgb(0x7f, 0x84, 0x8e));
-                case SyntaxCategory.Number: return new SolidColorBrush(Color.FromRgb(0xd1, 0x9a, 0x66));
-                default: return new SolidColorBrush(Color.FromRgb(0xc9, 0xd1, 0xd9));
+                case SyntaxCategory.Keyword: return KeywordBrush;
+                case SyntaxCategory.String: return StringBrush;
+                case SyntaxCategory.Comment: return CommentBrush;
+                case SyntaxCategory.Number: return NumberBrush;
+                default: return DefaultBrush;
             }
         }
 

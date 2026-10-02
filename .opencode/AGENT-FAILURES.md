@@ -118,3 +118,18 @@ FIX: treat a scenario that fails CONSISTENTLY across runs as a defect, not a fla
 allowlist is for documented, understood, OUT-OF-SCOPE pre-existing failures - never for an
 unexamined "flake" (an unexamined flake is just a bug with a nicer name). Both allowlist
 entries are now closed; the full 35-scenario suite is GREEN. FIXED 2026-09-27.
+
+## 2026-10-02 | verification-agent | tool-bug
+COMMAND: `pwsh tools/harness/test-e2e.ps1` (full-suite bootstrap)
+ERROR: `tools/harness/dte-command.ps1:42` -> "You cannot call a method on a null-valued expression." The runspace scriptblock's `param($dte,$command,$arg)` were unbound because `Invoke-DteWithTimeout` used `$ps.AddParameter($p)` (which binds each value as a parameter NAME) instead of `$ps.AddArgument($p)`.
+FIX: `tools/harness/dte-command.ps1:33` changed `AddParameter` -> `AddArgument` (comment at :29 updated). Introduced in `f4450cb` (2026-09-30) and never e2e-exercised since e2e was deferred; the `-SelfCheck` seam missed it because its stubs pass no parameters. FIXED 2026-10-02 (this item).
+
+## 2026-10-02 | verification-agent | agent-syntax
+COMMAND: `rg ... | head -50`
+ERROR: `head: The term 'head' is not recognized as a name of a cmdlet, function, script file, or executable program.`
+FIX: use `Select-Object -First N` (PowerShell) instead of the Unix `head`. Added to the command-log known-bad index.
+
+## 2026-10-02 | verification-agent + debug-agent | agent-syntax
+COMMAND: `pwsh tools/harness/test-e2e.ps1 -Tests a,b,c`
+ERROR: the comma list arrived as one string -> "Unknown scenario(s)" (the `[string[]]` array did not bind through the native `pwsh` boundary).
+FIX: use the call operator `& tools/harness/test-e2e.ps1 -Tests a,b,c` (or `pwsh -Command "& ... -Tests a,b,c"`). Added to the command-log known-bad index.

@@ -26,11 +26,11 @@ function Invoke-DteWithTimeout([scriptblock]$Block, [int]$TimeoutSec, [string]$W
     # is a bounded wait: BeginInvoke + AsyncWaitHandle.WaitOne($TimeoutSec * 1000). On timeout the
     # runspace is stopped and a terminating error is thrown (with $ErrorActionPreference='Stop' this
     # terminates the script with a non-zero exit so the parent's teardown runs). The scriptblock
-    # receives $dte/$Command/$Arg via AddParameter (a fresh runspace has no caller scope).
+    # receives $dte/$Command/$Arg via AddArgument (a fresh runspace has no caller scope).
     $ps = [powershell]::Create()
     try {
         $ps.AddScript($Block.ToString()) | Out-Null
-        foreach ($p in $Parameters) { $ps.AddParameter($p) | Out-Null }
+        foreach ($p in $Parameters) { $ps.AddArgument($p) | Out-Null }
         $handle = $ps.BeginInvoke()
         if (-not $handle.AsyncWaitHandle.WaitOne($TimeoutSec * 1000)) {
             $ps.Stop()

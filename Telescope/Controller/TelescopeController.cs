@@ -70,7 +70,9 @@ namespace Telescope.Controller
             // so reusing the cached instance would throw InvalidOperationException on a second
             // open. The abandoned closed window is simply garbage-collected.
             _overlay = new TelescopeOverlay(_fzf);
-            _overlay.ShowOverlay(finder, centerRect, ownerHwnd);
+            // N38/BP-52: the open path awaits the async fzf availability probe (off the UI thread).
+            // JoinableTaskFactory.Run pumps the UI thread while the probe runs on the thread pool.
+            ThreadHelper.JoinableTaskFactory.Run(async () => await _overlay.ShowOverlayAsync(finder, centerRect, ownerHwnd));
             return true;
         }
 

@@ -57,7 +57,7 @@ namespace Telescope.Overlay
                 {
                     // M11: an unmatched display string must not produce a null-payload entry that
                     // silently no-ops — skip it and log a warning.
-                    TelescopeLog.Log($"result-mapper unknown display: {m}");
+                    TelescopeLog.Log($"result-mapper unknown display: {DiagnosticLog.SanitizeText(m)}");
                     continue;
                 }
                 items.Add(entry);

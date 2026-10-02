@@ -25,9 +25,16 @@ namespace MyExtension.Navigation
         // window-set change instead of per keystroke.
         private static List<WindowFrameAdapter>? _cachedLinked;
         private static IReadOnlyList<WindowFrameAdapter>? _cachedLinkedSource;
+        // N11: the cache is also keyed on the active window — the adapters list reference alone is
+        // not enough (the active window can change while the list reference is unchanged).
+        private static EnvDTE.Window? _cachedLinkedActive;
+
+        // N15: the active window's index in _activeWindows, resolved once at construction instead
+        // of an O(n) IndexOf per navigation.
+        private int _activeIndex = -1;
 
         /// <summary>
-        /// initalize windowmatrix and track windows; no filtering. The active window is taken from
+        /// Initialize the navigation window set and track the active window; no filtering. The active window is taken from
         /// <paramref name="currentFrame"/> (the cached frame tracked by <see cref="WindowManager"/>)
         /// when supplied, otherwise it falls back to the DTE's active window.
         /// </summary>
@@ -69,6 +76,8 @@ namespace MyExtension.Navigation
                 // If the active window can't be paired to an adapter (possible when the window list
                 // is mid-change), degrade to a no-op rather than throwing.
                 _activeWindow = WindowFrameAdapter.FindActive(activeWindow, _activeWindows) ?? null!;
+                // N15: resolve the active index once here (O(n)) instead of per navigation.
+                _activeIndex = _activeWindow == null ? -1 : _activeWindows.IndexOf(_activeWindow);
             }
             catch (Exception ex)
             {
@@ -76,6 +85,7 @@ namespace MyExtension.Navigation
                     $"{Telescope.Logging.DiagnosticLog.NeoVisual}Window navigator initialization failed: {ex.Message}\n{ex.StackTrace}");
                 _activeWindows = new List<WindowFrameAdapter>();
                 _activeWindow = null!;
+                _activeIndex = -1;
             }
         }
 
@@ -90,13 +100,16 @@ namespace MyExtension.Navigation
             {
                 return new List<WindowFrameAdapter>();
             }
-            if (ReferenceEquals(_cachedLinkedSource, adapters) && _cachedLinked != null)
+            if (ReferenceEquals(_cachedLinkedSource, adapters) &&
+                ReferenceEquals(_cachedLinkedActive, active) &&
+                _cachedLinked != null)
             {
                 return _cachedLinked;
             }
             var linked = WindowFrameAdapter.LinkedTo(active, adapters).ToList();
             _cachedLinked = linked;
             _cachedLinkedSource = adapters;
+            _cachedLinkedActive = active;
             return linked;
         }
 
@@ -135,8 +148,14 @@ namespace MyExtension.Navigation
                         rects.Add(WindowRect.Empty);
                     }
                 }
-                NavigationSnapshot? snapshot = NavigationSnapshot.Capture(rects, _activeWindows.IndexOf(_activeWindow));
+                NavigationSnapshot? snapshot = NavigationSnapshot.Capture(rects, _activeIndex);
                 if (snapshot == null) { return NavigationOutcome.NoOp("no snapshot"); }
+                // N12: an empty active rect would anchor selection around (0,0,0,0); degrade to a
+                // no-op with the m47 diagnostic instead.
+                if (snapshot.Value.Active.IsEmpty)
+                {
+                    return NavigationOutcome.NoOp("active window rect unavailable");
+                }
                 int? target = WindowNavigationEngine.SelectTarget(snapshot.Value.Active, snapshot.Value.Candidates, direction, _settings);
                 if (target.HasValue)
                 {

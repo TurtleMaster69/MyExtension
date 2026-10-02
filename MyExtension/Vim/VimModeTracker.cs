@@ -93,7 +93,7 @@ namespace MyExtension.Vim
                 {
                     path = doc.FilePath;
                 }
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}editor-view-opened file={path}");
+                EditorViewOpenedLog.Emit(path);
             }
             catch
             {

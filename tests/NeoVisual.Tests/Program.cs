@@ -134,6 +134,22 @@ namespace NeoVisual.Tests
             Assert.Equal(Keys.Space, cfg.LeaderKey);
         }
 
+        public static void Run_KeybindingConfig_ParseLeaderRejectsModifiers()
+        {
+            // N70 (BP-43): Enum.TryParse accepts modifier keys ("Control"/"Shift"/"Alt"), which
+            // silently disables the leader key. The fix rejects modifiers and falls back to Space.
+            // RED today: ParseLeader("Control") returns Keys.Control, so the leader is not Space.
+            Assert.Equal(Keys.Space,
+                KeybindingConfig.LoadFromJson("{\"leader\":\"Control\",\"bindings\":{}}").LeaderKey);
+            Assert.Equal(Keys.Space,
+                KeybindingConfig.LoadFromJson("{\"leader\":\"Shift\",\"bindings\":{}}").LeaderKey);
+            Assert.Equal(Keys.Space,
+                KeybindingConfig.LoadFromJson("{\"leader\":\"Alt\",\"bindings\":{}}").LeaderKey);
+            // A real physical key (ControlKey) is still honored (the existing CustomLeaderParsed test).
+            Assert.Equal(Keys.ControlKey,
+                KeybindingConfig.LoadFromJson("{\"leader\":\"ControlKey\",\"bindings\":{}}").LeaderKey);
+        }
+
         public static void Run_Keybinding_BindingsParsed()
         {
             var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"W\":\"command:File.SaveSelectedItems\",\"Ctrl+H\":\"navigate-left\"}}");
@@ -412,18 +428,28 @@ namespace NeoVisual.Tests
             var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
                 "uiThreadDispatcher",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            uiThreadField!.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
-            var manager = new WindowManager(new FakeMonitorSelection());
-            var method = typeof(WindowManager).GetMethod(
-                "GetController",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(method != null, "WindowManager.GetController must exist (private instance)");
+            // N50 (BP-7): save + restore the static dispatcher in a finally so a later test never
+            // sees a stale dispatcher (the old test mutated it and never restored it).
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                var manager = new WindowManager(new FakeMonitorSelection());
+                var method = typeof(WindowManager).GetMethod(
+                    "GetController",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(method != null, "WindowManager.GetController must exist (private instance)");
 
-            var first = method!.Invoke(manager, new object[] { ToolWindowType.Toolbox });
-            var second = method.Invoke(manager, new object[] { ToolWindowType.Toolbox });
+                var first = method!.Invoke(manager, new object[] { ToolWindowType.Toolbox });
+                var second = method.Invoke(manager, new object[] { ToolWindowType.Toolbox });
 
-            Assert.True(ReferenceEquals(first, second),
-                "the per-type default controller must be cached (same instance per type) — R20");
+                Assert.True(ReferenceEquals(first, second),
+                    "the per-type default controller must be cached (same instance per type) — R20");
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
         }
 
         // ================================================================
@@ -581,7 +607,7 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
-        // HierarchyForestBuilder — pure forest builder over HierarchyItemInfo DTOs
+        // HierarchyForestBuilder — pure forest builder over HierarchyNode DTOs
         // (M14: extract the DTE-coupled BuildForest recursion into a testable seam)
         // ================================================================
 
@@ -591,15 +617,15 @@ namespace NeoVisual.Tests
             // file node under the inner folder node.
             var items = new[]
             {
-                new HierarchyItemInfo(
+                new HierarchyNode(
                     HierarchyResolver.PhysicalFolderKind, "Models", "",
                     new[]
                     {
-                        new HierarchyItemInfo(
+                        new HierarchyNode(
                             HierarchyResolver.PhysicalFolderKind, "Sub", "",
                             new[]
                             {
-                                new HierarchyItemInfo(
+                                new HierarchyNode(
                                     HierarchyResolver.PhysicalFileKind, "User.cs", @"C:\p\Models\Sub\User.cs", null),
                             }),
                     }),
@@ -621,8 +647,8 @@ namespace NeoVisual.Tests
             // a non-.cs App.config is not.
             var items = new[]
             {
-                new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Program.CS", @"C:\p\Program.CS", null),
-                new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "App.config", @"C:\p\App.config", null),
+                new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Program.CS", @"C:\p\Program.CS", null),
+                new HierarchyNode(HierarchyResolver.PhysicalFileKind, "App.config", @"C:\p\App.config", null),
             };
             var forest = HierarchyForestBuilder.Build(items);
 
@@ -638,7 +664,7 @@ namespace NeoVisual.Tests
             const string fullPath = @"C:\p\Alpha.cs";
             var items = new[]
             {
-                new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Alpha.cs", fullPath, null),
+                new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Alpha.cs", fullPath, null),
             };
             var forest = HierarchyForestBuilder.Build(items);
 
@@ -652,10 +678,10 @@ namespace NeoVisual.Tests
             // not added to the forest.
             var items = new[]
             {
-                new HierarchyItemInfo("{00000000-0000-0000-0000-000000000000}", "Dependencies", "",
+                new HierarchyNode("{00000000-0000-0000-0000-000000000000}", "Dependencies", "",
                     new[]
                     {
-                        new HierarchyItemInfo(HierarchyResolver.PhysicalFileKind, "Hidden.cs", @"C:\p\Hidden.cs", null),
+                        new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Hidden.cs", @"C:\p\Hidden.cs", null),
                     }),
             };
             var forest = HierarchyForestBuilder.Build(items);
@@ -665,7 +691,7 @@ namespace NeoVisual.Tests
 
         public static void Run_HierarchyForestBuilder_EmptyChildrenEmptyForest()
         {
-            var forest = HierarchyForestBuilder.Build(new HierarchyItemInfo[0]);
+            var forest = HierarchyForestBuilder.Build(new HierarchyNode[0]);
 
             Assert.True(forest != null, "Build returns a list");
             Assert.Equal(0, forest.Count);
@@ -726,6 +752,54 @@ namespace NeoVisual.Tests
         public static void Run_TextMotionEngine_MapMotion_UnknownNull()
         {
             Assert.Equal(null, TextMotionDispatcher.MapKey(Keys.X, false));
+        }
+
+        public static void Run_TextMotionHelper_MapMotionDelegatesToDispatcher()
+        {
+            // N51 (BP-33): TextMotionHelper.TryMoveFocusedSurface's motion dispatch was verified
+            // only by e2e. Pin the pure dispatch seam it delegates to (MapMotion ->
+            // TextMotionDispatcher.MapKey) so the tool-window motion set is unit-covered.
+            Assert.Equal(TextMotion.Left, TextMotionHelper.MapMotion(Keys.H, false));
+            Assert.Equal(TextMotion.Right, TextMotionHelper.MapMotion(Keys.L, false));
+            Assert.Equal(TextMotion.NextWord, TextMotionHelper.MapMotion(Keys.W, false));
+            Assert.Equal(TextMotion.PrevWord, TextMotionHelper.MapMotion(Keys.B, false));
+            Assert.Equal(TextMotion.EndWord, TextMotionHelper.MapMotion(Keys.E, false));
+            Assert.Equal(TextMotion.InsertAfter, TextMotionHelper.MapMotion(Keys.A, false));
+            Assert.Equal(TextMotion.InsertEnd, TextMotionHelper.MapMotion(Keys.A, true));
+            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.I, false));
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.X, false));
+        }
+
+        public static void Run_TextMotionHelper_ApplyMotionMovesNavigator()
+        {
+            // N51 (BP-33): the motion math the tool-window surface applies (via
+            // TextMotionDispatcher.Apply) — h/l/w/b/e + the a/A/I insert placements.
+            var n = new TextMotionNavigator();
+            n.SetText("one two");
+            n.MoveTo(0);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.NextWord, n, out _));
+            Assert.Equal(4, n.Caret);
+
+            n.MoveTo(4);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.PrevWord, n, out _));
+            Assert.Equal(0, n.Caret);
+
+            n.SetText("hello");
+            n.MoveTo(2);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.InsertAfter, n, out CaretPlacement? after));
+            Assert.Equal(CaretPlacement.Current, after);
+            Assert.Equal(3, n.Caret);
+
+            n.MoveTo(2);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.InsertEnd, n, out CaretPlacement? end));
+            Assert.Equal(CaretPlacement.End, end);
+            Assert.Equal(5, n.Caret);
+
+            n.MoveTo(2);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.InsertStart, n, out CaretPlacement? start));
+            Assert.Equal(CaretPlacement.Start, start);
+            Assert.Equal(0, n.Caret);
         }
 
         // ================================================================
@@ -813,6 +887,72 @@ namespace NeoVisual.Tests
             // UnsubscribeBuffer removed bufferA), Detach must not decrement again.
             Assert.False(subs.Detach(viewB), "Detach after OnBufferClosed must not double-decrement");
             Assert.False(subs.Detach(viewA), "Detach after UnsubscribeBuffer must not double-decrement");
+        }
+
+        public static void Run_VimBufferSubscriptions_DetachSharedBufferSecondViewDecrements()
+        {
+            // N3 (BP-10): a shared-text-buffer second view is never Closed-subscribed
+            // (VimModeSource early-returns before MarkClosedSubscribed), so Detach must decrement
+            // the refcount regardless of _closedSubscribed membership. Today Detach returns false
+            // without decrementing, so the refcount stays at 2 and closing the first view never
+            // reaches 0 (the SwitchedMode subscription never drops).
+            var subs = new VimBufferSubscriptions();
+            var viewA = new FakeTextView();
+            var viewB = new FakeTextView();
+            var bufferA = new object();
+            var bufferB = new object();
+            var textBuffer = new object(); // shared text buffer (split view)
+
+            subs.Attach(viewA, bufferA, textBuffer);
+            subs.Attach(viewB, bufferB, textBuffer);
+            subs.MarkClosedSubscribed(bufferA); // only A is Closed-subscribed; B is not
+
+            // Detaching B (a non-Closed-subscribed shared-buffer view) must decrement 2 -> 1.
+            Assert.False(subs.Detach(viewB), "detaching B is not the last ref (2 -> 1)");
+            // Closing A now drops the refcount to 0 (B's detach already decremented).
+            Assert.True(subs.OnBufferClosed(bufferA),
+                "after B detached, closing A drops the shared-text-buffer refcount to 0");
+        }
+
+        public static void Run_VimBufferSubscriptions_DetachRemovesMapEntryAtZero()
+        {
+            // N3 (BP-10): when the refcount hits 0 the buffer->textBuffer map entry must be removed
+            // (today it leaks for the whole session). The map is private, so inspect it via
+            // reflection (the only hermetic path to the leak).
+            var subs = new VimBufferSubscriptions();
+            var view = new FakeTextView();
+            var buffer = new object();
+            var textBuffer = new object();
+
+            subs.Attach(view, buffer, textBuffer);
+            subs.MarkClosedSubscribed(buffer);
+            Assert.True(subs.Detach(view), "detaching the last view drops the refcount to 0");
+
+            var field = typeof(VimBufferSubscriptions).GetField(
+                "_bufferToTextBuffer",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(field != null, "VimBufferSubscriptions._bufferToTextBuffer must exist");
+            var map = (System.Collections.IDictionary)field!.GetValue(subs)!;
+            Assert.False(map.Contains(buffer),
+                "_bufferToTextBuffer entry must be removed at refcount 0 (no per-session leak)");
+        }
+
+        // ================================================================
+        // EditorViewOpenedLog — dedupe the editor-view-opened emission (N24/BP-12)
+        // RED: `EditorViewOpenedLog` does not exist yet -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_EditorViewOpenedLog_SuppressesDuplicateWithinWindow()
+        {
+            // N24 (BP-12): the guarded helper suppresses a duplicate emission for the SAME path
+            // within a short window (split/peek/preview views and the SelectFirstSourceFile +
+            // TextViewCreated double-count). A unique path keeps the static last-path state from
+            // leaking across tests.
+            string path = @"C:\p\" + Guid.NewGuid().ToString("N") + ".cs";
+            Assert.True(EditorViewOpenedLog.Emit(path), "first emit of a path is allowed");
+            Assert.False(EditorViewOpenedLog.Emit(path),
+                "a duplicate emit of the same path within the window is suppressed");
+            Assert.True(EditorViewOpenedLog.Emit(path + ".other"), "a different path is allowed");
         }
 
         // ================================================================
@@ -1017,46 +1157,42 @@ namespace NeoVisual.Tests
         public static void Run_FocusGuard_EditorFocusedBlocksRouting()
         {
             // The leak: with stale tool-window state but an editor focused, routing must be off.
+            // N46 (BP-3): one assertion per case (the duplicate asserted the same expression).
             Assert.False(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "editor-focused tool window must not route keys");
-            Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
-                "editor-focused action keys must not be interesting");
         }
 
         public static void Run_FocusGuard_TreeFocusedAllowsRouting()
         {
+            // N46 (BP-3): one assertion per case (the duplicate asserted the same expression).
             Assert.True(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "tree-focused tool window routes keys");
-            Assert.True(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
-                "tree-focused action keys are interesting");
         }
 
         public static void Run_FocusGuard_InputModeBlocksActionKeys()
         {
-            // The pre-filter's action-key-interest decision is the composite
-            // ShouldRouteToolWindowKey(...) && !isInputMode && actionKeyCount > 0 (the deleted
-            // HasToolWindowActionKeys was exactly this). In input mode the !isInputMode gate blocks it.
-            bool isInputMode = true;
-            Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: isInputMode, isTextInputSurface: false, textInputSurfaceFocused: false) && !isInputMode,
-                "input-mode tool window has no action-key pre-filter");
+            // N1 (BP-1): assert the guard's OWN return value directly. The old test asserted a
+            // constant-false composite (`... && !isInputMode` with isInputMode=true), so it passed
+            // regardless of FocusGuard. The guard returns TRUE for input mode (input mode owns the
+            // keyboard -> routes -> blocks the key from the editor); the `!isInputMode` gate is
+            // caller-side (InputHandler), not part of this assertion. (The deleted
+            // `HasToolWindowActionKeys` was exactly that composite pre-filter decision.)
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: true, isTextInputSurface: false, textInputSurfaceFocused: false),
+                "input-mode tool window routes keys (input mode owns the keyboard)");
         }
 
         public static void Run_FocusGuard_ZeroActionKeysBlocks()
         {
-            // The pre-filter's action-key-interest decision is the composite
-            // ShouldRouteToolWindowKey(...) && !isInputMode && actionKeyCount > 0 (the deleted
-            // HasToolWindowActionKeys was exactly this). Zero action keys -> the actionKeyCount > 0
-            // gate blocks it.
-            bool isInputMode = false;
-            int actionKeyCount = 0;
-            Assert.False(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: isInputMode, isTextInputSurface: false, textInputSurfaceFocused: false) && !isInputMode && actionKeyCount > 0,
-                "zero action keys is never interesting");
+            // N2 (BP-2): assert the guard's OWN return value directly. The old test asserted a
+            // constant-false composite (`... && actionKeyCount > 0` with actionKeyCount=0). The
+            // action-key-count gate lives in the caller (InputHandler.IsKeyOfInterest); the guard
+            // routes a tree-focused tool window regardless of action-key count.
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
+                "a tree-focused tool window routes keys regardless of action-key count");
         }
 
         public static void Run_FocusGuard_NonToolWindowBlocks()
@@ -1102,13 +1238,6 @@ namespace NeoVisual.Tests
             Assert.False(
                 FocusGuard.ShouldRouteToolWindowKey(isToolWindow: false, editorFocused: false, isInputMode: false, isTextInputSurface: false, textInputSurfaceFocused: false),
                 "non-tool-window never routes");
-        }
-
-        public static void Run_FocusGuard_TruthTable_ActionKeysTextInputSurface()
-        {
-            Assert.True(
-                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, isInputMode: false, isTextInputSurface: true, textInputSurfaceFocused: true),
-                "text-input-surface action keys are interesting despite the stale editor flag");
         }
 
         public static void Run_FocusGuard_TruthTable_ActionKeysEditorVeto()
@@ -1230,12 +1359,24 @@ namespace NeoVisual.Tests
             // The pure decision the focus-keeper timer tick makes each 100ms:
             //   - search box focused + escape attempts < 4  -> inject Escape
             //   - elapsed >= duration                        -> stop (elapsed wins)
+            //   - search box still focused after 4 attempts  -> stop (N26/BP-32: do not fight the user)
             //   - otherwise                                  -> re-assert the selection
             Assert.Equal(FocusKeeperSchedule.Decision.InjectEscape, FocusKeeperSchedule.Decide(true, 0, 0, 1500));
-            Assert.Equal(FocusKeeperSchedule.Decision.Reassert, FocusKeeperSchedule.Decide(true, 0, 4, 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 0, 4, 1500));
             Assert.Equal(FocusKeeperSchedule.Decision.Reassert, FocusKeeperSchedule.Decide(false, 0, 0, 1500));
             Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(false, 1500, 0, 1500));
             Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 1500, 0, 1500));
+        }
+
+        public static void Run_FocusKeeperSchedule_StopsAfterMaxEscapeAttempts()
+        {
+            // N26 (BP-32): after MaxEscapeAttempts (4) with the search box STILL focused, the
+            // keeper must Stop (not Reassert) — it must not fight the user. RED today: Decide
+            // returns Reassert for the 4-attempt case.
+            Assert.Equal(FocusKeeperSchedule.Decision.InjectEscape,
+                FocusKeeperSchedule.Decide(searchBoxFocused: true, elapsedMs: 0, escapeAttempts: 3, durationMs: 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop,
+                FocusKeeperSchedule.Decide(searchBoxFocused: true, elapsedMs: 0, escapeAttempts: 4, durationMs: 1500));
         }
 
         // ================================================================
@@ -1485,34 +1626,22 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionsRegistry_TelescopeMapsToFinder()
         {
-            // M30: every telescope action in the Registry must resolve to a finder name in
-            // TelescopeLauncher.FinderNames (the single source of truth) — set-equality of the two
-            // key sets, and each telescope action maps to a non-empty finder name. A telescope
-            // action with no FinderNames entry would throw KeyNotFoundException in the hook path.
-            var registryTelescopeKeys = Actions.Registry.Keys
-                .Where(k => k.StartsWith("telescope", StringComparison.OrdinalIgnoreCase))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var finderNamesKeys = TelescopeLauncher.FinderNames.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            Assert.True(registryTelescopeKeys.SetEquals(finderNamesKeys),
-                "telescope action keys must exactly match FinderNames keys");
-            foreach (string key in registryTelescopeKeys)
-            {
-                string finder = TelescopeLauncher.FinderNames[key];
-                Assert.True(!string.IsNullOrEmpty(finder), $"telescope action '{key}' must map to a finder name");
-            }
-        }
-
-        public static void Run_ActionsRegistry_TelescopeKeysMatchFinderNames()
-        {
-            // M30: the telescope action names in Actions.Registry must EXACTLY match the keys of
-            // TelescopeLauncher.FinderNames (the single source of truth). A 6th telescope action
-            // added to one map but not the other would throw KeyNotFoundException in the hook path.
+            // M30 / N48 (BP-5): the telescope action names in Actions.Registry must EXACTLY match
+            // the keys of TelescopeLauncher.FinderNames (the single source of truth), and each
+            // telescope action must map to a non-empty finder name. A telescope action added to one
+            // map but not the other would throw KeyNotFoundException in the hook path. (The two
+            // former tests computed the same key sets and asserted the same SetEquals — merged.)
             var registryTelescopeKeys = Actions.Registry.Keys
                 .Where(k => k.StartsWith("telescope", StringComparison.OrdinalIgnoreCase))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var finderNamesKeys = TelescopeLauncher.FinderNames.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
             Assert.True(registryTelescopeKeys.SetEquals(finderNamesKeys),
                 "Actions.Registry telescope keys must exactly match TelescopeLauncher.FinderNames keys");
+            foreach (string key in registryTelescopeKeys)
+            {
+                string finder = TelescopeLauncher.FinderNames[key];
+                Assert.True(!string.IsNullOrEmpty(finder), $"telescope action '{key}' must map to a finder name");
+            }
         }
 
         // ================================================================
@@ -1775,7 +1904,19 @@ namespace NeoVisual.Tests
         {
             // M12 (BP-4): a null IVsWindowFrame4 must yield null (the old code path
             // `(IVsWindowFrame4)_frame` throws InvalidCastException on a non-conforming frame).
-            Assert.Equal(null, WindowFrameAdapter.TryGetScreenRect(null));
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                Assert.Equal(null, WindowFrameAdapter.TryGetScreenRect(null));
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
         }
 
         public static void Run_WindowNavigationEngine_EmptyRectExcludedBySelectTarget()

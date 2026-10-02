@@ -65,7 +65,7 @@ namespace Telescope.Overlay
             int next = _text.IndexOf('\n', _caret);
             if (next < 0)
             {
-                MoveTo(_text.Length);
+                // N66/BP-62: already on the last line — stay put (no-op), do not jump to the end.
                 return;
             }
             int nextStart = next + 1;
@@ -86,7 +86,7 @@ namespace Telescope.Overlay
             int column = Math.Max(0, _caret - lineStart);
             if (lineStart == 0)
             {
-                MoveTo(0);
+                // N66/BP-62: already on the first line — stay put (no-op), do not jump to 0.
                 return;
             }
             // The current line's start is the char after a '\n' at (lineStart-1). The previous

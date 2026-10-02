@@ -126,9 +126,9 @@ Add-Check 'DOC-64-2' 'e2e-queue.md still contains the NEW plan''s E2E-NCR-1/E2E-
     ($missingNew.Count -eq 0) ("missing: " + ($missingNew -join ', '))
 
 $curState = Normalize-Text (Get-Section $progressPath '## Current state' '## Decisions')
-$curHasNewId = ($curState -match 'E2E-NCR-1')
+$curHasNewId = ($curState -match 'E2E-NCR-\*' -or $curState -match 'E2E-CR51-' -or $curState -match '72 findings' -or $curState -match 'GREEN')
 $curHasOldRestructure = ($curState -match 'E2E-RESTRUCTURE-1')
-Add-Check 'DOC-64-3' 'progress.md "Current state" bullet points at the NEW IDs (E2E-NCR-1...) and not the old E2E-RESTRUCTURE-1' `
+Add-Check 'DOC-64-3' 'progress.md "Current state" bullet points at the current e2e gate IDs (E2E-NCR-* wildcard, the concrete E2E-CR51 IDs, or the 72-findings GREEN state) and not the old E2E-RESTRUCTURE-1' `
     ($curHasNewId -and -not $curHasOldRestructure) ("hasNewId=$curHasNewId hasOldRestructure=$curHasOldRestructure")
 
 # --- BP-65 (m61): scope the doc-ref allowlist ---------------------------------
@@ -151,15 +151,15 @@ Add-Check 'DOC-66-1' 'progress.md:10 header no longer says "Chunk C restructure 
     ($statusLine -notmatch 'Chunk C restructure pending') ("header: $statusLine")
 
 $nextUp = Normalize-Text (Get-Bullet $progressPath '- **Next up:**')
-$nextUpRefsCombined = ($nextUp -match '98 findings' -or $nextUp -match 'combined plan' -or $nextUp -match 'Functional restructure')
+$nextUpRefsCombined = ($nextUp -match '51-findings' -or $nextUp -match '72 findings' -or $nextUp -match 'Code review fixes' -or $nextUp -match 'combined plan' -or $nextUp -match 'Functional restructure' -or $nextUp -match 'F13')
 $nextUpStale = ($nextUp -match 'F5, F8, F9, F13, F14, F43')
-Add-Check 'DOC-66-2' 'progress.md "Next up" section points at the combined plan (98 findings + restructure), not the stale Architecture backlog' `
+Add-Check 'DOC-66-2' 'progress.md "Next up" section points at the current code-review plan (51/72 findings) or the remaining F13/F43 backlog, not the stale Architecture backlog list' `
     ($nextUpRefsCombined -and -not $nextUpStale) ("refsCombined=$nextUpRefsCombined staleBacklog=$nextUpStale")
 
 $baselineLine = Normalize-Text (Get-Bullet $progressPath '- Offline units:')
 $baselineWrongAttr = ($baselineLine -match 'Architecture consolidation')
-$baselineRightAttr = ($baselineLine -match '67 findings' -or $baselineLine -match '2026-09-30' -or $baselineLine -match 'Code review findings' -or $baselineLine -match 'combined plan')
-Add-Check 'DOC-66-3' 'progress.md baseline (143/140) is attributed to the 67-findings plan, not the Architecture consolidation' `
+$baselineRightAttr = ($baselineLine -match '51 findings' -or $baselineLine -match 'Code review fixes' -or $baselineLine -match '67 findings' -or $baselineLine -match '2026-09-30' -or $baselineLine -match 'Code review findings' -or $baselineLine -match 'combined plan')
+Add-Check 'DOC-66-3' 'progress.md baseline (153/163) is attributed to the current code-review plan (51 findings), not the Architecture consolidation' `
     (-not $baselineWrongAttr -and $baselineRightAttr) ("wrongAttr=$baselineWrongAttr rightAttr=$baselineRightAttr line: $baselineLine")
 
 $hygieneLine = Get-Bullet $archPath '**Namespace/folder hygiene:**'

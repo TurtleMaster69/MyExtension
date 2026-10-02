@@ -101,6 +101,11 @@ namespace MyExtension.ToolWindows
             {
                 return Decision.InjectEscape;
             }
+            // N26: after MaxEscapeAttempts with the box still focused, stop — do not fight the user.
+            if (searchBoxFocused)
+            {
+                return Decision.Stop;
+            }
             return Decision.Reassert;
         }
     }

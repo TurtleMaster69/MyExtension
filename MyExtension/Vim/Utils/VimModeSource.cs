@@ -69,8 +69,9 @@ namespace MyExtension.Vim
 
         private IComponentModel? _componentModel;
 
-        // The resolved VsVim IVim export and its resolution latch. The latch is set ONLY on a
-        // successful resolution (M17 fix) — a failure leaves it unset so the next call retries.
+        // The resolved VsVim IVim export and its resolution latch. N28: the latch is set on the
+        // first resolution attempt (including a not-found/null result) so the not-found diagnostic
+        // is logged once per session, not on every view open / focus gain.
         private object? _vim;
         private bool _resolved;
 
@@ -469,13 +470,11 @@ namespace MyExtension.Vim
                     .FirstOrDefault();
 
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}VsVim integration: {(vim != null ? "detected" : "not found")}");
-                // m38: latch ONLY on a successful resolution — a "not found" (null) must not
-                // permanently latch "no VsVim", so a later resolution can still succeed.
-                if (vim != null)
-                {
-                    _resolved = true;
-                    _vim = vim;
-                }
+                // N28: latch the resolution result (including the not-found/null case) once per
+                // session so the not-found line is logged once, not on every view open / focus
+                // gain. This supersedes the m38 "don't latch not-found" behavior.
+                _resolved = true;
+                _vim = vim;
                 return vim;
             }
             catch (Exception ex)

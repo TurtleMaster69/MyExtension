@@ -74,37 +74,36 @@ namespace MyExtension.Input
 
         public static KeybindingConfig Load()
         {
-            var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var leaderKey = Keys.Space;
+            // Base defaults from the embedded project-root JSON, then optional user overrides
+            // (used only when the file exists). Each source is read independently so a read
+            // failure in one never discards the other.
+            string path = ConfigPath;
+            bool userFileExists = File.Exists(path);
 
-            // Base defaults from the embedded project-root JSON.
+            var sources = new List<(string Json, string ErrorMessage)>();
             try
             {
-                ApplyJson(ReadEmbeddedDefault(), ref leaderKey, bindings);
+                sources.Add((ReadEmbeddedDefault(), "Failed to load built-in keybindings"));
             }
             catch (Exception ex)
             {
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Failed to load built-in keybindings: {ex.Message}");
             }
-
-            // Optional user overrides, used only when the file exists.
-            string path = ConfigPath;
-            bool userFileExists = File.Exists(path);
-            try
+            if (userFileExists)
             {
-                if (userFileExists)
+                try
                 {
-                    ApplyJson(File.ReadAllText(path), ref leaderKey, bindings);
+                    sources.Add((File.ReadAllText(path), $"Failed to load keybindings from '{path}'"));
+                }
+                catch (Exception ex)
+                {
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
                 }
             }
-            catch (Exception ex)
-            {
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Failed to load keybindings from '{path}': {ex.Message}");
-            }
 
-            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Keybindings loaded: {bindings.Count} binding(s), leader = {leaderKey} (user file: {(userFileExists ? path : "none")})");
-
-            return new KeybindingConfig(leaderKey, bindings);
+            var config = Merge(sources);
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Keybindings loaded: {config.Bindings.Count} binding(s), leader = {config.LeaderKey} (user file: {(userFileExists ? path : "none")})");
+            return config;
         }
 
         /// <summary>
@@ -114,10 +113,7 @@ namespace MyExtension.Input
         /// </summary>
         internal static KeybindingConfig LoadFromJson(string json)
         {
-            var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var leaderKey = Keys.Space;
-            ApplyJson(json, ref leaderKey, bindings);
-            return new KeybindingConfig(leaderKey, bindings);
+            return Merge(new[] { (json, "Failed to load keybindings") });
         }
 
         /// <summary>Test-only seam: builds a config from ONLY the embedded default-keybindings.json
@@ -125,9 +121,30 @@ namespace MyExtension.Input
         /// shipped defaults hermetically.</summary>
         internal static KeybindingConfig LoadDefaults()
         {
+            return Merge(new[] { (ReadEmbeddedDefault(), "Failed to load built-in keybindings") });
+        }
+
+        /// <summary>
+        /// N56: the shared merge prologue — creates the case-insensitive bindings map + default
+        /// leader, applies each JSON source in order (later sources override earlier ones), and
+        /// returns the config. A source that fails to parse is logged and skipped so one bad
+        /// source never discards the others.
+        /// </summary>
+        private static KeybindingConfig Merge(IReadOnlyList<(string Json, string ErrorMessage)> sources)
+        {
             var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var leaderKey = Keys.Space;
-            ApplyJson(ReadEmbeddedDefault(), ref leaderKey, bindings);
+            foreach (var (json, errorMessage) in sources)
+            {
+                try
+                {
+                    ApplyJson(json, ref leaderKey, bindings);
+                }
+                catch (Exception ex)
+                {
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}{errorMessage}: {ex.Message}");
+                }
+            }
             return new KeybindingConfig(leaderKey, bindings);
         }
 
@@ -217,7 +234,13 @@ namespace MyExtension.Input
         {
             if (!string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, true, out Keys key))
             {
-                return key;
+                // N70: reject modifier keys (Ctrl/Shift/Alt/Win) and non-single keys — a modifier
+                // leader silently disables the leader key. A real physical key (e.g. ControlKey)
+                // is still honored.
+                if ((key & Keys.Modifiers) == Keys.None && key != Keys.LWin && key != Keys.RWin)
+                {
+                    return key;
+                }
             }
             return Keys.Space;
         }

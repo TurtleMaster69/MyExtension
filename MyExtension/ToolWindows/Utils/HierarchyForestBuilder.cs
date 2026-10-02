@@ -4,32 +4,15 @@ using System.Collections.Generic;
 namespace MyExtension.ToolWindows
 {
     /// <summary>
-    /// Pure DTO mirroring <see cref="HierarchyNode"/>: the DTE adapter
-    /// (<see cref="SolutionExplorerController.MapChildren"/>) maps a project node's
-    /// <c>UIHierarchyItems</c> into these, and <see cref="HierarchyForestBuilder.Build"/>
-    /// turns them into the <see cref="HierarchyNode"/> forest. Dependency-free so the
-    /// builder is unit-testable without DTE.
-    /// </summary>
-    internal sealed class HierarchyItemInfo
-    {
-        public HierarchyItemInfo(string kind, string name, string fullPath,
-            IReadOnlyList<HierarchyItemInfo>? children)
-        { Kind = kind; Name = name; FullPath = fullPath; Children = children; }
-        public string Kind { get; }
-        public string Name { get; }
-        public string FullPath { get; }
-        public IReadOnlyList<HierarchyItemInfo>? Children { get; }
-    }
-
-    /// <summary>
     /// Pure forest builder (M14): recurses physical folders and adds physical <c>.cs</c> files,
     /// reusing <see cref="HierarchyResolver.PhysicalFolderKind"/> / <see cref="HierarchyResolver.PhysicalFileKind"/>
     /// and producing the existing <see cref="HierarchyNode"/>. The <c>.cs</c> filter lives here
-    /// (the DTE adapter passes all physical files through).
+    /// (the DTE adapter passes all physical files through). N61: <see cref="HierarchyNode"/> is the
+    /// single DTO (the near-identical <c>HierarchyItemInfo</c> was merged into it).
     /// </summary>
     internal static class HierarchyForestBuilder
     {
-        public static List<HierarchyNode> Build(IEnumerable<HierarchyItemInfo> items)
+        public static List<HierarchyNode> Build(IEnumerable<HierarchyNode> items)
         {
             var forest = new List<HierarchyNode>();
             if (items == null)
@@ -46,7 +29,7 @@ namespace MyExtension.ToolWindows
                 else if (item.Kind == HierarchyResolver.PhysicalFileKind &&
                          item.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 {
-                    forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFileKind, item.Name, item.FullPath, null));
+                    forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFileKind, item.Name, item.FilePath, null));
                 }
             }
             return forest;

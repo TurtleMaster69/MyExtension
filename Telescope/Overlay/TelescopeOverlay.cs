@@ -208,7 +208,7 @@ namespace Telescope.Overlay
             {
                 if (IsOpen)
                 {
-                    TelescopeLog.Log($"textinput='{e.Text}' focused={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
+                    TelescopeLog.Log($"textinput='{DiagnosticLog.SanitizeText(e.Text)}' focused={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
                 }
             };
 
@@ -249,9 +249,10 @@ namespace Telescope.Overlay
         /// <paramref name="ownerHwnd"/>, when non-zero, is the fallback owner HWND. The overlay is
         /// shown as a modal dialog so VS handles focus/key routing. Runs on the UI thread.
         /// </summary>
-        public void ShowOverlay(IFinder finder, System.Drawing.Rectangle? centerRect, IntPtr ownerHwnd = default)
+        public async Task ShowOverlayAsync(IFinder finder, System.Drawing.Rectangle? centerRect, IntPtr ownerHwnd = default)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
+            // VSTHRD109: an async method must switch to the UI thread rather than throw.
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             _activeFinder = finder;
             _candidates = finder.GetCandidates();
@@ -266,7 +267,8 @@ namespace Telescope.Overlay
             RenderResults();
 
             TelescopeLog.Log($"open finder={finder.Name} candidates={_candidates.Count}");
-            if (!_fzf.IsAvailable())
+            // N38/BP-52: the availability probe runs off the UI thread; await it here.
+            if (!await _fzf.IsAvailableAsync())
             {
                 TelescopeLog.Log("fzf unavailable — showing unfiltered list");
             }
@@ -345,7 +347,7 @@ namespace Telescope.Overlay
                 return;
             }
             string query = _promptBox.Text;
-            TelescopeLog.Log($"promptChanged query='{query}'");
+            TelescopeLog.Log($"promptChanged query='{DiagnosticLog.SanitizeText(query)}'");
             RefreshResults(query);
         }
 
@@ -414,8 +416,8 @@ namespace Telescope.Overlay
             }
             catch (Exception ex)
             {
-                // m14: Format returns the UNPREFIXED message; TelescopeLog adds the [Telescope] prefix.
-                TelescopeLog.Log(FilterFailureLog.Format(ex));
+                // N41/BP-55: Format returns the PREFIXED line; NeoVisualLog.Log adds no prefix.
+                NeoVisualLog.Log(FilterFailureLog.Format(ex));
             }
         }
 
@@ -516,6 +518,9 @@ namespace Telescope.Overlay
                 case CaretPlacement.Start: // I (insert at start)
                     _promptNavigator.InsertStart();
                     break;
+                case CaretPlacement.AfterCaret: // a (append): caret one position after the current caret
+                    _promptNavigator.InsertAfter();
+                    break;
                 default: // i (current): no motion, caret clamped to current
                     break;
             }
@@ -525,6 +530,11 @@ namespace Telescope.Overlay
         /// <summary>Enters insert mode and places the caret per <paramref name="placement"/>.</summary>
         private void EnterInsert(CaretPlacement placement)
         {
+            // Flip the key handler's mode BEFORE FocusPrompt() reads it. The i/a/A/I tap routes
+            // through TryPromptMotion -> EnterInsert directly (not _keyHandler.Handle), so without
+            // this the handler is still in normal mode and FocusPrompt() re-sets IsReadOnly=true
+            // and logs mode=normal. Idempotent when already called from ApplyAction.
+            _keyHandler.EnterInsertMode(placement);
             _promptBox.IsReadOnly = false;
             UpdateModeLabel();
             FocusPrompt();
@@ -722,6 +732,10 @@ namespace Telescope.Overlay
                 case OverlayAction.EnterInsertStart:
                     handled = true;
                     EnterInsert(CaretPlacement.Start);
+                    break;
+                case OverlayAction.EnterInsertAfter:
+                    handled = true;
+                    EnterInsert(CaretPlacement.AfterCaret);
                     break;
                 case OverlayAction.EnterNormal:
                     handled = true;

@@ -294,6 +294,9 @@ namespace MyExtension.Input
             // context; popup navigation gates on that itself.
             if ((key == Keys.N || key == Keys.P) && ctrl && !shift && !alt)
             {
+                // N29: this branch runs before the leader state machine — reset any in-progress
+                // leader sequence so it is not left dangling.
+                ResetSequence();
                 return _popupNav.TryNavigate(down: key == Keys.N);
             }
 

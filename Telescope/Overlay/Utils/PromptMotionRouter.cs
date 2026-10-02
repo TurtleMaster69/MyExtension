@@ -30,7 +30,7 @@ namespace Telescope.Overlay
             switch (motion.Value)
             {
                 case TextMotion.InsertAfter:
-                    insertPlacement = CaretPlacement.Current;
+                    insertPlacement = CaretPlacement.AfterCaret;
                     return false;
                 case TextMotion.InsertEnd:
                     insertPlacement = CaretPlacement.End;

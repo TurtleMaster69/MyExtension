@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 
 namespace Telescope.Overlay
 {
@@ -14,17 +13,27 @@ namespace Telescope.Overlay
         Number,
     }
 
-    /// <summary>A contiguous run of source text with a single visual category.</summary>
+    /// <summary>
+    /// A contiguous run of source text with a single visual category. N64/BP-60: the segment stores
+    /// the source string plus a start/length span instead of a materialized substring, so the
+    /// tokenizer does not allocate a string per token; <see cref="Text"/> materializes on demand.
+    /// </summary>
     internal readonly struct SyntaxSegment
     {
-        public SyntaxSegment(string text, SyntaxCategory category)
+        private readonly string _source;
+        private readonly int _start;
+        private readonly int _length;
+
+        public SyntaxSegment(string source, int start, int length, SyntaxCategory category)
         {
-            Text = text;
+            _source = source;
+            _start = start;
+            _length = length;
             Category = category;
         }
 
         /// <summary>The segment text (may span lines for block comments / verbatim strings).</summary>
-        public string Text { get; }
+        public string Text => _source.Substring(_start, _length);
 
         public SyntaxCategory Category { get; }
     }
@@ -57,6 +66,25 @@ namespace Telescope.Overlay
             "get", "set", "where", "when", "nameof", "not", "and", "or", "file", "scoped", "value",
         };
 
+        // N64/BP-60: keywords bucketed by length so an identifier can be classified without
+        // materializing a substring (ordinal compare against the source span).
+        private static readonly Dictionary<int, List<string>> _keywordsByLength = BuildKeywordsByLength();
+
+        private static Dictionary<int, List<string>> BuildKeywordsByLength()
+        {
+            var map = new Dictionary<int, List<string>>();
+            foreach (string keyword in _keywords)
+            {
+                if (!map.TryGetValue(keyword.Length, out var list))
+                {
+                    list = new List<string>();
+                    map[keyword.Length] = list;
+                }
+                list.Add(keyword);
+            }
+            return map;
+        }
+
         /// <summary>
         /// Splits <paramref name="text"/> into colored segments, in order. Handles multi-line
         /// constructs (block comments, verbatim strings) by emitting segments that contain '\n'.
@@ -77,113 +105,158 @@ namespace Telescope.Overlay
                 char c = text[i];
                 char next = i + 1 < len ? text[i + 1] : '\0';
 
-                // Line comment: // ... to end of line (the '\n' is left to the default scanner).
                 if (c == '/' && next == '/')
                 {
-                    int start = i;
-                    i += 2;
-                    while (i < len && text[i] != '\n') i++;
-                    result.Add(new SyntaxSegment(text.Substring(start, i - start), SyntaxCategory.Comment));
-                    continue;
+                    result.Add(ReadLineComment(text, ref i));
                 }
-
-                // Block comment: /* ... */ (may span lines).
-                if (c == '/' && next == '*')
+                else if (c == '/' && next == '*')
                 {
-                    int start = i;
-                    i += 2;
-                    while (i < len && !(text[i] == '*' && i + 1 < len && text[i + 1] == '/')) i++;
-                    if (i < len)
-                    {
-                        i += 2; // consume the closing */
-                    }
-                    result.Add(new SyntaxSegment(text.Substring(start, i - start), SyntaxCategory.Comment));
-                    continue;
+                    result.Add(ReadBlockComment(text, ref i));
                 }
-
-                // Verbatim string: @"..." (may span lines; "" is an escaped quote).
-                if (c == '@' && next == '"')
+                else if (c == '@' && next == '"')
                 {
-                    int start = i;
-                    i += 2;
-                    while (i < len)
-                    {
-                        if (text[i] == '"')
-                        {
-                            if (i + 1 < len && text[i + 1] == '"')
-                            {
-                                i += 2;
-                                continue;
-                            }
-                            i++;
-                            break;
-                        }
-                        i++;
-                    }
-                    result.Add(new SyntaxSegment(text.Substring(start, i - start), SyntaxCategory.String));
-                    continue;
+                    result.Add(ReadVerbatimString(text, ref i, prefixLength: 1));
                 }
-
-                // Interpolated string: $"..."
-                if (c == '$' && next == '"')
+                else if (c == '$' && next == '@' && i + 2 < len && text[i + 2] == '"')
+                {
+                    // N67/BP-63: interpolated verbatim string $@"..." (the '$' + '"' branch misses it).
+                    result.Add(ReadVerbatimString(text, ref i, prefixLength: 2));
+                }
+                else if (c == '$' && next == '"')
                 {
                     result.Add(ReadQuoted(text, ref i, '"'));
-                    continue;
                 }
-
-                // Normal string: "..."
-                if (c == '"')
+                else if (c == '"')
                 {
                     result.Add(ReadQuoted(text, ref i, '"'));
-                    continue;
                 }
-
-                // Character literal: '...'
-                if (c == '\'')
+                else if (c == '\'')
                 {
                     result.Add(ReadQuoted(text, ref i, '\''));
-                    continue;
                 }
-
-                // Number: 123, 0x1F, 1.5e-3, 100L (a leading '.' is included for ".5").
-                if (char.IsDigit(c) || (c == '.' && char.IsDigit(next)))
+                else if (char.IsDigit(c) || (c == '.' && char.IsDigit(next)))
                 {
                     result.Add(ReadNumber(text, ref i));
-                    continue;
                 }
-
-                // Identifier (possibly a keyword).
-                if (char.IsLetter(c) || c == '_')
+                else if (char.IsLetter(c) || c == '_')
                 {
-                    int start = i;
-                    while (i < len && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
-                    string word = text.Substring(start, i - start);
-                    result.Add(new SyntaxSegment(word, _keywords.Contains(word) ? SyntaxCategory.Keyword : SyntaxCategory.Default));
-                    continue;
+                    result.Add(ReadIdentifier(text, ref i));
                 }
-
-                // Anything else: a default run up to the next token-start character.
-                int dStart = i;
-                while (i < len)
+                else
                 {
-                    char d = text[i];
-                    char dNext = i + 1 < len ? text[i + 1] : '\0';
-                    if ((d == '/' && (dNext == '/' || dNext == '*'))
-                        || d == '"' || d == '\''
-                        || (d == '@' && dNext == '"')
-                        || (d == '$' && dNext == '"')
-                        || char.IsDigit(d)
-                        || (d == '.' && char.IsDigit(dNext))
-                        || char.IsLetter(d) || d == '_')
-                    {
-                        break;
-                    }
-                    i++;
+                    result.Add(ReadDefault(text, ref i));
                 }
-                result.Add(new SyntaxSegment(text.Substring(dStart, i - dStart), SyntaxCategory.Default));
             }
 
             return result;
+        }
+
+        /// <summary>Line comment: <c>// ...</c> to end of line (the '\n' is left to the default scanner).</summary>
+        private static SyntaxSegment ReadLineComment(string text, ref int i)
+        {
+            int start = i;
+            i += 2;
+            int len = text.Length;
+            while (i < len && text[i] != '\n') i++;
+            return new SyntaxSegment(text, start, i - start, SyntaxCategory.Comment);
+        }
+
+        /// <summary>Block comment: <c>/* ... */</c> (may span lines).</summary>
+        private static SyntaxSegment ReadBlockComment(string text, ref int i)
+        {
+            int start = i;
+            i += 2;
+            int len = text.Length;
+            while (i < len && !(text[i] == '*' && i + 1 < len && text[i + 1] == '/')) i++;
+            if (i < len)
+            {
+                i += 2; // consume the closing */
+            }
+            return new SyntaxSegment(text, start, i - start, SyntaxCategory.Comment);
+        }
+
+        /// <summary>
+        /// Verbatim string: <c>@"..."</c> or <c>$@"..."</c> (may span lines; <c>""</c> is an escaped
+        /// quote). <paramref name="prefixLength"/> is 1 for <c>@</c> and 2 for <c>$@</c>.
+        /// </summary>
+        private static SyntaxSegment ReadVerbatimString(string text, ref int i, int prefixLength)
+        {
+            int start = i;
+            i += prefixLength + 1; // skip the prefix + the opening quote
+            int len = text.Length;
+            while (i < len)
+            {
+                if (text[i] == '"')
+                {
+                    if (i + 1 < len && text[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            return new SyntaxSegment(text, start, i - start, SyntaxCategory.String);
+        }
+
+        /// <summary>Identifier (possibly a keyword).</summary>
+        private static SyntaxSegment ReadIdentifier(string text, ref int i)
+        {
+            int start = i;
+            int len = text.Length;
+            while (i < len && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
+            int length = i - start;
+            return new SyntaxSegment(text, start, length,
+                IsKeyword(text, start, length) ? SyntaxCategory.Keyword : SyntaxCategory.Default);
+        }
+
+        /// <summary>Ordinal keyword check against the source span (no substring allocation).</summary>
+        private static bool IsKeyword(string text, int start, int length)
+        {
+            if (!_keywordsByLength.TryGetValue(length, out var candidates))
+            {
+                return false;
+            }
+            foreach (string candidate in candidates)
+            {
+                if (string.CompareOrdinal(text, start, candidate, 0, length) == 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Anything else: a default run up to the next token-start character.</summary>
+        private static SyntaxSegment ReadDefault(string text, ref int i)
+        {
+            int start = i;
+            int len = text.Length;
+            while (i < len)
+            {
+                char d = text[i];
+                char dNext = i + 1 < len ? text[i + 1] : '\0';
+                if (IsTokenStart(d, dNext))
+                {
+                    break;
+                }
+                i++;
+            }
+            return new SyntaxSegment(text, start, i - start, SyntaxCategory.Default);
+        }
+
+        /// <summary>True when the character pair begins a token the main scanner handles.</summary>
+        private static bool IsTokenStart(char c, char next)
+        {
+            return (c == '/' && (next == '/' || next == '*'))
+                || c == '"' || c == '\''
+                || (c == '@' && next == '"')
+                || (c == '$' && (next == '"' || next == '@'))
+                || char.IsDigit(c)
+                || (c == '.' && char.IsDigit(next))
+                || char.IsLetter(c) || c == '_';
         }
 
         /// <summary>Reads a quoted token starting at the opening quote (which is at <paramref name="i"/>).</summary>
@@ -191,11 +264,12 @@ namespace Telescope.Overlay
         {
             int start = i;
             i++; // skip the opening quote
-            while (i < text.Length)
+            int len = text.Length;
+            while (i < len)
             {
                 if (text[i] == '\\')
                 {
-                    i += (i + 1 < text.Length) ? 2 : 1; // escaped character, e.g. \" or \n
+                    i += (i + 1 < len) ? 2 : 1; // escaped character, e.g. \" or \n
                     continue;
                 }
                 if (text[i] == quote)
@@ -205,7 +279,7 @@ namespace Telescope.Overlay
                 }
                 i++;
             }
-            return new SyntaxSegment(text.Substring(start, i - start), SyntaxCategory.String);
+            return new SyntaxSegment(text, start, i - start, SyntaxCategory.String);
         }
 
         /// <summary>Reads a numeric literal starting at the first digit (or the '.' of ".5").</summary>
@@ -219,7 +293,7 @@ namespace Telescope.Overlay
                 i += 2;
                 while (i < len && (Uri.IsHexDigit(text[i]) || text[i] == '_')) i++;
                 while (i < len && (char.IsLetter(text[i]) || text[i] == '_')) i++; // suffix
-                return new SyntaxSegment(text.Substring(start, i - start), SyntaxCategory.Number);
+                return new SyntaxSegment(text, start, i - start, SyntaxCategory.Number);
             }
 
             while (i < len && (char.IsDigit(text[i]) || text[i] == '.' || text[i] == '_')) i++;
@@ -239,7 +313,7 @@ namespace Telescope.Overlay
             }
             while (i < len && (char.IsLetter(text[i]) || text[i] == '_')) i++; // suffix (f/d/m/L/U)
 
-            return new SyntaxSegment(text.Substring(start, i - start), SyntaxCategory.Number);
+            return new SyntaxSegment(text, start, i - start, SyntaxCategory.Number);
         }
     }
 }

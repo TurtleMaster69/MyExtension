@@ -241,8 +241,8 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (153) and
-  `dotnet run --project tests/NeoVisual.Tests` (163), with substring filter +
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (157) and
+  `dotnet run --project tests/NeoVisual.Tests` (168), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,

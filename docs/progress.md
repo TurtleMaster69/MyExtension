@@ -420,7 +420,7 @@ Top of the queue, in priority order:
   n19 / m14×2 / n18 + the documented m6 single-stamp + n10 bare-contract changes). NO
   e2e harness commands run (machine cannot boot the VS Experimental Instance). e2e gates
   queued in `docs/e2e-queue.md` (E2E-NCR-1..2, E2E-NCR-M2/M4/M5/M3/M7/m47,
-  E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, E2E-NCR-67-*, status QUEUED). Commit: `<pending>`.
+  E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, E2E-NCR-67-*, status QUEUED). Commit: `349fc05`.
   **Change summary:** Phases 0-10 (code-review fixes): M1/m52 `PromptMotionRouter`
   routing seam (a/A/I fall through to insert); M8 `HierarchyResolver.PrimaryFilePath`;
   M2/M4/m5/m27/m30-m34/m37/m50 finder-path amortization (GrepFinder drops Task.Run,

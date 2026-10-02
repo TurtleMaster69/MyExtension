@@ -60,7 +60,9 @@ re-derive it here.
 
 ## Hard rules
 
-- **Read-only.** `permission: edit: deny` — you may not write/edit/delete any file.
+- **Read-only.** `permission: edit: deny` — you may not write/edit/delete any file,
+  EXCEPT appending to `.opencode/command/command-log.md` (the shared command
+  knowledge base).
 - **NEVER prompt the user.** `question` is denied for you.
 - Your final message is your ONLY deliverable: a verdict plus findings in the
   specified format. No prose preamble.

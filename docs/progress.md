@@ -7,24 +7,26 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (51 findings) — GREEN 2026-10-02 (unit-only lane; e2e gates E2E-CR51-1..10 queued in `e2e-queue.md`)
+> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (72 findings) — PLANNED 2026-10-02 (unit-only lane; e2e gates E2E-CR72-1..10 queued in `e2e-queue.md`)
 
 ## Current state
 
-- **In progress:** none — the **Code review fixes (51 findings)** plan reached GREEN
-  2026-10-02 (unit-only lane; the e2e gates are queued in `e2e-queue.md`,
-  E2E-CR51-1..10, status QUEUED). Prior GREEN: the **Code review findings (98 findings)
-  + Functional restructure** combined plan (2026-10-02, e2e gates E2E-NCR-* queued);
-  the Code review findings (67) + Repository restructure plan (2026-09-30); the
-  Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly bugfix, F22
-  (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache) (2026-09-28). No
-  known-RED e2e scenario remains.
-- **Next up:** the still-open Architecture backlog findings **F13** (no-seam dedup) and
-  **F43** (not RED-provable) — the only remaining backlog items after the 51-findings
-  plan (which subsumed F5→R3, F7→R4, F8/F9→R22/R42, F10→R2, F14→R45). Also pending: the
-  Telescope `fzf` finder (SCOPE DECIDED 2026-09-28, PLANNED not executed) and the
-  user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts
-  it). See the Pending queue + User-requested features sections below.
+- **In progress:** none — the **Code review fixes (72 findings)** plan is the FIRST
+  pending item (PLANNED 2026-10-02, not yet executed; unit-only lane, e2e gates
+  E2E-CR72-1..10 queued in `e2e-queue.md`). Prior GREEN: the **Code review fixes
+  (51 findings)** plan (2026-10-02, e2e gates E2E-CR51-1..10 queued); the **Code review
+  findings (98 findings) + Functional restructure** combined plan (2026-10-02, e2e gates
+  E2E-NCR-* queued); the Code review findings (67) + Repository restructure plan
+  (2026-09-30); the Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly
+  bugfix, F22 (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache)
+  (2026-09-28). No known-RED e2e scenario remains.
+- **Next up:** the **Code review fixes (72 findings)** plan (FIRST pending item — see the
+  Pending queue). After it: the still-open Architecture backlog findings **F13** (no-seam
+  dedup) and **F43** (not RED-provable) — the only remaining backlog items after the
+  51-findings plan (which subsumed F5→R3, F7→R4, F8/F9→R22/R42, F10→R2, F14→R45). Also
+  pending: the Telescope `fzf` finder (SCOPE DECIDED 2026-09-28, PLANNED not executed)
+  and the user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop
+  starts it). See the Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
@@ -192,6 +194,19 @@ were known-backlog assertion bugs, not regressions).
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
+
+> **FIRST ITEM (2026-10-02):** the **Code review fixes (72 findings)** plan — **PENDING**
+> (not yet executed). Source: `docs/reviews/code-review.md` (2026-10-02, 72 findings:
+> 2 critical, 8 major, 45 minor, 17 nit — the user requested fixes for ALL findings,
+> incl. minors/nits). Plan in `docs/implementation_plan.md` (8 phases: 0-7 code-review
+> fixes; 70 BP steps + Verification Trace).
+> **DEFER e2e tests (unit-only lane):** e2e scenarios are queued in `docs/e2e-queue.md`
+> (E2E-CR72-1..10, status QUEUED) — run them on a VS-capable machine after this plan is
+> GREEN. The plan does NOT subsume the still-open Architecture backlog findings
+> (F13/F43 stay in the backlog — no-seam/not-RED-provable). Fix-direction corrections
+> folded in: N1/N2 `Assert.True` polarity (the guard routes in input mode), N37
+> FileFinder-cache scope, N49 delete-redundant-test, N45 backslash-before-quote, N55
+> line ref, N57 unused-using scope.
 
 > **FIRST ITEM (2026-10-02):** ~~the **Code review fixes (51 findings)** plan~~ —
 > **DONE** (GREEN 2026-10-02, unit-only lane; see the Done section). Source:

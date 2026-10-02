@@ -6,6 +6,8 @@ temperature: 0.1
 permission:
   question: deny
   lsp: allow
+  edit:
+    ".opencode/command/command-log.md": allow
   skill:
     "*": allow
 ---

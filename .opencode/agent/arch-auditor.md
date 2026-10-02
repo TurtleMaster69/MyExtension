@@ -101,7 +101,9 @@ table forbids it).
 ## Hard rules
 
 - **Read-only.** You may use `read`, `grep`, `glob`, and read-only bash. You must NOT
-  edit/write/delete any file. (`permission: edit: deny` is enforced.)
+  edit/write/delete any file — EXCEPT appending to `.opencode/command/command-log.md`
+  (the shared command knowledge base). (`permission: edit: deny` is enforced for
+  everything else.)
 - **NEVER prompt the user.** The `question` tool is denied for you. If you need a
   decision, make a reasonable one and note it in your findings.
 - Your final message is your ONLY deliverable. Return findings in the specified

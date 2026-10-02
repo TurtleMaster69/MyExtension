@@ -439,3 +439,105 @@ final entry).
 - **Status:** QUEUED
 - **Scenarios:** `-Tests seed-leak` alone.
 - **Assert:** `-Tests seed-leak` alone runs green (self-seeding subsets).
+
+---
+
+# E2E queue (deferred — Code review fixes, 72 findings / 8 phases)
+
+The 72-findings plan (`docs/implementation_plan.md`, 2026-10-02) is executed in the
+**unit-only lane**: every fix is RED-proven by unit tests (or build + existing suites
+for no-seam items), so the e2e gate is the listed scenarios staying GREEN on a capable
+machine (one that can boot the VS Experimental Instance). This file queues those
+gates. **Status: QUEUED** — none executed on the unit-only machine (2026-10-02).
+
+Each entry asserts: the listed scenarios stay GREEN + `git diff` shows no log-literal
+drift. Diagnostics depended on: the existing `[Telescope]`/`[NeoVisual]`/`[Hook]`/
+`[MyExtension]` lines (unchanged) plus the plan's documented changes (N4 makes
+`block-caret active=False` truthful without changing its format; N5/N72 keep the n19
+`window rect unavailable` diagnostic; N24 dedupes `editor-view-opened file=...`).
+
+Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
+final entry).
+
+## E2E-CR72-1 — N4 (block-caret deactivation)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-textinput-motions` + a new assertion that the block caret is
+  gone after leaving normal mode / focus loss.
+- **Assert:** `[NeoVisual] block-caret active=False` is truthful — the adornment is
+  removed on deactivation (the white block does not stay glued over the native caret).
+
+## E2E-CR72-2 — N3 (Vim buffer-subscription lifecycle)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-editor-insert` + a multi-view scenario.
+- **Assert:** closing a non-focused view does NOT kill the focused view's `SwitchedMode`
+  subscription (`vim-mode=Insert|Normal|Replace` unchanged); no unbounded
+  `_bufferToTextBuffer` growth.
+
+## E2E-CR72-3 — N5/N72 (HRESULT + n19)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-window-nav`.
+- **Assert:** a failed `GetWindowScreenRect` emits `window rect unavailable; using empty
+  rect` (n19) and navigation degrades gracefully (`navigate direction=L/R/D/U` +
+  `navigate activated index=...` / `navigate no-op:`), with the n19 line at most once per
+  session.
+
+## E2E-CR72-4 — N9 (false-positive gates)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-open`, `telescope-mode`, `telescope-navigate`.
+- **Assert:** the hardened assertions are real — a fresh post-tap line the
+  `Open-Telescope` helper does NOT confirm (a re-introduced prompt-focus/mode bug fails
+  the gate), e.g. `Focus prompt => True, mode=insert` after an explicit Escape.
+
+## E2E-CR72-5 — N24 (editor-view-opened dedupe)
+
+- **Status:** QUEUED
+- **Scenarios:** `explorer-open-navigation`.
+- **Assert:** `editor-view-opened file=...` emitted exactly once per open (no
+  double-emission from `SelectFirstSourceFile` + `TextViewCreated`).
+
+## E2E-CR72-6 — N19/N23 (caret-relative slice + A placement)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-textinput-motions`.
+- **Assert:** `text-motion key=... caret=... len=... text='...'` unchanged after the
+  WPF/WinForms caret-relative slice; `A` (InsertEnd) lands at the true line end, not the
+  slice boundary.
+
+## E2E-CR72-7 — N31 (prompt `a` after-caret)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-mode` / `telescope-prompt-motions`.
+- **Assert:** `a` in the prompt enters insert mode with the caret AFTER the current
+  position (`Focus prompt => True, mode=insert` after `a`; `prompt-motion key=... caret=...`
+  unchanged for the motion set).
+
+## E2E-CR72-8 — N38/N39 (fzf availability cached)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-search`.
+- **Assert:** when fzf is missing, no per-keystroke `fzf filter failed` spam — the
+  availability is cached and `FilterAsync` returns unfiltered without spawning
+  (`fzf unavailable — showing unfiltered list` once; `fzf filter failed:` not per-key).
+
+## E2E-CR72-9 — N43 (user text sanitized)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-search` / `telescope-issues`.
+- **Assert:** user-controlled text (prompt queries, Error List descriptions, display
+  strings) is sanitized in log lines — no `\n`/control chars split a `[Telescope]` line
+  (`Wait-NewLogLine` assertions stay line-based).
+
+## E2E-CR72-10 — N52/N53 (harness pinning)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-explorer-open`, `neovisual-explorer-open-o`,
+  `neovisual-editor-insert`, `seed-leak`.
+- **Assert:** `neovisual-explorer-open`/`-open-o` pin WHICH file opens (specific
+  `solution-explorer open` / `editor-view-opened file=` path, not "ANY file");
+  `neovisual-editor-insert` updates the seed-expected copy only on success (a failed
+  marker assertion does not record the wrong content as expected); `seed-leak` stays
+  GREEN.

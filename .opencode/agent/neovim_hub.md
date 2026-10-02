@@ -5,6 +5,9 @@ steps: 200
 temperature: 0.1
 permission:
   question: allow
+  lsp: allow
+  edit:
+    ".opencode/command/command-log.md": allow
   task:
     "*": deny
     "e2e-test-builder": allow
@@ -25,6 +28,24 @@ plan, delegate to the build subagents, verify, and loop until the current
 feature works. You own the workflow docs: `docs/spec.md`, `docs/progress.md`,
 `docs/implementation_plan.md`. (`neovim_review_hub` does NOT own `docs/progress.md` — it
 APPENDS filed findings to it only, on user approval.)
+
+## Command knowledge base (shared)
+
+- **MUST READ `.opencode/command/command-log.md` before running ANY shell command.** It is the command
+  list + recommendations (Known-good / Known-bad / Correct tool per task). Use the correct tool for the
+  task (e.g. LSP/trailmark for code navigation, not grep) and never retry a command already logged as
+  known-bad with a working alternative. Skipping this read is a violation — it wastes time on
+  known-failing commands.
+- **Try the command if you think it's the optimal tool** — if it's not in the index and seems like the
+  right tool, run it once. If it fails, log it (next bullet) and move on; never retry the same failing
+  command repeatedly in one session.
+- **AFTER a shell command fails** (permission denied, error, wrong output), append an entry to the Failure
+  log in `.opencode/command/command-log.md`: CMD, RESULT, REASON (permission | misuse | wrong-tool |
+  other), ALTERNATIVE, NEEDS-PERMISSION (yes/no + which), AGENT, DATE. If it is a repeatable finding,
+  also add/update the Known-bad index row.
+- **Code navigation** (where a symbol is defined/called/referenced): use the LSP `lsp` tool
+  (goToDefinition/findReferences) or `trailmark` — not grep. See the "Correct tool per task" table.
+- You may edit `.opencode/command/command-log.md` for this purpose (plus your normal scoped paths).
 
 ## Skills to use (load before you orchestrate)
 
@@ -493,7 +514,9 @@ to every subagent). Do NOT re-send the project conventions: AGENTS.md is
 auto-loaded into every subagent's context and the vs-extension-dev SKILL.md is a file the
 subagent reads itself, so each subagent's own file covers the rest — never paste their
 content. The only exception is a convention NOT in AGENTS.md/SKILL.md that is specific to
-this step — pass that inline. Subagents:
+this step — pass that inline. Every subagent MUST read
+`.opencode/command/command-log.md` before running any shell command (mandatory —
+curated index: known-good/known-bad commands + correct tool per task). Subagents:
 `e2e-test-builder`, `implementation-planner`, `build-agent`, `debug-agent`,
 `verification-agent`, `docs-reviewer` — they report in their fixed formats; you
 decide. **Failure-log wiring:** if a subagent reports an unintended command failure

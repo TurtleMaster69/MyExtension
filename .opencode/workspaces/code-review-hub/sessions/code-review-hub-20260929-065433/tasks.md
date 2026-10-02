@@ -1,0 +1,21 @@
+# Tasks
+- [ ] recon (trailmark-recon)
+- [ ] R1 logic correctness (10 agents)
+- [ ] R2 concurrency/threading (10 agents)
+- [ ] R3 interop/PInvoke (10 agents)
+- [ ] R4 security/input/contract (10 agents)
+- [ ] R5 edge/robustness (10 agents)
+- [ ] R6 duplication (10 agents)
+- [ ] R7 merge-systems (10 agents)
+- [ ] R8 ease-of-use (10 agents)
+- [ ] R9 naming/conventions (10 agents)
+- [ ] R10 cross-cutting (10 agents)
+- [ ] consolidate + write docs/code-review.md
+- [ ] ask before filing to progress.md
+- [x] R1 logic correctness (10 agents; S10 failed -> redispatch)
+- [x] R2 concurrency/threading (10 agents)
+- [x] R3 interop/PInvoke (10 agents)
+- [x] R4 security/input/contract (10 agents)
+- [x] R5 edge/robustness (10 agents)
+- [x] R6 duplication (10 agents; ~30 findings)
+- [ ] SESSION SWAP -> new session resumes here (see HANDOFF.md); R7-R10 pending

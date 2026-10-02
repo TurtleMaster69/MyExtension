@@ -1,0 +1,14 @@
+# Tasks
+- [x] R1-R6 (prior session, see HANDOFF.md)
+- [x] R7 merge-systems (10 arch-auditor agents; 58 findings: 25M/22m/11n)
+- [x] R8 ease-of-use (10 arch-auditor agents; 133 findings: 28M/84m/21n)
+- [x] R9 naming/conventions (10 arch-auditor agents; 111 findings: 9M/68m/34n)
+- [x] R10 cross-cutting (10 arch-auditor agents; 100 findings: 21M/57m/22n)
+- [x] consolidate + dedupe + spot-verify + prioritize (~784 raw findings → 75 canonical: 3C/30M/30m/12n)
+- [x] write docs/code-review.md
+- [x] ask via question before filing to docs/progress.md — user chose "nothing, report only" (handing to planner hub); docs/progress.md NOT modified
+- [ ] R9 naming/conventions (10 agents; CardinalMovment typo INTENTIONAL)
+- [ ] R10 cross-cutting (10 agents)
+- [ ] consolidate + dedupe + spot-verify + prioritize
+- [ ] write docs/code-review.md
+- [ ] ask via question before filing to docs/progress.md (append-only)

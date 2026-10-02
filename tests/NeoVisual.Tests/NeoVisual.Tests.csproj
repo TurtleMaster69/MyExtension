@@ -30,6 +30,13 @@
          IWpfTextViewCreationListener, so the sibling Text.UI.Wpf assembly is required too. -->
     <PackageReference Include="Microsoft.VisualStudio.Text.UI" Version="17.14.249" ExcludeAssets="build;analyzers" />
     <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.14.249" ExcludeAssets="build;analyzers" />
+    <!-- m4 (BP-63): MyExtension references Microsoft.VisualStudio.LanguageServices with
+         ExcludeAssets="runtime" (VS supplies it at load time), which propagates transitively — so
+         Microsoft.CodeAnalysis.Workspaces.dll is NOT copied to this test output. The
+         Run_RoslynGatherers_IsWriteLocation test constructs a ReferenceLocation at runtime (via
+         the internal ctor), so pull the Workspaces.Common runtime asset in here for resolution in
+         the test process. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="4.14.0" ExcludeAssets="build;analyzers" />
   </ItemGroup>
 
   <ItemGroup>

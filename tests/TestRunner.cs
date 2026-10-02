@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 
 namespace TestHarness
 {
@@ -57,7 +58,13 @@ namespace TestHarness
             {
                 try
                 {
-                    method.Invoke(null, null);
+                    object? result = method.Invoke(null, null);
+                    // m62 (BP-62): await Task-returning methods instead of discarding the return
+                    // value — a future async test's failure must not be silently swallowed.
+                    if (result is Task task)
+                    {
+                        task.GetAwaiter().GetResult();
+                    }
                     Console.WriteLine($"PASS  {method.Name}");
                     passed++;
                 }

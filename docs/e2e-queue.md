@@ -168,3 +168,184 @@ final entry).
 - **Scenarios:** full suite GREEN with the consolidated test scaffolding.
 - **Assert:** counts per the runner (Telescope/NeoVisual after the M29/M42
   consolidation); fzf test fails loudly when fzf absent; keybinding test hermetic.
+
+---
+
+# E2E queue (deferred — Code review findings, 98 findings / 15 phases + Functional restructure)
+
+The combined plan (`docs/implementation_plan.md`, 2026-10-01) is executed in the
+**unit-only lane**: every fix is RED-proven by unit tests (or build + existing suites
+for no-seam items), so the e2e gate is the listed scenarios staying GREEN on a capable
+machine (one that can boot the VS Experimental Instance). This file queues those
+gates. **Status: QUEUED** — none executed on the unit-only machine (2026-10-01).
+
+Each entry asserts: the listed scenarios stay GREEN + `git diff` shows no log-literal
+drift. Diagnostics depended on: the existing `[Telescope]`/`[NeoVisual]`/`[Hook]`/
+`[MyExtension]` lines (unchanged) plus the new diagnostic added by the plan
+(`[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>`).
+
+Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
+final entry).
+
+## E2E-NCR-1 — M1 (a/A/I prompt insert)
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-mode`.
+- **Assert:** `a`/`A`/`I` in the prompt enter insert mode (`Focus prompt => True,
+  mode=insert` after `a`) — the false-positive gate is replaced by a real assertion.
+
+## E2E-NCR-2 — M8 (g opens the primary file)
+
+- **Status:** QUEUED
+- **Scenarios:** `explorer-open-navigation`.
+- **Assert:** `g` opens the primary `.cs` file (`solution-explorer select file=.*\.cs`,
+  not `.resx`).
+
+## E2E-NCR-M2/M4 — finder path amortization
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-grep` / `telescope-preview`.
+- **Assert:** `grep hits=...`, `preview caret=...` unchanged after the drop-Task.Run
+  change (behavior-preserving).
+
+## E2E-NCR-M5 — FocusGuard single-source ownsKeyboard
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-textinput-motions` + all `neovisual-explorer-*`.
+- **Assert:** routing unchanged after the single-source `ownsKeyboard` refactor.
+
+## E2E-NCR-M3 — Send-Text case fidelity
+
+- **Status:** QUEUED
+- **Scenarios:** full suite.
+- **Assert:** `Send-Text` case-fidelity — the `query='Program'` assertions now verify
+  case (Shift applied for uppercase).
+
+## E2E-NCR-M7 — fzf timeout fallback
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-search`.
+- **Assert:** the fzf timeout path still falls back (`fzf filter failed:` /
+  `filter failed:`).
+
+## E2E-NCR-m47 — navigation outcome diagnostic
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-window-nav`.
+- **Assert:** `navigate activated index=...` / `navigate no-op: <reason>` outcome line
+  emitted.
+
+## E2E-RESTRUCTURE-2 — Functional restructure (Phases 11-14)
+
+- **Status:** QUEUED
+- **Scenarios:** full 35-scenario suite.
+- **Assert:** no behavior change after the folder/Utils restructure + the 5 renames
+  (WindowMatrix→WindowNavigator, CardinalNavigationConstants→NavigationConstants,
+  UtilityMethods→WindowFrameUtils, RectCoordinate→WindowRect,
+  WindowAdapter→WindowFrameAdapter) — all diagnostics byte-identical.
+
+## E2E-NCR-BACKLOG — M6 reconciliation (the prior 67-findings plan's missing gates)
+
+- **Status:** QUEUED
+- **Scenarios:** the gates the 67-findings plan (commit `92b119f`) claimed were queued
+  but never materialized: E2E-NCR-1..2, E2E-NCR-M1/M2/M15 .. E2E-NCR-M26/M27/M28,
+  E2E-RESTRUCTURE-1 (scenario lists from the prior implementation_plan.md:739-769).
+- **Assert:** the ALREADY-GREEN 67-findings plan's deferred gates are run on a capable
+  machine — the restructure's behavior-preservation gate (E2E-RESTRUCTURE-1, full
+  35-scenario suite) is included.
+
+---
+
+# E2E queue (deferred — Code review findings, 67 findings / 15 phases, commit 92b119f)
+
+The PRIOR 67-findings plan (`docs/implementation_plan.md` at commit `92b119f`,
+2026-09-30) reached GREEN in the unit-only lane and claimed its e2e gates were queued
+under E2E-NCR-1..2 / E2E-NCR-M1/M2/M15 .. E2E-NCR-M26/M27/M28 / E2E-RESTRUCTURE-1 —
+but those entries never materialized in this file (the combined plan's E2E-NCR-1/2 now
+own those IDs). This section re-queues the 67-findings plan's deferred gates under
+DISTINCT `E2E-NCR-67-*` IDs so gate results stay attributable. **Status: QUEUED** —
+none executed on the unit-only machine (2026-10-01).
+
+Each entry asserts: the listed scenarios stay GREEN + `git diff` shows no log-literal
+drift. Diagnostics depended on: the existing `[Telescope]`/`[NeoVisual]`/`[Hook]`/
+`[MyExtension]` lines (unchanged).
+
+Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
+final entry).
+
+## E2E-NCR-67-1 — CR1 (Command Window `I` insert)
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-textinput-motions`.
+- **Assert:** `textinput-enter-input start caret=0` fires when `I` is pressed on the
+  Command Window.
+
+## E2E-NCR-67-2 — CR2 (multi-view `vim-mode=` subscription)
+
+- **Status:** QUEUED
+- **Scenarios:** a multi-view scenario — with 2+ editor views open, closing a
+  non-focused view does NOT kill the focused view's `vim-mode=` subscription (Space
+  types a literal space in insert mode).
+- **Assert:** `vim-mode=Insert|Normal|Replace` unchanged after closing a non-focused
+  view.
+
+## E2E-NCR-67-M1, E2E-NCR-67-M2, E2E-NCR-67-M15 — hook hot-path contract
+
+- **Status:** QUEUED
+- **Scenarios:** full suite.
+- **Assert:** no per-key COM/stat; all `neovisual-*` scenarios still GREEN (hook
+  hot-path contract restored).
+
+## E2E-NCR-67-M3/M4/M5/M13 — finder path amortization
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-grep` / `telescope-search` / `telescope-preview`.
+- **Assert:** `grep hits=...`, `results count=...`, `preview caret=...` unchanged; fzf
+  failure paths log `fzf filter failed:` / `filter failed:`.
+
+## E2E-NCR-67-M10/M11/M19/M6 — motion/preview
+
+- **Status:** QUEUED
+- **Scenarios:** `telescope-preview-motions` / `telescope-prompt-motions` /
+  `neovisual-textinput-motions`.
+- **Assert:** caret positions unchanged; the `$` drift fixed (bare `4` in preview no
+  longer jumps).
+
+## E2E-NCR-67-M9/M14 — navigation
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-window-nav`.
+- **Assert:** `navigate direction=L/R/D/U` unchanged.
+
+## E2E-NCR-67-M8/M12/M16/M25 — safety/logging
+
+- **Status:** QUEUED
+- **Scenarios:** `neovisual-editor-insert` + `neovisual-textinput-motions`.
+- **Assert:** `vim-mode=` unchanged; a controller exception logs
+  `toolwindow-move failed:` and passes through.
+
+## E2E-NCR-67-M18/M20/M21/M22/M24 — duplication
+
+- **Status:** QUEUED
+- **Scenarios:** full suite.
+- **Assert:** no log-literal drift.
+
+## E2E-NCR-67-M17/M23 — dead code
+
+- **Status:** QUEUED
+- **Scenarios:** full suite.
+- **Assert:** no log-literal drift.
+
+## E2E-NCR-67-M26, E2E-NCR-67-M27, E2E-NCR-67-M28 — harness
+
+- **Status:** QUEUED
+- **Scenarios:** full suite.
+- **Assert:** the tightened `preview tokens=`/`results count=` assertions pass;
+  `seed-leak` still GREEN.
+
+## E2E-RESTRUCTURE-67-1 — Phases 11-14 restructure
+
+- **Status:** QUEUED
+- **Scenarios:** full 35-scenario suite.
+- **Assert:** no behavior change after the folder/namespace restructure (all
+  diagnostics byte-identical).

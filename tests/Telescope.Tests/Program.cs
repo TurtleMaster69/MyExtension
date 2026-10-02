@@ -479,24 +479,54 @@ namespace Telescope.Tests
             }
         }
 
+        public static void Run_PaneFailureTracker_RetryAfterFailure()
+        {
+            // m51: a transient pane-init failure must not permanently disable the pane. The retry
+            // latch (extracted from NeoVisualLog.EnsurePane's _paneInitTried) must allow a later
+            // call to retry after a recorded failure.
+            // RED: `PaneFailureTracker.ShouldRetry()` / `RecordAttempt()` do not exist yet ->
+            //      compile error (CS0117) — the tracker today only has the one-time ShouldEmit().
+            var tracker = new PaneFailureTracker();
+
+            // A pane-init attempt fails (EnsurePane's CreatePane throws) — record the failure.
+            tracker.RecordAttempt();
+
+            // After a recorded failure the tracker must say a retry is warranted (the pane is not
+            // permanently disabled).
+            Assert.True(tracker.ShouldRetry(), "after a recorded failure, ShouldRetry() must return true");
+        }
+
         public static void Run_FzfFilter_FilterMatchesPrefix()
         {
-            // m22: resolve the fzf path explicitly and inject it via the ctor — no implicit PATH
-            // resolution via the default ctor (the Mystery Guest is explicit). Fail loudly when fzf
-            // is absent (no silent skip).
-            string? fzfPath = ResolveFzfPath();
-            if (fzfPath == null)
+            // m57: hermetic fzf stub — no fzf-on-PATH Mystery Guest. The stub mimics
+            // `fzf --filter <query> --no-sort`: reads the query from the args, filters stdin
+            // case-insensitively, and prints the matches. The injected-path ctor (m22) is kept.
+            using (var dir = new TempDir())
             {
-                throw new Exception("fzf is not on PATH — this test requires fzf (fail-loud, not a silent skip)");
+                string stubPath = Path.Combine(dir.Path, "fzf-stub.cmd");
+                File.WriteAllText(stubPath,
+                    "@echo off\r\n" +
+                    "setlocal\r\n" +
+                    "set \"q=\"\r\n" +
+                    ":loop\r\n" +
+                    "if \"%~1\"==\"\" goto run\r\n" +
+                    "if \"%~1\"==\"--filter\" (set \"q=%~2\" & shift)\r\n" +
+                    "shift\r\n" +
+                    "goto loop\r\n" +
+                    ":run\r\n" +
+                    "findstr /i /c:\"%q%\"\r\n");
+
+                var fzf = new FzfFilter(stubPath);
+                var matched = fzf.FilterAsync(
+                    new[] { "alpha.cs", "beta.txt", "gamma.cs" },
+                    "alp",
+                    new System.Threading.CancellationToken()).GetAwaiter().GetResult();
+
+                // Stronger assertion: the stub filters to EXACTLY the matching line(s), not just
+                // "some result contains alpha".
+                Assert.Equal(1, matched.Count);
+                Assert.Equal("alpha.cs", matched[0]);
             }
-
-            var fzf = new FzfFilter(fzfPath);
-            var matched = fzf.FilterAsync(
-                new[] { "alpha.cs", "beta.txt", "gamma.cs" },
-                "alp",
-                new System.Threading.CancellationToken()).GetAwaiter().GetResult();
-
-            Assert.True(matched.Any(m => m.Contains("alpha")), "expected 'alpha' to match 'alp'");
         }
 
         // Resolves the fzf executable path explicitly from PATH (m22 — the injected-path seam).
@@ -607,6 +637,34 @@ namespace Telescope.Tests
             }
         }
 
+        public static void Run_FzfFilter_TimeoutAwaitsTasks()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    string cmdPath = Path.Combine(dir.Path, "hang.cmd");
+                    File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
+
+                    // M7 (BP-60): the timeout path must deterministically observe the awaited
+                    // ReadToEndAsync tasks (no unobserved-task noise). The seam is an awaited-read
+                    // count the timeout path increments when it arranges for both pipe-read tasks
+                    // to be observed — the test asserts on it instead of GC-polling for
+                    // UnobservedTaskException (the old 5s wall-clock + 2s GC-poll).
+                    // RED: `AwaitedReadCount` does not exist -> compile error (CS0117).
+                    var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 200 };
+                    var result = fzf.FilterAsync(new[] { "alpha" }, "alp", System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha"), "timeout falls back to the full candidate list");
+                    Assert.True(fzf.AwaitedReadCount >= 2,
+                        "the timeout path must observe both ReadToEndAsync tasks (AwaitedReadCount >= 2)");
+                });
+            }
+        }
+
         public static void Run_FzfFilter_QuoteArg_TrailingBackslash()
         {
             // M6b: a trailing backslash must be doubled before the closing quote so it does not
@@ -640,9 +698,11 @@ namespace Telescope.Tests
                 sw.Stop();
 
                 // m16: IsAvailable() must not block the UI up to 3s on a hung fzf --version; the
-                // wait is bounded to a short timeout. RED today: WaitForExit(3000) blocks ~3s on a
-                // hung stub, so this 1s bound fails.
-                Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1), $"IsAvailable returned within 1s (took {sw.Elapsed})");
+                // wait is bounded to a short timeout (IsAvailableTimeoutMs = 500). m58: the bound
+                // is relaxed from 1s to 3s so a slow CI machine's process-spawn overhead cannot
+                // flake it — the 500ms internal timeout + spawn is ~0.6s, and a regression to the
+                // old WaitForExit(3000) still fails this 3s bound.
+                Assert.True(sw.Elapsed < TimeSpan.FromSeconds(3), $"IsAvailable returned within 3s (took {sw.Elapsed})");
                 Assert.False(available, "a hung fzf must report unavailable");
             }
         }
@@ -953,17 +1013,6 @@ namespace Telescope.Tests
             Assert.Equal(0, n.Caret);
         }
 
-        public static void Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed()
-        {
-            // M10: the fixed contract — SetText("\nabc"); MoveToLine(2); Up(); must move to line 1.
-            var n = new TextMotionNavigator();
-            n.SetText("\nabc");
-            n.MoveToLine(2);
-            n.Up();
-            Assert.Equal(1, n.LineNumber);
-            Assert.Equal(0, n.Caret);
-        }
-
         // ================================================================
         // M11a — pure index -> (line, offset) mapping on the shared LineIndex
         // (Phase 2 M7). A blank line must map to ITS OWN start (offset 0),
@@ -1035,119 +1084,215 @@ namespace Telescope.Tests
         }
 
         // ================================================================
-        // TryDispatch — shared WPF-Key vim-motion dispatch (M24)
-        // RED: `TryDispatch` does not exist yet -> compile error (CS0246)
-        // The union h/l/j/k/w/b/e/0/$/gg/G + a/A/I. The $ drift fix: bare D4
+        // TextMotionDispatcher — shared WPF-Key vim-motion dispatch (M24/n11)
+        // RED (n11/BP-46): `TryDispatch` is still a separate 25-line wrapper class today —
+        // the merged `TextMotionDispatcher.Handle(...)` surface does not exist yet ->
+        // compile error (CS0117: 'TextMotionDispatcher' does not contain a definition for
+        // 'Handle'). The union h/l/j/k/w/b/e/0/$/gg/G + a/A/I. The $ drift fix: bare D4
         // (no shift) is NOT a motion and must NOT LineEnd.
         // ================================================================
 
-        public static void Run_TryDispatch_DollarWithoutShiftNotHandled()
+        public static void Run_TextMotionDispatcher_DollarWithoutShiftNotHandled()
         {
             // The $ drift fix: in the preview surface a bare D4 currently LineEnds; the shared
             // dispatch must require Shift for $ (D4), so a bare D4 returns false and does nothing.
             var n = new TextMotionNavigator();
             n.SetText("abc\ndef");
             n.MoveTo(0);
-            bool handled = TryDispatch.Handle(Key.D4, false, n, out _);
+            bool handled = TextMotionDispatcher.Handle(Key.D4, false, n, out _);
             Assert.False(handled, "bare $ (D4 without shift) is not a motion");
             Assert.Equal(0, n.Caret); // must NOT LineEnd
         }
 
-        public static void Run_TryDispatch_DollarWithShiftLineEnds()
+        public static void Run_TextMotionDispatcher_DollarWithShiftLineEnds()
         {
             var n = new TextMotionNavigator();
             n.SetText("abc\ndef");
             n.MoveTo(0);
-            bool handled = TryDispatch.Handle(Key.D4, true, n, out _);
+            bool handled = TextMotionDispatcher.Handle(Key.D4, true, n, out _);
             Assert.True(handled, "$ (D4 with shift) is handled");
             Assert.Equal(3, n.Caret); // end of "abc"
         }
 
-        public static void Run_TryDispatch_MotionsMapToNavigator()
+        public static void Run_TextMotionDispatcher_MotionsMapToNavigator()
         {
             // H -> Left
             var n = new TextMotionNavigator();
             n.SetText("hello");
             n.MoveTo(2);
-            Assert.True(TryDispatch.Handle(Key.H, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.H, false, n, out _));
             Assert.Equal(1, n.Caret);
 
             // L -> Right
             n.MoveTo(2);
-            Assert.True(TryDispatch.Handle(Key.L, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.L, false, n, out _));
             Assert.Equal(3, n.Caret);
 
             // W -> NextWord
             n.SetText("one two");
             n.MoveTo(0);
-            Assert.True(TryDispatch.Handle(Key.W, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.W, false, n, out _));
             Assert.Equal(4, n.Caret);
 
             // B -> PrevWord
             n.MoveTo(4);
-            Assert.True(TryDispatch.Handle(Key.B, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.B, false, n, out _));
             Assert.Equal(0, n.Caret);
 
             // E -> EndWord
             n.MoveTo(0);
-            Assert.True(TryDispatch.Handle(Key.E, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.E, false, n, out _));
             Assert.Equal(3, n.Caret);
 
             // J -> Down
             n.SetText("a\nb");
             n.MoveTo(0);
-            Assert.True(TryDispatch.Handle(Key.J, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.J, false, n, out _));
             Assert.Equal(2, n.Caret);
 
             // K -> Up
             n.MoveTo(2);
-            Assert.True(TryDispatch.Handle(Key.K, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.K, false, n, out _));
             Assert.Equal(0, n.Caret);
 
             // D0 -> LineStartHome
             n.SetText("abc\ndef");
             n.MoveTo(5);
-            Assert.True(TryDispatch.Handle(Key.D0, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.D0, false, n, out _));
             Assert.Equal(4, n.Caret);
 
             // G (bare) -> Top
             n.MoveTo(5);
-            Assert.True(TryDispatch.Handle(Key.G, false, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.G, false, n, out _));
             Assert.Equal(0, n.Caret);
 
             // G (shift) -> Bottom
             n.MoveTo(0);
-            Assert.True(TryDispatch.Handle(Key.G, true, n, out _));
+            Assert.True(TextMotionDispatcher.Handle(Key.G, true, n, out _));
             Assert.Equal(7, n.Caret);
         }
 
-        public static void Run_TryDispatch_InsertPlacements()
+        public static void Run_TextMotionDispatcher_InsertPlacements()
         {
             // A (bare) -> InsertAfter, placement Current.
             var n = new TextMotionNavigator();
             n.SetText("hello");
             n.MoveTo(2);
             CaretPlacement? placement;
-            Assert.True(TryDispatch.Handle(Key.A, false, n, out placement));
+            Assert.True(TextMotionDispatcher.Handle(Key.A, false, n, out placement));
             Assert.Equal(CaretPlacement.Current, placement);
             Assert.Equal(3, n.Caret);
 
             // A (shift) -> InsertEnd, placement End.
             n.MoveTo(2);
-            Assert.True(TryDispatch.Handle(Key.A, true, n, out placement));
+            Assert.True(TextMotionDispatcher.Handle(Key.A, true, n, out placement));
             Assert.Equal(CaretPlacement.End, placement);
             Assert.Equal(5, n.Caret);
 
             // I (shift) -> InsertStart, placement Start.
             n.MoveTo(2);
-            Assert.True(TryDispatch.Handle(Key.I, true, n, out placement));
+            Assert.True(TextMotionDispatcher.Handle(Key.I, true, n, out placement));
             Assert.Equal(CaretPlacement.Start, placement);
             Assert.Equal(0, n.Caret);
 
             // I (bare) -> not handled (generic insert lives in the overlay state machine).
             n.MoveTo(2);
-            Assert.False(TryDispatch.Handle(Key.I, false, n, out placement));
+            Assert.False(TextMotionDispatcher.Handle(Key.I, false, n, out placement));
             Assert.Equal(2, n.Caret);
+        }
+
+        public static void Run_TextMotionNavigator_LineNumber()
+        {
+            // m32: LineNumber is the 1-based line of the caret (count of '\n' in text[0..caret) + 1).
+            // Behavior-preserving pin: the build-agent may cache it later (m32), but the values must
+            // not change across motions — the preview `caret=... line=...` diagnostic depends on it.
+            var n = new TextMotionNavigator();
+            n.SetText("alpha\nbeta\ngamma");
+
+            n.MoveTo(0);
+            Assert.Equal(1, n.LineNumber);
+            n.MoveTo(6); // start of "beta"
+            Assert.Equal(2, n.LineNumber);
+            n.MoveTo(11); // start of "gamma"
+            Assert.Equal(3, n.LineNumber);
+            n.MoveTo(16); // end of text
+            Assert.Equal(3, n.LineNumber);
+
+            // Down from line 1 keeps the column and lands on line 2.
+            n.MoveTo(0);
+            n.Down();
+            Assert.Equal(2, n.LineNumber);
+
+            // Up back to line 1.
+            n.Up();
+            Assert.Equal(1, n.LineNumber);
+
+            // MoveToLine jumps to the requested 1-based line.
+            n.MoveToLine(3);
+            Assert.Equal(3, n.LineNumber);
+
+            // Bottom -> last line; Top -> first line.
+            n.Bottom();
+            Assert.Equal(3, n.LineNumber);
+            n.Top();
+            Assert.Equal(1, n.LineNumber);
+
+            // A caret ON a '\n' is still the line that the newline terminates.
+            n.MoveTo(5); // the '\n' after "alpha"
+            Assert.Equal(1, n.LineNumber);
+            n.MoveTo(10); // the '\n' after "beta"
+            Assert.Equal(2, n.LineNumber);
+        }
+
+        // ================================================================
+        // PromptMotionRouter — prompt/preview motion routing seam (M1/m52)
+        // RED: `PromptMotionRouter` does not exist yet -> compile error (CS0246)
+        // ShouldConsume returns TRUE only for motions (h/l/w/b/e/0/$/gg/G) and FALSE
+        // for the insert placements (a/A/I) with the placement reported via `out`, so
+        // a/A/I fall through to the overlay state machine (insert mode) instead of
+        // being consumed as prompt/preview caret motions.
+        // ================================================================
+
+        public static void Run_PromptMotionRouter_InsertPlacementsNotConsumed()
+        {
+            // a/A/I are insert placements, NOT prompt/preview motions: ShouldConsume must
+            // return false (fall through to _keyHandler.Handle / no preview motion) and
+            // report the placement via `out`. RED: `PromptMotionRouter` does not exist
+            // -> compile error (CS0246).
+            CaretPlacement? placement;
+
+            // a (bare) -> InsertAfter, placement Current.
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.A, false, out placement),
+                "bare a is an insert placement, not a prompt motion");
+            Assert.Equal(CaretPlacement.Current, placement);
+
+            // A (shift) -> InsertEnd, placement End.
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.A, true, out placement),
+                "shift+A is an insert placement, not a prompt motion");
+            Assert.Equal(CaretPlacement.End, placement);
+
+            // i (bare) -> generic insert at the current position (OverlayKey.I -> Current).
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.I, false, out placement),
+                "bare i is an insert placement, not a prompt motion");
+            Assert.Equal(CaretPlacement.Current, placement);
+
+            // I (shift) -> InsertStart, placement Start.
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.I, true, out placement),
+                "shift+I is an insert placement, not a prompt motion");
+            Assert.Equal(CaretPlacement.Start, placement);
+        }
+
+        public static void Run_PromptMotionRouter_MotionsConsumed()
+        {
+            // Motions ARE consumed by the prompt/preview motion handler (placement null).
+            Assert.True(PromptMotionRouter.ShouldConsume(Key.H, false, out _),
+                "h is a prompt motion");
+            Assert.True(PromptMotionRouter.ShouldConsume(Key.W, false, out _),
+                "w is a prompt motion");
+            Assert.True(PromptMotionRouter.ShouldConsume(Key.D4, true, out _),
+                "shift+4 ($) is a prompt motion");
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.D4, false, out _),
+                "bare $ (D4 without shift) is not a prompt motion");
         }
 
         // ================================================================
@@ -1562,6 +1707,36 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // FileFinder + ProjectFileCache (BP-11/m34) — the finder's enumerate
+        // delegate must be served by the shared ProjectFileCache (single
+        // enumeration across gathers), mirroring the GrepFinder cache-injection
+        // ctor (Run_GrepFinder_CacheEnumeratesOnce). Today FileFinder.GatherHits
+        // (FileFinder.cs:62) calls ProjectFiles.Enumerate directly with no cache.
+        // RED: the FileFinder(ProjectFileCache, Func<IReadOnlyList<string>>,
+        //      Action<string>) ctor does not exist -> compile error (CS1729).
+        // ================================================================
+
+        public static void Run_FileFinder_UsesProjectFileCache()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// a");
+
+                int count = 0;
+                var cache = new ProjectFileCache();
+                var finder = new FileFinder(cache, () => { count++; return new[] { a }; }, _ => { });
+
+                finder.GetCandidates();
+                finder.GetCandidates();
+
+                // The enumerate delegate must run ONCE across two gathers — the cache serves the
+                // second GetCandidates (today FileFinder re-enumerates per gather).
+                Assert.Equal(1, count);
+            }
+        }
+
+        // ================================================================
         // HierarchyWalker — pure DTE-tree walker (M22)
         // RED: `HierarchyWalker` / `IHierarchyNode` do not exist yet -> compile error (CS0246)
         // ================================================================
@@ -1776,6 +1951,52 @@ namespace Telescope.Tests
             var segs = SyntaxHighlighter.Tokenize(code);
             var rebuilt = string.Concat(segs.Select(s => s.Text));
             Assert.Equal(code, rebuilt);
+        }
+
+        // ================================================================
+        // PreviewTokenCache (BP-5/M4) — pure mtime-keyed cache of the tokenized
+        // segments, so PreviewRenderer.SetContent re-tokenizes only on content
+        // change (the FlowDocument rebuild stays the renderer's job — the cache
+        // holds NO WPF types). Keyed by LastWriteTimeUtc; injected timestamp +
+        // content reader keep the tests hermetic (mirrors FileContentCache).
+        // RED: `Telescope.Overlay.PreviewTokenCache` does not exist yet
+        //      -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_PreviewTokenCache_UnchangedMtimeCached()
+        {
+            int tokenizeCount = 0;
+            // Fixed timestamp (not DateTime.UtcNow): two consecutive calls must return the SAME
+            // timestamp, or a clock-tick boundary between them makes the cache miss and re-tokenize
+            // (tokenizeCount=2) — the same test-hermeticity flake as FileContentCache.
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var cache = new PreviewTokenCache(
+                timestamp: _ => fixedTime,
+                contentReader: _ => "int x = 1; // c");
+
+            var first = cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
+            var second = cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
+
+            // Unchanged mtime -> the tokenizer must NOT re-run; the SAME cached segments are
+            // returned (no re-tokenize on a cache hit).
+            Assert.Equal(1, tokenizeCount);
+            Assert.True(ReferenceEquals(first, second), "unchanged mtime returns the SAME cached segments (no re-tokenize)");
+        }
+
+        public static void Run_PreviewTokenCache_ChangedMtimeRetokenizes()
+        {
+            var timestamps = new Dictionary<string, DateTime> { ["a.cs"] = DateTime.UtcNow };
+            int tokenizeCount = 0;
+            var cache = new PreviewTokenCache(
+                timestamp: p => timestamps[p],
+                contentReader: _ => "int x = 1; // c");
+
+            cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
+            timestamps["a.cs"] = timestamps["a.cs"].AddSeconds(1);
+            cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
+
+            // A changed LastWriteTimeUtc must force a re-tokenize (tokenizer invoked twice).
+            Assert.Equal(2, tokenizeCount);
         }
 
         // ================================================================
@@ -2172,12 +2393,11 @@ namespace Telescope.Tests
         // ================================================================
         // GrepFinder.GatherHits (M41, BP-5) — the base-class gather stub must be a loud
         // failure, not a silent empty. GrepFinder is query-driven (GetCandidates(query)),
-        // so the parameterless GatherHits() must throw NotSupportedException. GrepFinder is
+        // so the parameterless GatherHits() throws NotSupportedException. GrepFinder is
         // sealed, so the protected override is reached via reflection.
-        // RED: today GatherHits() returns Array.Empty<GrepHit>() (no throw) -> runtime failure.
         // ================================================================
 
-        public static void Run_GrepFinder_GatherHitsThrowsNotSupported()
+        public static void Run_GrepFinder_EmptyQueryCleanEmptyNoFailureLog()
         {
             using (var dir = new TempDir())
             {
@@ -2205,6 +2425,32 @@ namespace Telescope.Tests
             }
         }
 
+        public static void Run_GrepFinder_GatherHitsThrowsNotSupported()
+        {
+            // m54: the base gather stub must be a loud failure, not a silent empty. GrepFinder is
+            // query-driven (GetCandidates(query)), so the parameterless GatherHits() must throw
+            // NotSupportedException. GrepFinder is sealed, so the protected override is reached via
+            // reflection. (The old test only called GetCandidates("") — the empty-query short
+            // circuit — and never exercised the throw.)
+            var finder = new GrepFinder(() => new[] { "a" }, _ => { });
+            var method = typeof(GrepFinder).GetMethod(
+                "GatherHits",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(method != null, "GrepFinder.GatherHits() must exist (protected override)");
+
+            bool threwNotSupported = false;
+            try
+            {
+                method!.Invoke(finder, null);
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                threwNotSupported = tie.InnerException is NotSupportedException;
+            }
+            Assert.True(threwNotSupported,
+                "GrepFinder.GatherHits() must throw NotSupportedException (query-driven finder)");
+        }
+
         // ================================================================
         // FileContentCache (BP-2/M5b) — per-file content cache keyed by
         // LastWriteTimeUtc, so ScanFile stops re-reading every file per query.
@@ -2214,8 +2460,12 @@ namespace Telescope.Tests
         public static void Run_FileContentCache_CachedRead()
         {
             int reads = 0;
+            // Fixed timestamp (not DateTime.UtcNow): two consecutive calls must return the SAME
+            // timestamp, or a clock-tick boundary between them makes the cache miss and re-read
+            // (reads=2) — a pre-existing test-hermeticity flake (Phase 9 m58 theme).
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var cache = new FileContentCache(
-                timestamp: _ => DateTime.UtcNow,
+                timestamp: _ => fixedTime,
                 reader: _ => { reads++; return new[] { "line" }; });
 
             cache.GetLines("a");

@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
 using Telescope.Logging;
 
 namespace Telescope.Finders
@@ -26,7 +25,7 @@ namespace Telescope.Finders
 
         private readonly Func<DTE> _dteFactory;
         private readonly ProjectFileCache _fileCache;
-        private readonly FileContentCache _contentCache = new FileContentCache();
+        private readonly FileContentCache _contentCache = new FileContentCache(500);
         private string? _cachedSolutionName;
 
         // Hermetic-test seams: when set, candidate gathering and opening bypass DTE entirely.
@@ -102,24 +101,18 @@ namespace Telescope.Finders
                         _fileCache.Invalidate();
                         _cachedSolutionName = solutionName;
                     }
-                    // M4: keep the DTE enumeration on the UI thread; run the per-file content scan
-                    // on a background task and marshal only the hits back (the scan is pure file
-                    // I/O — no VS API — so it is safe off-thread).
+                    // M2: the per-file content scan is pure file I/O (no VS API) but the
+                    // synchronous blocking is unchanged — drop the wasted Task.Run thread hop and
+                    // scan inline on the UI thread.
                     IReadOnlyList<string> files = _fileCache.Get(() => ProjectFiles.Enumerate(dte));
-                    var scanned = Task.Run(() =>
+                    foreach (string path in files)
                     {
-                        var result = new List<GrepHit>();
-                        foreach (string path in files)
+                        ScanFile(path, query, hits);
+                        if (hits.Count >= HitCap)
                         {
-                            ScanFile(path, query, result);
-                            if (result.Count >= HitCap)
-                            {
-                                break;
-                            }
+                            break;
                         }
-                        return result;
-                    }).GetAwaiter().GetResult();
-                    hits.AddRange(scanned);
+                    }
                 }
             }
             catch (Exception ex)

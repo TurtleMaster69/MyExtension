@@ -26,9 +26,7 @@ namespace MyExtension.ToolWindows
     {
         public GeneralToolWindowController(ToolWindowType type) : base(type)
         {
-            // Text-input tool windows (search/rename/command surfaces) default to input mode so the
-            // user can type immediately; everything else starts in normal (navigation) mode.
-            _isInputMode = IsTextInputType(type);
+            // The initial mode comes from the type classification via the base ctor (m23).
         }
 
         /// <summary>The default controller acts on no non-hjkl keys.</summary>

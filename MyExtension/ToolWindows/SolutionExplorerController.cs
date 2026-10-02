@@ -43,14 +43,12 @@ namespace MyExtension.ToolWindows
                 [Keys.M] = () => { MoveSelected(); return true; },
                 [Keys.A] = () => { AddItem(); return true; },
                 [Keys.G] = () => { SelectFirstSourceFile(); return true; },
-                [Keys.H] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(KeyInjection.VK_LEFT); return true; },
-                [Keys.L] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(KeyInjection.VK_RIGHT); return true; },
+                [Keys.H] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer collapse"); KeyInjection.Press(GeneralToolWindowController.KeyToArrowVk(Keys.H)); return true; },
+                [Keys.L] = () => { Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer expand"); KeyInjection.Press(GeneralToolWindowController.KeyToArrowVk(Keys.L)); return true; },
                 [Keys.J] = () => GeneralToolWindowController.TryMoveArrow(Keys.J),
                 [Keys.K] = () => GeneralToolWindowController.TryMoveArrow(Keys.K),
-                [Keys.W] = TextMotion(Keys.W),
-                [Keys.B] = TextMotion(Keys.B),
-                [Keys.E] = TextMotion(Keys.E),
             };
+            AddTextMotionKeys(_actions);
         }
 
         protected override void OnModeChanged() => TextMotionHelper.StyleFocusedSurface(_isInputMode);
@@ -89,7 +87,7 @@ namespace MyExtension.ToolWindows
         private void ReturnFocusToTree(string query)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            try
+            RunGuarded("focus-tree failed", () =>
             {
                 var dte2 = _dteFactory() as EnvDTE80.DTE2;
                 // Early null guard (mirrors SelectFirstSourceFile): without it an NRE is swallowed by
@@ -118,6 +116,12 @@ namespace MyExtension.ToolWindows
                 int escapeAttempts = 0;
                 FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
                 {
+                    // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
+                    // re-asserting (the user closed it — don't keep re-opening it).
+                    if (!IsSolutionExplorerVisible(dte2))
+                    {
+                        return false;
+                    }
                     var decision = FocusKeeperSchedule.Decide(
                         TextMotionHelper.FindFocusedTextBox() != null, elapsed, escapeAttempts, FocusKeeperDurationMs);
                     if (decision == FocusKeeperSchedule.Decision.InjectEscape)
@@ -132,15 +136,9 @@ namespace MyExtension.ToolWindows
                         target?.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
                         ExecuteCommand("View.SolutionExplorer");
                     }
+                    return decision != FocusKeeperSchedule.Decision.Stop;
                 });
-            }
-            catch (Exception ex)
-            {
-                // Debug aid ONLY — OUTSIDE the M-M7 diagnostic contract (never asserted by the harness;
-                // M-M7 covers only the [NeoVisual]/[Telescope] LOG lines emitted via NeoVisualLog/Log).
-                // Mirrors the established SelectFirstSourceFile catch.
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}focus-tree failed: {ex.Message}");
-            }
+            });
         }
 
         /// <summary>The non-hjkl action keys this controller handles in normal mode. w/b/e are vim
@@ -186,7 +184,7 @@ namespace MyExtension.ToolWindows
         private void SelectFirstSourceFile()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            try
+            RunGuarded("solution-explorer select failed", () =>
             {
                 var dte = _dteFactory();
                 if (dte == null)
@@ -231,10 +229,17 @@ namespace MyExtension.ToolWindows
                 // `o` still reaches the controller. (No per-tick document open: that would spam
                 // editor-view-opened; we emitted exactly one above.)
                 EnvDTE.UIHierarchyItem keepItem = item!;
-                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), 1500, _ =>
+                FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, _ =>
                 {
+                    // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
+                    // re-asserting (the user closed it — don't keep re-opening it).
+                    if (!IsSolutionExplorerVisible(dte))
+                    {
+                        return false;
+                    }
                     keepItem.Select(EnvDTE.vsUISelectionType.vsUISelectionTypeSelect);
                     ExecuteCommand("View.SolutionExplorer");
+                    return true;
                 });
 
                 // Emit editor-view-opened for the file we just opened/activated — this is the SAME
@@ -244,11 +249,7 @@ namespace MyExtension.ToolWindows
                 // `explorer-open-navigation` / `explorer-open-searchbox`.
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}editor-view-opened file={first}");
                 Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select file={first}");
-            }
-            catch (Exception ex)
-            {
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}solution-explorer select failed: {ex.Message}");
-            }
+            });
         }
 
         /// <summary>
@@ -303,7 +304,7 @@ namespace MyExtension.ToolWindows
         /// <summary>
         /// DTE adapter: recurses a project node's tree into pure <see cref="HierarchyItemInfo"/>
         /// DTOs plus a full-path → <see cref="EnvDTE.UIHierarchyItem"/> map. This is the ONLY place
-        /// <c>pi.Kind</c> / <c>pi.Name</c> / <c>pi.FileNames[FileCount]</c> are read. The caller
+        /// <c>pi.Kind</c> / <c>pi.Name</c> / <c>pi.FileNames[i]</c> are read. The caller
         /// must expand the node's <c>UIHierarchyItems</c> first (a collapsed node's children are
         /// not enumerated). Physical folders recurse; physical files are passed through (the
         /// <c>.cs</c> filter lives in <see cref="HierarchyForestBuilder"/>); everything else
@@ -326,9 +327,14 @@ namespace MyExtension.ToolWindows
                     }
                     else if (kind == HierarchyResolver.PhysicalFileKind)
                     {
-                        // FileNames is an indexed property; index FileCount (NOT index 1, which is
-                        // the short name) to get the item's FULL path.
-                        string fullPath = pi.FileNames[(short)pi.FileCount];
+                        // FileNames is a 1-based indexed property; FileNames[1] is the PRIMARY
+                        // file's full path (the last file of a multi-file item is e.g. a .resx).
+                        var fileNames = new System.Collections.Generic.List<string>();
+                        for (short i = 1; i <= pi.FileCount; i++)
+                        {
+                            fileNames.Add(pi.FileNames[i]);
+                        }
+                        string fullPath = HierarchyResolver.PrimaryFilePath(fileNames);
                         result.Add(new HierarchyItemInfo(kind, pi.Name, fullPath, null));
                         pathToItem[fullPath] = child;
                     }
@@ -375,13 +381,44 @@ namespace MyExtension.ToolWindows
 
         private void ExecuteCommand(string command)
         {
-            try
+            RunGuarded($"Command '{command}' failed", () =>
             {
                 _dteFactory()?.ExecuteCommand(command, string.Empty);
+            });
+        }
+
+        /// <summary>
+        /// Runs <paramref name="action"/> and swallows any exception into the
+        /// <c>[NeoVisual] {failureMessage}: {msg}</c> diagnostic (m25 — the single catch/log helper
+        /// for the controller's guarded operations).
+        /// </summary>
+        private static void RunGuarded(string failureMessage, Action action)
+        {
+            try
+            {
+                action();
             }
             catch (Exception ex)
             {
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}Command '{command}' failed: {ex.Message}");
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}{failureMessage}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// True while the Solution Explorer tool window is still visible. The focus-keeper's
+        /// stop-on-close (m21): when the user closes the window, the keeper must stop re-asserting
+        /// instead of re-opening it.
+        /// </summary>
+        private static bool IsSolutionExplorerVisible(EnvDTE.DTE dte)
+        {
+            try
+            {
+                EnvDTE.Window? window = dte.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer);
+                return window != null && window.Visible;
+            }
+            catch
+            {
+                return false;
             }
         }
     }

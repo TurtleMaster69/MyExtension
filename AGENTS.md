@@ -78,19 +78,20 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   the preview-pane vim motions (`TextMotionNavigator`), the finder base
   (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models),
   the shared preview index (`LineIndex`), the focus-target state machine
-  (`FocusTargetModel`), the shared vim-motion dispatch (`TryDispatch`), the
-  syntax tokenizer (`SyntaxHighlighter.Tokenize`), and the pane-failure
-  fallback (`PaneFailureTracker`).
-  `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TryDispatch`,
+  (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
+  `TryDispatch` was merged into it, n11), the prompt routing seam
+  (`PromptMotionRouter`), the syntax tokenizer (`SyntaxHighlighter.Tokenize`),
+  and the pane-failure fallback (`PaneFailureTracker`).
+  `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
   `-- LineIndex`, `-- FocusTarget`, `-- Syntax` run subsets.
-  Currently **143 tests, all passing**.
+  Currently **151 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
   the injected-key re-entry guard (`InjectedKeyGuard`), the shared vim-motion
   engine (`TextMotionHelper`), the action-table controllers (`ActionKeys`),
   the focus guard (`FocusGuard`), the navigation engine
-  (`RectCoordinate`, `NavigationSettings`, `WindowNavigationEngine`), the
+  (`WindowRect`, `NavigationSettings`, `WindowNavigationEngine`), the
   leader/shortcut matchers (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`),
   the vim-mode classifier (`VimModeClassifier` + `IVimModeSource`), the
   init orchestrator (`InitSteps`), the navigation snapshot (`NavigationSnapshot`),
@@ -98,7 +99,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
   `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-  run subsets. Currently **140 tests, all passing**.
+  run subsets. Currently **158 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -185,8 +186,11 @@ Key facts that make this reliable:
 - `Close-Telescope` does NOT call `Bring-ToForeground` (that would deactivate the modal overlay
   and trigger the Deactivated->close); it just sends Escapes until `overlay closed` is seen.
 - Diagnostics added so the harness can assert each feature: `[NeoVisual] navigate direction=...`,
+  `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>` (m47 — outcome
+  diagnostic: the navigation fired vs was a no-op and why),
   `[NeoVisual] leader-binding executed: ...`, `[NeoVisual] shortcut-binding executed: ...`,
-  `[NeoVisual] toolwindow-move key=... -> arrow vk=...`, `[NeoVisual] toolwindow-move failed: {msg}`
+  `[NeoVisual] toolwindow-move key=... -> arrow vk=...` (bare contract — the arrow-fallback log was
+  aligned to it, n10), `[NeoVisual] toolwindow-move failed: {msg}`
   (controller exception passes the key through — never crashes the hook), `[NeoVisual] toolwindow-enter-input` /
   `toolwindow-exit-input`, `[NeoVisual] solution-explorer toggled open/closed`,
   `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`,
@@ -218,7 +222,13 @@ Key facts that make this reliable:
   (M33 — per-step package-init orchestration; `[MyExtension] init failed: {ex}` is the last-resort net),
   `[Telescope] fzf filter failed: {msg}` / `[Telescope] fzf filter failed: timeout after {ms}ms` (M6),
   `[Telescope] fzf unavailable — showing unfiltered list` (M6 — once at overlay open when fzf is missing),
-  `[Telescope] filter failed: {msg}` (M8 — `FilterAndUpdateAsync` fault path).
+  `[Telescope] filter failed: {msg}` (M8 — `FilterAndUpdateAsync` fault path),
+  `[NeoVisual] window rect unavailable; using empty rect` (n19 — logged once per adapter when the
+  window rect cannot be read), `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` /
+  `[NeoVisual] IVsUIShell unavailable: SVsUIShell service returned null.` (m14 — null-guard fallbacks),
+  `[Hook] SetHook MainModule failed: {ex.Message}` (n18 — `SetHook` guards
+  `Process.GetCurrentProcess().MainModule` and falls back to `IntPtr.Zero` for `hMod`). `[Hook]` lines
+  are single-stamped (m6 — `LogFileWriter.FormatLine` is the only stamper).
 
 ## Feature status / roadmap (work in progress)
 
@@ -323,7 +333,7 @@ Pending (user-requested, NOT yet implemented):
 ## Key architecture / gotchas
 
 - Data flow: `GlobalKeyboardHook` (Win32 `WH_KEYBOARD_LL`) → `InputHandler.HandleKey`
-  → `_bindings` lookup → `WindowMatrix.NavigateInDirection`.
+  → `_bindings` lookup → `WindowNavigator.NavigateInDirection`.
 - **Leader key is Space by default**, and bindings are **user-configurable** via an
   external file at `%APPDATA%\MyExtension\keybindings.json`. It is **not created
   automatically** — it's only read if it exists, and merged over the built-in
@@ -343,13 +353,14 @@ Pending (user-requested, NOT yet implemented):
   controller interface exposes `ActionKeys` (`IReadOnlyCollection<Keys>`, net472 has no
   `IReadOnlySet<T>`): `InputHandler` routes hjkl + `controller.ActionKeys` to `TryMove`, and the
   hook's `IsInteresting` pre-filter returns true for any key while a tool window with action keys
-  is in normal mode (`InputHandler.HasToolWindowActionKeys`).
+  is in normal mode (`InputHandler.IsKeyOfInterest` — hjkl + `controller.ActionKeys` while
+  `ShouldRouteToolWindowKey()` is true).
 - **Tool-window action keys never leak into a focused editor (the `FocusGuard`).** `IsToolWindow`
   comes from VS's `SEID_WindowFrame` selection event and goes STALE when the user moves to an editor,
   so routing/addressing it raw made `o`/`r`/`m`/`a` fire tree actions (and consume the key) while
   the editor held focus. `VimModeTracker.IsEditorFocused` (event-driven `Got/LostAggregateFocus`)
-  is fed into the pure `MyExtension/ToolWindows/FocusGuard.cs`
-  (`HasToolWindowActionKeys`/`ShouldRouteToolWindowKey`/`IsTyping`) via `InputHandler`. The boolean
+  is fed into the pure `MyExtension/ToolWindows/Utils/FocusGuard.cs`
+  (`ShouldRouteToolWindowKey`/`IsTyping`) via `InputHandler`. The boolean
   passed is `EditorFocusedVeto` = `IsEditorFocused && CurrentController?.IsInputMode != true &&
   !GeneralToolWindowController.IsTextInputType(Type)` — a genuine text-input tool window (Command
   Window) or an input-mode controller OWNS the keyboard and is never vetoed (the raw flag is stale
@@ -401,8 +412,8 @@ Pending (user-requested, NOT yet implemented):
   the namespace is `MyExtension.Navigation`, not `CardinalNavigation`).
 - Two window APIs are used together: `IVsWindowFrame`/`IVsUIShell` for on-screen
   geometry (`GetWindowScreenRect`), `EnvDTE.Window` for activation
-  (`window.Activate()`) and framing (`LinkedWindowFrame`). `WindowAdapter`
+  (`window.Activate()`) and framing (`LinkedWindowFrame`). `WindowFrameAdapter`
   pairs them; don't assume the DTE object identity matches the IVs frame.
 - Navigation tolerance divides are DPI-scaled; tune the logical constants in
-  `CardinalNavigationConstants`, not raw pixel values.
+  `NavigationConstants`, not raw pixel values.
 - VSIX install target: Visual Studio Community 17.14+ (amd64).

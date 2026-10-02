@@ -47,9 +47,15 @@ namespace Telescope.Overlay
         private IFinder? _activeFinder;
         private int _selectedIndex;
 
+        // n12: last-rendered results reference + selection, so a no-change RenderResults skips
+        // the results-box rebuild + preview reload (the caret/layout hot path).
+        private IReadOnlyList<FinderEntry>? _lastRenderedResults;
+        private int _lastRenderedSelectedIndex = -1;
+
         // ---- Prompt mode / rendering state ----
         private readonly OverlayKeyHandler _keyHandler = new();
         private readonly TextMotionNavigator _previewNavigator = new();
+        private readonly TextMotionNavigator _promptNavigator = new();
         private readonly PreviewRenderer _previewRenderer = new();
         private bool _activationHandled;
         private CancellationTokenSource? _filterCts;
@@ -236,9 +242,6 @@ namespace Telescope.Overlay
         /// <summary>True while the overlay is open and owns keyboard focus.</summary>
         public bool IsOpen { get; private set; }
 
-        /// <summary>Raised when the overlay is closed (by Esc, q, or programmatically).</summary>
-        public event EventHandler? OverlayClosed;
-
         /// <summary>
         /// Opens the overlay for the given finder, centered over <paramref name="centerRect"/>
         /// (screen pixels; the VS main-window rect) or the work area if none.
@@ -328,7 +331,6 @@ namespace Telescope.Overlay
                 // window may already be closed
             }
             TelescopeLog.Log($"overlay closed");
-            OverlayClosed?.Invoke(this, EventArgs.Empty);
         }
 
         // ================================================================
@@ -438,9 +440,16 @@ namespace Telescope.Overlay
         private void RenderResults()
         {
             _selectedIndex = _keyHandler.SelectedIndex;
-            _resultsBox.Text = ResultsFormatter.ToText(_results, _selectedIndex);
+            bool resultsChanged = !ReferenceEquals(_lastRenderedResults, _results);
+            bool selectionChanged = _lastRenderedSelectedIndex != _selectedIndex;
+            if (resultsChanged || selectionChanged)
+            {
+                _lastRenderedResults = _results;
+                _lastRenderedSelectedIndex = _selectedIndex;
+                _resultsBox.Text = ResultsFormatter.ToText(_results, _selectedIndex);
+                LoadPreviewForSelection();
+            }
             TelescopeLog.Log($"results count={_results.Count} selected={_selectedIndex} boxText={_resultsBox.Text.Length}");
-            LoadPreviewForSelection();
         }
 
         /// <summary>
@@ -482,8 +491,9 @@ namespace Telescope.Overlay
             {
                 _promptBox.IsReadOnly = _keyHandler.IsNormalMode;
                 ApplyPromptCaretStyle();
+                int caret = _promptBox.CaretIndex;
                 bool focused = _promptBox.Focus();
-                _promptBox.CaretIndex = _promptBox.Text.Length;
+                _promptBox.CaretIndex = caret;
                 TelescopeLog.Log($"Focus prompt => {focused}, mode={( _keyHandler.IsNormalMode ? "normal" : "insert")}, focusedElement={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name}");
             }
             catch (Exception ex)
@@ -495,21 +505,20 @@ namespace Telescope.Overlay
         /// <summary>Applies an insert-mode caret placement to the prompt box.</summary>
         private void ApplyInsertCaret(CaretPlacement placement)
         {
-            var navigator = new TextMotionNavigator();
-            navigator.SetText(_promptBox.Text);
-            navigator.MoveTo(_promptBox.CaretIndex);
+            _promptNavigator.SetText(_promptBox.Text);
+            _promptNavigator.MoveTo(_promptBox.CaretIndex);
             switch (placement)
             {
                 case CaretPlacement.End: // a (append): caret at end
-                    navigator.InsertEnd();
+                    _promptNavigator.InsertEnd();
                     break;
                 case CaretPlacement.Start: // I (insert at start)
-                    navigator.InsertStart();
+                    _promptNavigator.InsertStart();
                     break;
                 default: // i (current): no motion, caret clamped to current
                     break;
             }
-            _promptBox.CaretIndex = navigator.Caret;
+            _promptBox.CaretIndex = _promptNavigator.Caret;
         }
 
         /// <summary>Enters insert mode and places the caret per <paramref name="placement"/>.</summary>
@@ -582,40 +591,45 @@ namespace Telescope.Overlay
         /// </summary>
         private bool TryPromptMotion(Key key)
         {
-            var navigator = new TextMotionNavigator();
-            navigator.SetText(_promptBox.Text);
-            navigator.MoveTo(_promptBox.CaretIndex);
-
-            if (!TryDispatch.Handle(key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0, navigator, out _))
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out _))
             {
                 return false;
             }
 
-            _promptBox.CaretIndex = navigator.Caret;
-            TelescopeLog.Log($"prompt-motion key={key} caret={navigator.Caret}");
+            _promptNavigator.SetText(_promptBox.Text);
+            _promptNavigator.MoveTo(_promptBox.CaretIndex);
+
+            if (!TextMotionDispatcher.Handle(key, shift, _promptNavigator, out _))
+            {
+                return false;
+            }
+
+            _promptBox.CaretIndex = _promptNavigator.Caret;
+            TelescopeLog.Log($"prompt-motion key={key} caret={_promptNavigator.Caret}");
             return true;
         }
 
         /// <summary>
         /// Draws a <b>block</b> caret on the prompt box in normal mode (white block, black text) and
-        /// a thin line caret in insert mode, mirroring the text-input tool windows.
+        /// a thin line caret in insert mode, mirroring the text-input tool windows. m35: delegates
+        /// to the shared <see cref="BlockCaretStyle.ApplyCaretStyle"/> (block in normal, line in
+        /// insert) instead of duplicating the caret-brush logic.
         /// </summary>
         private void ApplyPromptCaretStyle()
         {
-            try
-            {
-                _promptBox.CaretBrush = _keyHandler.IsNormalMode ? PromptBlockCaretBrush : PromptLineCaretBrush;
-            }
-            catch
-            {
-                // caret styling is best-effort
-            }
+            BlockCaretStyle.ApplyCaretStyle(_promptBox, !_keyHandler.IsNormalMode, PromptLineCaretBrush);
         }
 
         /// <summary>Applies vim motions to the preview navigator for a list-mode key.</summary>
         private bool HandlePreviewKey(Key key)
         {
-            return TryDispatch.Handle(key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0, _previewNavigator, out _);
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out _))
+            {
+                return false;
+            }
+            return TextMotionDispatcher.Handle(key, shift, _previewNavigator, out _);
         }
 
         private void ApplyPreviewCaret()
@@ -630,7 +644,7 @@ namespace Telescope.Overlay
         /// </summary>
         private void SetPreviewContent(string content)
         {
-            _previewRenderer.SetContent(_previewBox, _previewNavigator, content);
+            _previewRenderer.SetContent(_previewBox, _previewNavigator, null, content);
         }
 
         private void FocusTargetUi()

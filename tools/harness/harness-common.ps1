@@ -107,6 +107,8 @@ function Send-Text([string]$text) {
     # F41: map each char to the correct VK. Letters/digits use the char code (uppercase letter code
     # == VK); punctuation must map to its base key + shift (e.g. '!' is Shift+1, NOT char code 0x21
     # which is VK_PRIOR/PageUp). Each entry is @(vk, needsShift).
+    # M3: an UPPERCASE letter (e.g. 'P' in 'Program') also needs Shift — the VK is the uppercase
+    # code, but without Shift the OS types the lowercase char, so 'Program' would type 'program'.
     $punct = @{
         '!' = @(0x31, $true);  '@' = @(0x32, $true);  '#' = @(0x33, $true);  '$' = @(0x34, $true)
         '%' = @(0x35, $true);  '^' = @(0x36, $true);  '&' = @(0x37, $true);  '*' = @(0x38, $true)
@@ -124,6 +126,8 @@ function Send-Text([string]$text) {
         if ($punct.ContainsKey([string]$ch)) {
             $vk = $punct[[string]$ch][0]
             $shift = $punct[[string]$ch][1]
+        } elseif ([char]::IsUpper($ch)) {
+            $shift = $true
         }
         if ($shift) {
             [Win32.Kbd]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero)   # Shift down
@@ -168,13 +172,16 @@ function Wait-LogLine([string]$logPath, [string]$pattern, [int]$fromIndex, [int]
     # F39: reads only the appended tail via Update-LogCache; the per-call cursor starts at -FromIndex
     # and advances on READ only (never on match), so the whole window is searched cumulatively in
     # O(n) total.
+    # m65: matches PER-LINE over the cache (never joins the tail and -match'es it), so a pattern can
+    # never match across a line boundary (e.g. 'foo\s+bar' with foo and bar on different lines).
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $searchedTo = $fromIndex
     while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
         Update-LogCache $logPath
         if ($script:LogCache.Count -gt $searchedTo) {
-            $tail = ($script:LogCache.GetRange($searchedTo, $script:LogCache.Count - $searchedTo)) -join "`n"
-            if ($tail -match $pattern) { return $true }
+            for ($i = $searchedTo; $i -lt $script:LogCache.Count; $i++) {
+                if ($script:LogCache[$i] -match $pattern) { return $true }
+            }
             $searchedTo = $script:LogCache.Count
         }
         Start-Sleep -Milliseconds $pollMs
@@ -226,9 +233,17 @@ function Assert-NoEnterStorm([string]$logPath, [string]$what) {
 function Resolve-VsRoot {
     # Resolve the VS install root. Prefer the well-known 18/Community path (also works while VS is
     # updating and vswhere returns nothing), falling back to vswhere.
+    # m60: also consider Professional/Enterprise/Preview editions (not just Community) before the
+    # vswhere fallback, so a non-Community install is found without vswhere.
     $candidates = @(
         'C:\Program Files\Microsoft Visual Studio\18\Community'
+        'C:\Program Files\Microsoft Visual Studio\18\Professional'
+        'C:\Program Files\Microsoft Visual Studio\18\Enterprise'
+        'C:\Program Files\Microsoft Visual Studio\18\Preview'
         'C:\Program Files\Microsoft Visual Studio\2022\Community'
+        'C:\Program Files\Microsoft Visual Studio\2022\Professional'
+        'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+        'C:\Program Files\Microsoft Visual Studio\2022\Preview'
     )
     $vsRoot = $candidates | Where-Object { Test-Path (Join-Path $_ 'Common7\IDE\devenv.exe') } | Select-Object -First 1
     if (-not $vsRoot) {

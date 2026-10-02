@@ -25,11 +25,10 @@ namespace Telescope.Logging
     /// </summary>
     public static class NeoVisualLog
     {
-        private static Guid PaneGuid = new Guid("0d4f65d8-2971-4c24-8e1d-6bafc905c97e");
+        private static readonly Guid PaneGuid = new Guid("0d4f65d8-2971-4c24-8e1d-6bafc905c97e");
         private static readonly object PaneSync = new object();
         private static readonly PaneFailureTracker _paneFailureTracker = new PaneFailureTracker();
         private static IVsOutputWindowPane? _pane;
-        private static bool _paneInitTried;
 
         /// <summary>NeoVisual structured log file path (delegates to <see cref="LogFileWriter"/>).</summary>
         public static string LogPath
@@ -131,21 +130,16 @@ namespace Telescope.Logging
         {
             lock (PaneSync)
             {
-                if (_pane != null || _paneInitTried)
+                if (_pane != null || !_paneFailureTracker.ShouldRetry())
                 {
                     return;
                 }
-                _paneInitTried = true;
             }
 
             // Creating the pane requires the UI thread; if we're not on it yet, skip the pane
             // for this write (the file still gets the line) and let a later UI-thread call retry.
             if (!ThreadHelper.CheckAccess())
             {
-                lock (PaneSync)
-                {
-                    _paneInitTried = false;
-                }
                 return;
             }
 
@@ -155,15 +149,12 @@ namespace Telescope.Logging
                 if (outputWindow == null)
                 {
                     // M12: a null GetGlobalService result (pre-package-init) must not permanently
-                    // disable the pane — reset the latch so a later call retries.
-                    lock (PaneSync)
-                    {
-                        _paneInitTried = false;
-                    }
+                    // disable the pane — the retry latch stays open so a later call retries.
                     return;
                 }
-                outputWindow.CreatePane(ref PaneGuid, "NeoVisual", fInitVisible: 1, fClearWithSolution: 1);
-                outputWindow.GetPane(ref PaneGuid, out IVsOutputWindowPane? pane);
+                Guid paneGuid = PaneGuid;
+                outputWindow.CreatePane(ref paneGuid, "NeoVisual", fInitVisible: 1, fClearWithSolution: 1);
+                outputWindow.GetPane(ref paneGuid, out IVsOutputWindowPane? pane);
                 lock (PaneSync)
                 {
                     _pane = pane;
@@ -174,6 +165,7 @@ namespace Telescope.Logging
                 lock (PaneSync)
                 {
                     _pane = null;
+                    _paneFailureTracker.RecordAttempt();
                 }
             }
         }

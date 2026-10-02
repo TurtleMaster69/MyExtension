@@ -72,26 +72,6 @@ namespace MyExtension.Input
         public bool IsLeaderActive => _leaderMatcher.IsActive;
 
         /// <summary>
-        /// True when the current tool window (in normal mode) has action keys beyond hjkl (e.g.
-        /// Solution Explorer's o/r/m/a). Used by the hook's cheap pre-filter so those keys reach
-        /// <see cref="HandleKey"/> instead of being skipped as plain typing keys.
-        /// </summary>
-        public bool HasToolWindowActionKeys
-        {
-            get
-            {
-                var c = _windowManager.CurrentController;
-                return FocusGuard.HasToolWindowActionKeys(
-                    _windowManager.IsToolWindow,
-                    c?.IsInputMode == true,
-                    c?.ActionKeys.Count ?? 0,
-                    _vsVim.IsEditorFocused,
-                    _windowManager.IsTextInputType,
-                    _windowManager.TextInputSurfaceFocused);
-            }
-        }
-
-        /// <summary>
         /// Whether the event-driven editor-focus flag should veto tool-window routing. The flag is
         /// reliable for document editors but NOT for shell-routed text-input tool windows (Command
         /// Window, Find, ...): their focus transitions never reach <see cref="VimModeTracker"/> (its
@@ -102,11 +82,30 @@ namespace MyExtension.Input
         /// it, which is what stops their action keys leaking into a focused editor.
         /// </summary>
         private bool EditorFocusedVeto =>
-            _vsVim.IsEditorFocused
-            && !FocusGuard.OwnsKeyboard(
+            _vsVim.IsEditorFocused && !OwnsKeyboard;
+
+        /// <summary>
+        /// M5: the single-source keyboard-ownership exemption, computed once from the cached
+        /// <c>_windowManager.IsTextInputType</c> (not the recomputed
+        /// <c>GeneralToolWindowController.IsTextInputType</c>). Shared by <see cref="EditorFocusedVeto"/>
+        /// and the routing helper below so all routing formulations read one source.
+        /// </summary>
+        private bool OwnsKeyboard =>
+            FocusGuard.OwnsKeyboard(
                 _windowManager.CurrentController?.IsInputMode == true,
-                GeneralToolWindowController.IsTextInputType(_windowManager.Type),
+                _windowManager.IsTextInputType,
                 _windowManager.TextInputSurfaceFocused);
+
+        /// <summary>
+        /// m7: the single tool-window routing decision, hoisted from the three identical
+        /// <c>FocusGuard.ShouldRouteToolWindowKey</c> call sites (HandleKey, IsKeyOfInterest,
+        /// ExitToolWindowInputMode).
+        /// </summary>
+        private bool ShouldRouteToolWindowKey()
+            => FocusGuard.ShouldRouteToolWindowKey(
+                _windowManager.IsToolWindow,
+                _vsVim.IsEditorFocused,
+                OwnsKeyboard);
 
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
@@ -117,11 +116,11 @@ namespace MyExtension.Input
         // Simple modifier shortcuts (matched directly): "Ctrl+H", "Alt+X"...
         private readonly Dictionary<string, Action> _simpleBindings;
 
-        public InputHandler(AsyncPackage package, TelescopeController telescope, WindowManager windowManager)
+        public InputHandler(AsyncPackage package, TelescopeController telescope, WindowManager windowManager, TelescopeLauncher launcher)
         {
             _package = package;
             _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
-            _launcher = new TelescopeLauncher(package, telescope);
+            _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
             _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
 
             // The Vim mode tracker is a shared MEF part (also an IWpfTextViewCreationListener
@@ -178,7 +177,7 @@ namespace MyExtension.Input
                     continue;
                 }
 
-                if (pair.Key.Contains("+"))
+                if (KeybindingConfig.IsSimpleShortcut(pair.Key))
                 {
                     simple[pair.Key] = action;
                 }
@@ -305,7 +304,7 @@ namespace MyExtension.Input
             // (TryMove/EnterInputMode) are guarded so a controller exception never crashes the hook.
             try
             {
-            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, _windowManager.IsTextInputType, _windowManager.TextInputSurfaceFocused))
+            if (ShouldRouteToolWindowKey())
             {
                 var controller = _windowManager.CurrentController;
                 if (controller != null)
@@ -433,12 +432,7 @@ namespace MyExtension.Input
             }
 
             // Tool-window normal mode: hjkl + the controller's action keys must reach the handler.
-            if (FocusGuard.ShouldRouteToolWindowKey(
-                    _windowManager.IsToolWindow,
-                    _vsVim.IsEditorFocused,
-                    _windowManager.CurrentController?.IsInputMode == true,
-                    _windowManager.IsTextInputType,
-                    _windowManager.TextInputSurfaceFocused))
+            if (ShouldRouteToolWindowKey())
             {
                 var c = _windowManager.CurrentController;
                 if (c != null && !c.IsInputMode && (DefaultControllerKeys.Contains(key) || c.ActionKeys.Contains(key)))
@@ -465,7 +459,7 @@ namespace MyExtension.Input
             // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
             // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
             // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
-            if (FocusGuard.ShouldRouteToolWindowKey(_windowManager.IsToolWindow, _vsVim.IsEditorFocused, _windowManager.CurrentController?.IsInputMode == true, _windowManager.IsTextInputType, _windowManager.TextInputSurfaceFocused))
+            if (ShouldRouteToolWindowKey())
             {
                 var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)
@@ -492,16 +486,25 @@ namespace MyExtension.Input
                 _vsVim.IsInTypingMode);
         }
 
-        /// <summary>Performs Cardinal window navigation in a compass direction (see WindowMatrix).</summary>
+        /// <summary>Performs Cardinal window navigation in a compass direction (see WindowNavigator).</summary>
         internal void Navigate(Direction direction)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}navigate direction={direction.ToChar()}");
             // Rebuild the window matrix each navigation (windows can be resized/opened/closed),
             // but source the active window from WindowManager's cached frame rather than re-deriving
             // it from DTE. The frame enumeration itself is cached by WindowManager and invalidated
             // on focus-change events.
-            var wm = new WindowMatrix(_windowManager.GetWindowAdapters(_package), _package, _windowManager.CurrentWindow);
-            wm.NavigateInDirection(direction);
+            var wm = new WindowNavigator(_windowManager.GetWindowAdapters(_package), _package, _windowManager.CurrentWindow);
+            var outcome = wm.NavigateInDirection(direction);
+            if (outcome.Activated)
+            {
+                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}navigate activated index={outcome.Index}");
+            }
+            else
+            {
+                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}navigate no-op: {outcome.NoOpReason}");
+            }
         }
 
         /// <summary>

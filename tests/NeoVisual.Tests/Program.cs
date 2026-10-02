@@ -123,6 +123,21 @@ namespace NeoVisual.Tests
             Assert.Equal(Keys.Space, cfg.LeaderKey);
         }
 
+        public static void Run_KeybindingConfig_IsSimpleShortcut()
+        {
+            // m42: BuildBindings classifies any binding key containing "+" as a simple shortcut
+            // (InputHandler.cs:181-188), so a leader key like "F,+" can never match. The fix
+            // extracts a pure modifier-prefix check into KeybindingConfig.IsSimpleShortcut:
+            // TRUE only for Ctrl+/Shift+/Alt+ prefixes, FALSE for a leader key containing "+".
+            // RED: the method does not exist -> compile error (CS0117: 'KeybindingConfig' does
+            // not contain a definition for 'IsSimpleShortcut').
+            Assert.True(KeybindingConfig.IsSimpleShortcut("Ctrl+H"), "Ctrl+ prefix is a simple shortcut");
+            Assert.True(KeybindingConfig.IsSimpleShortcut("Shift+F"), "Shift+ prefix is a simple shortcut");
+            Assert.True(KeybindingConfig.IsSimpleShortcut("Alt+X"), "Alt+ prefix is a simple shortcut");
+            Assert.False(KeybindingConfig.IsSimpleShortcut("F,+"), "a leader key containing + is NOT a simple shortcut");
+            Assert.False(KeybindingConfig.IsSimpleShortcut("W"), "a bare leader key is not a simple shortcut");
+        }
+
         // ================================================================
         // KeyNames — shared printable-key mapping (M21)
         // RED: `KeyNames` does not exist yet -> compile error (CS0246)
@@ -244,6 +259,31 @@ namespace NeoVisual.Tests
             Assert.Equal(0, controller.ActionKeys.Count);
         }
 
+        public static void Run_GeneralToolWindowController_InitialModeFromType()
+        {
+            // m23/BP-36: the ctor `_isInputMode = IsTextInputType(type)` branch
+            // (GeneralToolWindowController.cs:31) is dropped; the initial mode must still come from
+            // the type classification (the base/initial-mode flow covers it). Behavior-preserving
+            // pin: a text-input type starts in input mode, a navigation type starts in normal mode.
+            var textInput = new GeneralToolWindowController(ToolWindowType.CommandWindow);
+            Assert.True(textInput.IsInputMode, "a text-input type starts in input mode");
+            var nav = new GeneralToolWindowController(ToolWindowType.Toolbox);
+            Assert.False(nav.IsInputMode, "a navigation type starts in normal mode");
+        }
+
+        public static void Run_GeneralToolWindowController_KeyToArrowVk()
+        {
+            // m9/BP-41: the key->arrow VK mapping is single-sourced in KeyToArrowVk
+            // (GeneralToolWindowController.cs:64-74). Pin the exact mapping so the
+            // TextMotionHelper fallback (TextMotionHelper.cs:117) and SolutionExplorer's
+            // H/L (SolutionExplorerController.cs:46-47) can delegate to it without drift.
+            Assert.Equal(KeyInjection.VK_LEFT, GeneralToolWindowController.KeyToArrowVk(Keys.H));
+            Assert.Equal(KeyInjection.VK_DOWN, GeneralToolWindowController.KeyToArrowVk(Keys.J));
+            Assert.Equal(KeyInjection.VK_UP, GeneralToolWindowController.KeyToArrowVk(Keys.K));
+            Assert.Equal(KeyInjection.VK_RIGHT, GeneralToolWindowController.KeyToArrowVk(Keys.L));
+            Assert.Equal(0, GeneralToolWindowController.KeyToArrowVk(Keys.X));
+        }
+
         // ================================================================
         // WindowManager.DefaultControllerFor — CR1 static pure factory (BP-1)
         // RED: `WindowManager.DefaultControllerFor` does not exist yet -> compile error
@@ -265,6 +305,41 @@ namespace NeoVisual.Tests
                 "CommandWindow defaults to a TextInputToolWindowController");
             Assert.True(WindowManager.DefaultControllerFor(ToolWindowType.Toolbox) is GeneralToolWindowController,
                 "Toolbox defaults to a GeneralToolWindowController");
+        }
+
+        public static void Run_WindowManager_PerTypeDefaultsDoNotLeakInputMode()
+        {
+            // m22/BP-35: the shared `_defaultController` (WindowManager.cs:25,186-190) leaks
+            // `_isInputMode` across ALL unknown-GUID tool windows — one window's input mode bleeds
+            // into the next. The target is per-type default instances. This test pins the pure
+            // resolution seam the fix needs: `WindowManager.ResolveController(registered, type)`
+            // returns a registered controller or a PER-TYPE default instance (never a shared one).
+            // RED: `ResolveController` does not exist yet -> compile error (CS0117: 'WindowManager'
+            // does not contain a definition for 'ResolveController').
+            var registered = new Dictionary<ToolWindowType, IToolWindowController>();
+            var toolbox = WindowManager.ResolveController(registered, ToolWindowType.Toolbox);
+            var output = WindowManager.ResolveController(registered, ToolWindowType.OutputWindow);
+            Assert.True(toolbox != null, "Toolbox resolves a controller");
+            Assert.True(output != null, "OutputWindow resolves a controller");
+            Assert.True(!ReferenceEquals(toolbox, output),
+                "two unknown-GUID tool windows must NOT share a controller instance (m22 input-mode leak)");
+            toolbox.EnterInputMode();
+            Assert.True(toolbox.IsInputMode, "the first window is in input mode");
+            Assert.False(output.IsInputMode,
+                "the second window's input mode must not be affected by the first (shared _defaultController leak)");
+        }
+
+        public static void Run_WindowManager_RegisteredControllerWins()
+        {
+            // m22/BP-35 contract: a controller registered for a type wins over the per-type default.
+            // RED: `ResolveController` does not exist yet -> compile error (CS0117).
+            var registered = new Dictionary<ToolWindowType, IToolWindowController>
+            {
+                [ToolWindowType.Toolbox] = new GeneralToolWindowController(ToolWindowType.Toolbox),
+            };
+            var resolved = WindowManager.ResolveController(registered, ToolWindowType.Toolbox);
+            Assert.True(ReferenceEquals(resolved, registered[ToolWindowType.Toolbox]),
+                "a registered controller wins over the default");
         }
 
         // ================================================================
@@ -361,6 +436,53 @@ namespace NeoVisual.Tests
             Assert.True(
                 HierarchyResolver.FirstPathMatching(new HierarchyNode[] { file }, "") == null,
                 "an empty query resolves to null");
+        }
+
+        public static void Run_HierarchyResolver_PrimaryFilePath()
+        {
+            // M8: `g` must open the PRIMARY file of a multi-file project item. EnvDTE's
+            // ProjectItem.FileNames is 1-based and FileNames[1] is the primary file's full
+            // path — the current caller indexes the LAST file (FileNames[FileCount]), so a
+            // Form1.cs/Form1.Designer.cs/Form1.resx item opens the .resx. The pure helper
+            // takes a primitive string list (EnvDTE.ProjectItem is a COM interface that
+            // cannot be constructed hermetically) and returns fileNames[0] (the primary).
+            // RED: `HierarchyResolver.PrimaryFilePath` does not exist yet -> compile error
+            // (CS0117).
+            var fileNames = new List<string> { "Form1.cs", "Form1.Designer.cs", "Form1.resx" };
+            Assert.Equal("Form1.cs", HierarchyResolver.PrimaryFilePath(fileNames));
+        }
+
+        public static void Run_HierarchyResolver_FirstSourceFile_PrefersCsOverNonCs()
+        {
+            // m26/BP-39: the `.cs` filter must live in the resolver — a forest whose first physical
+            // file is non-.cs (e.g. .resx) must still pick the .cs file. RED: today
+            // `FirstSourceFilePath` returns the first physical file regardless of extension (the
+            // `.cs` filter lives only in HierarchyForestBuilder), so this returns the .resx path.
+            var resx = new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Form1.resx", @"C:\p\Form1.resx", null);
+            var cs = new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Form1.cs", @"C:\p\Form1.cs", null);
+            Assert.Equal(@"C:\p\Form1.cs",
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { resx, cs }));
+        }
+
+        public static void Run_HierarchyResolver_FirstSourceFile_PrefersCsInLaterFolder()
+        {
+            // m26/BP-39: the `.cs` filter applies through folder recursion — a folder whose first
+            // physical file is non-.cs must still yield a .cs file from a later folder. RED: today
+            // the first physical file (the .resx) wins regardless of extension.
+            var resxFolder = new HierarchyNode(
+                HierarchyResolver.PhysicalFolderKind, "Resources", "",
+                new HierarchyNode[]
+                {
+                    new HierarchyNode(HierarchyResolver.PhysicalFileKind, "Form1.resx", @"C:\p\Resources\Form1.resx", null),
+                });
+            var csFolder = new HierarchyNode(
+                HierarchyResolver.PhysicalFolderKind, "Models", "",
+                new HierarchyNode[]
+                {
+                    new HierarchyNode(HierarchyResolver.PhysicalFileKind, "User.cs", @"C:\p\Models\User.cs", null),
+                });
+            Assert.Equal(@"C:\p\Models\User.cs",
+                HierarchyResolver.FirstSourceFilePath(new HierarchyNode[] { resxFolder, csFolder }));
         }
 
         // ================================================================
@@ -633,6 +755,23 @@ namespace NeoVisual.Tests
             Assert.True(controller.TryMove(Keys.A), "a adds");
         }
 
+        public static void Run_ActionTable_SolutionExplorer_HlArrowVk()
+        {
+            // m17/BP-41: SolutionExplorer's H/L must press the SAME arrow VKs KeyToArrowVk
+            // produces (VK_LEFT/VK_RIGHT) — the fix replaces the hardcoded VK_LEFT/VK_RIGHT
+            // (SolutionExplorerController.cs:46-47) with KeyToArrowVk. Pin the exact VK so a
+            // refactor cannot silently change which arrow h/l press.
+            var controller = new SolutionExplorerController(() => null!);
+            while (InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_LEFT)) { }
+            while (InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_RIGHT)) { }
+            Assert.True(controller.TryMove(Keys.H), "h collapses (handled)");
+            Assert.True(InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_LEFT),
+                "h presses VK_LEFT (m17: KeyToArrowVk, not a hardcoded drift)");
+            Assert.True(controller.TryMove(Keys.L), "l expands (handled)");
+            Assert.True(InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_RIGHT),
+                "l presses VK_RIGHT (m17: KeyToArrowVk, not a hardcoded drift)");
+        }
+
         // ================================================================
         // InjectedKeyGuard — per-VK pending counter (Enter-storm fix, F1)
         // ================================================================
@@ -667,6 +806,31 @@ namespace NeoVisual.Tests
             Assert.True(guard.TryConsume(13), "first consume succeeds");
             Assert.True(guard.TryConsume(13), "second consume succeeds (two records)");
             Assert.False(guard.TryConsume(13), "third consume fails (per-Press counting exhausted)");
+        }
+
+        public static void Run_InjectedKeyGuard_StaleRecordExpires()
+        {
+            // m43: a stale pending record must NOT consume the next physical key-down. The guard
+            // records a timestamp per VK; a record older than the TTL is treated as absent.
+            // RED: the clock-seam ctor does not exist -> compile error (CS1729: 'InjectedKeyGuard'
+            // does not contain a constructor that takes 2 arguments) — the TTL behavior is missing
+            // today, so a stale record consumes the next physical key.
+            var now = DateTime.UtcNow;
+            var guard = new InjectedKeyGuard(TimeSpan.FromMilliseconds(100), () => now);
+            guard.Record(13);
+            now = now.AddSeconds(1); // advance the clock past the TTL
+            Assert.False(guard.TryConsume(13), "a stale record must not consume the next physical key-down");
+        }
+
+        public static void Run_InjectedKeyGuard_FreshRecordConsumesOnce()
+        {
+            // m43: a fresh record (within the TTL) still consumes once — the TTL must not break
+            // the existing consume-once semantics.
+            var now = DateTime.UtcNow;
+            var guard = new InjectedKeyGuard(TimeSpan.FromMilliseconds(100), () => now);
+            guard.Record(13);
+            Assert.True(guard.TryConsume(13), "a fresh record consumes once");
+            Assert.False(guard.TryConsume(13), "a fresh record is consumed once (no double consume)");
         }
 
         // ================================================================
@@ -867,6 +1031,25 @@ namespace NeoVisual.Tests
                 "tool-window normal mode is not typing");
         }
 
+        public static void Run_FocusGuard_OwnsKeyboard()
+        {
+            // M5: the single-source ownsKeyboard routing. The caller computes ONE ownsKeyboard
+            // bool (from the cached _windowManager.IsTextInputType + input mode + focused) and
+            // passes it into the guard, so EditorFocusedVeto and HasToolWindowActionKeys read
+            // the same source. A text-input window that owns the keyboard is NOT vetoed by a
+            // stale editor-focus flag; a navigation window that does not own the keyboard IS
+            // vetoed.
+            // RED: the current 5-arg signature has no ownsKeyboard parameter -> compile error
+            // (CS1739: the best overload for 'ShouldRouteToolWindowKey' does not have a
+            // parameter named 'ownsKeyboard').
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, ownsKeyboard: true),
+                "a text-input window that owns the keyboard is not vetoed by the stale editor flag");
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(isToolWindow: true, editorFocused: true, ownsKeyboard: false),
+                "a navigation window that does not own the keyboard is vetoed by the editor flag");
+        }
+
         // ================================================================
         // FocusKeeperSchedule — pure focus-keeper tick decision (M26)
         // RED: `FocusKeeperSchedule` does not exist yet -> compile error (CS0246)
@@ -895,7 +1078,7 @@ namespace NeoVisual.Tests
             // M17: an out-of-order LostFocus from a non-focused view must not clear the typing
             // flag (VimModeTracker.cs:189 currently clears _cachedTyping unconditionally).
             var state = new VimModeState();
-            state.SetMode(VimModeState.Insert);
+            state.SetMode(VimModeClassifier.Insert);
             state.OnViewLostFocus(isFocusedView: false);
             Assert.True(state.IsTyping, "out-of-order LostFocus must not clear typing");
         }
@@ -905,7 +1088,7 @@ namespace NeoVisual.Tests
             // M17: a Closed event from a non-focused view must not clear the typing flag
             // (VimModeTracker.cs:209 currently clears _cachedTyping unconditionally).
             var state = new VimModeState();
-            state.SetMode(VimModeState.Insert);
+            state.SetMode(VimModeClassifier.Insert);
             state.OnViewClosed(isFocusedView: false);
             Assert.True(state.IsTyping, "non-focused Closed must not clear typing");
         }
@@ -914,13 +1097,13 @@ namespace NeoVisual.Tests
         {
             // Pins the vim-mode= name contract: Normal/Insert/Replace/Unknown + the typing flag.
             var state = new VimModeState();
-            state.SetMode(VimModeState.Normal);
+            state.SetMode(VimModeClassifier.Normal);
             Assert.False(state.IsTyping, "Normal is not typing");
             Assert.Equal("Normal", state.ModeName);
-            state.SetMode(VimModeState.Insert);
+            state.SetMode(VimModeClassifier.Insert);
             Assert.True(state.IsTyping, "Insert is typing");
             Assert.Equal("Insert", state.ModeName);
-            state.SetMode(VimModeState.Replace);
+            state.SetMode(VimModeClassifier.Replace);
             Assert.True(state.IsTyping, "Replace is typing");
             Assert.Equal("Replace", state.ModeName);
             state.SetMode(null);
@@ -928,33 +1111,52 @@ namespace NeoVisual.Tests
             Assert.Equal("Unknown", state.ModeName);
         }
 
-        public static void Run_VimModeState_ResolutionRetriesAfterFailure()
+        public static void Run_VimModeState_LostFocusNormalReturnsModeChange()
         {
-            // M17: a failed VsVim resolution must not latch (VimModeTracker.cs:488 sets
-            // _resolved = true before the try) — the next call retries the resolver.
+            // m41: OnViewLostFocus must return the MODE-change (not just the typing-change) so the
+            // tracker emits `vim-mode=Unknown` on editor-focus loss even when the editor was in
+            // Normal mode (typing didn't change, but the mode name did: Normal -> Unknown).
+            // RED today: the current code returns only the typing-change, so a Normal-mode focus
+            // loss returns false and `vim-mode=Unknown` is never emitted.
             var state = new VimModeState();
-            int failures = 0;
-            int resolves = 0;
+            state.SetMode(VimModeClassifier.Normal);
+            bool changed = state.OnViewLostFocus(isFocusedView: true);
+            Assert.True(changed, "focus loss from Normal must signal a mode change (Normal -> Unknown)");
+            Assert.Equal("Unknown", state.ModeName);
+        }
 
-            object? first = state.ResolveOnce(
-                () => throw new InvalidOperationException("MEF down"),
-                _ => failures++);
-            Assert.True(first == null, "failed resolution returns null");
-            Assert.Equal(1, failures);
+        public static void Run_VimModeState_ClosedNormalReturnsModeChange()
+        {
+            // m41: same contract for OnViewClosed — closing a focused Normal-mode view must signal
+            // the mode change (Normal -> Unknown) so `vim-mode=Unknown` is emitted.
+            var state = new VimModeState();
+            state.SetMode(VimModeClassifier.Normal);
+            bool changed = state.OnViewClosed(isFocusedView: true);
+            Assert.True(changed, "closing a focused Normal-mode view must signal a mode change (Normal -> Unknown)");
+            Assert.Equal("Unknown", state.ModeName);
+        }
 
-            object? second = state.ResolveOnce(
-                () => { resolves++; return "vim"; },
-                _ => failures++);
-            Assert.Equal("vim", second);
-            Assert.Equal(1, resolves);
-            Assert.Equal(1, failures);
+        public static void Run_VimModeState_LostFocusInsertStillSignalsChange()
+        {
+            // Behavior-preserving pin: an Insert-mode focus loss still signals a change (typing
+            // true -> false AND mode Insert -> Unknown), so `vim-mode=Unknown` keeps being emitted.
+            var state = new VimModeState();
+            state.SetMode(VimModeClassifier.Insert);
+            bool changed = state.OnViewLostFocus(isFocusedView: true);
+            Assert.True(changed, "focus loss from Insert must signal a change");
+            Assert.Equal("Unknown", state.ModeName);
+        }
 
-            object? third = state.ResolveOnce(
-                () => { resolves++; return "vim"; },
-                _ => failures++);
-            Assert.Equal("vim", third);
-            Assert.Equal(1, resolves);
-            Assert.Equal(1, failures);
+        public static void Run_VimModeState_NonFocusedViewNoChange()
+        {
+            // Behavior-preserving pin: a non-focused view's LostFocus/Closed must not signal a
+            // change and must not clear the typing state (M17 out-of-order guard).
+            var state = new VimModeState();
+            state.SetMode(VimModeClassifier.Insert);
+            Assert.False(state.OnViewLostFocus(isFocusedView: false), "non-focused LostFocus signals no change");
+            Assert.True(state.IsTyping, "non-focused LostFocus must not clear typing");
+            Assert.False(state.OnViewClosed(isFocusedView: false), "non-focused Closed signals no change");
+            Assert.True(state.IsTyping, "non-focused Closed must not clear typing");
         }
 
         // ================================================================
@@ -1144,14 +1346,14 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
-        // Helpers — RectCoordinate
+        // Helpers — WindowRect
         // ================================================================
 
         public static void Run_RectCoordinate_StoresFields()
         {
-            // N2 (BP-1): RectCoordinate becomes a readonly struct with uppercase readonly fields.
+            // N2 (BP-1): WindowRect becomes a readonly struct with uppercase readonly fields.
             // RED: `r.X` does not compile before the merge (fields are lowercase x,y,width,height).
-            var r = new RectCoordinate(1, 2, 3, 4);
+            var r = new WindowRect(1, 2, 3, 4);
             Assert.Equal(1, r.X);
             Assert.Equal(2, r.Y);
             Assert.Equal(3, r.Width);
@@ -1159,38 +1361,38 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
-        // RectCoordinate geometry members (BP-1/N2)
+        // WindowRect geometry members (BP-1/N2)
         // RED: Right/Bottom/IsEmpty/Adjacency/GapTo + Axis/Direction don't exist -> compile error
         // ================================================================
 
         public static void Run_RectCoordinate_Right_Bottom()
         {
-            var r = new RectCoordinate(1, 2, 3, 4);
+            var r = new WindowRect(1, 2, 3, 4);
             Assert.Equal(4, r.Right);   // X + Width
             Assert.Equal(6, r.Bottom);  // Y + Height
         }
 
         public static void Run_RectCoordinate_IsEmpty()
         {
-            Assert.True(new RectCoordinate(0, 0, 0, 0).IsEmpty, "all-zero rect is empty");
-            Assert.False(new RectCoordinate(1, 0, 0, 0).IsEmpty, "non-zero X means not empty");
+            Assert.True(new WindowRect(0, 0, 0, 0).IsEmpty, "all-zero rect is empty");
+            Assert.False(new WindowRect(1, 0, 0, 0).IsEmpty, "non-zero X means not empty");
         }
 
         public static void Run_RectCoordinate_Adjacency()
         {
             // 1-D span overlap on the given axis (closed-form AdjacencySize).
-            Assert.Equal(5, new RectCoordinate(0, 0, 10, 10).Adjacency(new RectCoordinate(5, 0, 10, 10), Axis.X));
-            Assert.Equal(0, new RectCoordinate(0, 0, 10, 10).Adjacency(new RectCoordinate(20, 0, 10, 10), Axis.X));
-            Assert.Equal(5, new RectCoordinate(0, 0, 10, 10).Adjacency(new RectCoordinate(0, 5, 10, 10), Axis.Y));
+            Assert.Equal(5, new WindowRect(0, 0, 10, 10).Adjacency(new WindowRect(5, 0, 10, 10), Axis.X));
+            Assert.Equal(0, new WindowRect(0, 0, 10, 10).Adjacency(new WindowRect(20, 0, 10, 10), Axis.X));
+            Assert.Equal(5, new WindowRect(0, 0, 10, 10).Adjacency(new WindowRect(0, 5, 10, 10), Axis.Y));
         }
 
         public static void Run_RectCoordinate_GapTo()
         {
-            var active = new RectCoordinate(100, 100, 100, 100); // Right=200, Bottom=200
-            Assert.Equal(50, new RectCoordinate(100, 0, 100, 50).GapTo(active, Direction.Up));
-            Assert.Equal(2, new RectCoordinate(100, 202, 100, 50).GapTo(active, Direction.Down));
-            Assert.Equal(50, new RectCoordinate(0, 100, 50, 100).GapTo(active, Direction.Left));
-            Assert.Equal(50, new RectCoordinate(250, 100, 50, 100).GapTo(active, Direction.Right));
+            var active = new WindowRect(100, 100, 100, 100); // Right=200, Bottom=200
+            Assert.Equal(50, new WindowRect(100, 0, 100, 50).GapTo(active, Direction.Up));
+            Assert.Equal(2, new WindowRect(100, 202, 100, 50).GapTo(active, Direction.Down));
+            Assert.Equal(50, new WindowRect(0, 100, 50, 100).GapTo(active, Direction.Left));
+            Assert.Equal(50, new WindowRect(250, 100, 50, 100).GapTo(active, Direction.Right));
         }
 
         // ================================================================
@@ -1224,11 +1426,11 @@ namespace NeoVisual.Tests
         public static void Run_WindowNavigationEngine_Up_PicksLargestAdjacency()
         {
             var settings = NavigationSettings.FromDpi(96, 96); // XDivide=24, YDivide=100
-            var active = new RectCoordinate(100, 100, 100, 100); // Right=200, Bottom=200
+            var active = new WindowRect(100, 100, 100, 100); // Right=200, Bottom=200
             var candidates = new[]
             {
-                new RectCoordinate(100, 0, 100, 50),  // gap 50, adjacency 100
-                new RectCoordinate(150, 0, 50, 50),   // gap 50, adjacency 50
+                new WindowRect(100, 0, 100, 50),  // gap 50, adjacency 100
+                new WindowRect(150, 0, 50, 50),   // gap 50, adjacency 50
             };
             Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
@@ -1236,23 +1438,42 @@ namespace NeoVisual.Tests
         public static void Run_WindowNavigationEngine_Down_ToleranceExcludes()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(100, 101, 100, 50), // c.Y - a.Y = 1, EXCLUDED by the >1 tolerance
-                new RectCoordinate(100, 102, 100, 50), // c.Y - a.Y = 2, passes
+                new WindowRect(100, 101, 100, 50), // c.Y - a.Y = 1, EXCLUDED by the >1 tolerance
+                new WindowRect(100, 102, 100, 50), // c.Y - a.Y = 2, passes
             };
             Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Down, settings));
+        }
+
+        public static void Run_WindowNavigationEngine_Down_OnePixelGapAccepted()
+        {
+            // m48 (BP-27): the Down/Up tolerance must be SYMMETRIC. Up accepts a 1px-gap
+            // candidate above (bare `c.Y < a.Y`, WindowNavigationEngine.cs:85); Down must
+            // accept the mirror-image 1px-gap candidate below. Today Down uses
+            // `c.Y - a.Y > 1` (WindowNavigationEngine.cs:86), so it REJECTS the 1px-gap
+            // candidate -> SelectTarget returns null -> RED (asymmetric tolerance).
+            var settings = NavigationSettings.FromDpi(96, 96);
+            var active = new WindowRect(100, 100, 100, 100);
+
+            // Baseline: Up accepts a 1px-gap candidate above (c.Y = 99 < 100).
+            Assert.Equal(0, WindowNavigationEngine.SelectTarget(active,
+                new[] { new WindowRect(100, 99, 100, 50) }, Direction.Up, settings));
+
+            // Symmetric: Down must accept the mirror-image 1px-gap candidate below (c.Y = 101).
+            Assert.Equal(0, WindowNavigationEngine.SelectTarget(active,
+                new[] { new WindowRect(100, 101, 100, 50) }, Direction.Down, settings));
         }
 
         public static void Run_WindowNavigationEngine_Left_PicksLargestAdjacency()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(0, 100, 50, 100),   // gap 50, adjacency 100
-                new RectCoordinate(0, 150, 50, 50),    // gap 50, adjacency 50
+                new WindowRect(0, 100, 50, 100),   // gap 50, adjacency 100
+                new WindowRect(0, 150, 50, 50),    // gap 50, adjacency 50
             };
             Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Left, settings));
         }
@@ -1260,11 +1481,11 @@ namespace NeoVisual.Tests
         public static void Run_WindowNavigationEngine_Right_PicksLargestAdjacency()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(250, 100, 50, 100), // gap 50, adjacency 100
-                new RectCoordinate(250, 150, 50, 50),  // gap 50, adjacency 50
+                new WindowRect(250, 100, 50, 100), // gap 50, adjacency 100
+                new WindowRect(250, 150, 50, 50),  // gap 50, adjacency 50
             };
             Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Right, settings));
         }
@@ -1272,34 +1493,34 @@ namespace NeoVisual.Tests
         public static void Run_WindowNavigationEngine_EmptyCandidates_ReturnsNull()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
-            Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, new RectCoordinate[0], Direction.Up, settings));
+            var active = new WindowRect(100, 100, 100, 100);
+            Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, new WindowRect[0], Direction.Up, settings));
         }
 
         public static void Run_WindowNavigationEngine_NoCandidateInDirection_ReturnsNull()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
-            var candidates = new[] { new RectCoordinate(100, 201, 100, 50) }; // below, but direction is Up
+            var active = new WindowRect(100, 100, 100, 100);
+            var candidates = new[] { new WindowRect(100, 201, 100, 50) }; // below, but direction is Up
             Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
 
         public static void Run_WindowNavigationEngine_NotAligned_Excluded()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
-            var candidates = new[] { new RectCoordinate(0, 0, 50, 50) }; // above but no X-overlap with [100,200)
+            var active = new WindowRect(100, 100, 100, 100);
+            var candidates = new[] { new WindowRect(0, 0, 50, 50) }; // above but no X-overlap with [100,200)
             Assert.Equal(null, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
 
         public static void Run_WindowNavigationEngine_AdjacencyTie_LastWins()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(100, 0, 100, 50),  // gap 50, adjacency 100
-                new RectCoordinate(100, 20, 100, 50), // gap 30, adjacency 100 (tie)
+                new WindowRect(100, 0, 100, 50),  // gap 50, adjacency 100
+                new WindowRect(100, 20, 100, 50), // gap 30, adjacency 100 (tie)
             };
             Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
@@ -1307,11 +1528,11 @@ namespace NeoVisual.Tests
         public static void Run_WindowNavigationEngine_DivideWindow_ExcludesBeyond()
         {
             var settings = NavigationSettings.FromDpi(96, 96); // YDivide=100
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(100, 0, 100, 50),   // gap 50 (min)
-                new RectCoordinate(100, -200, 100, 50), // gap 250 > 50+100, beyond the divide window
+                new WindowRect(100, 0, 100, 50),   // gap 50 (min)
+                new WindowRect(100, -200, 100, 50), // gap 250 > 50+100, beyond the divide window
             };
             Assert.Equal(0, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
@@ -1319,11 +1540,11 @@ namespace NeoVisual.Tests
         public static void Run_WindowNavigationEngine_HiddenZeroRect_Excluded()
         {
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(0, 0, 0, 0),        // hidden/empty, excluded
-                new RectCoordinate(100, 0, 100, 50),  // the only real candidate
+                new WindowRect(0, 0, 0, 0),        // hidden/empty, excluded
+                new WindowRect(100, 0, 100, 50),  // the only real candidate
             };
             Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
         }
@@ -1354,11 +1575,11 @@ namespace NeoVisual.Tests
             // (single-pass — no separate m_activeWindow.Rect re-fetch / N+1).
             var rects = new[]
             {
-                new RectCoordinate(0, 0, 100, 100),
-                new RectCoordinate(200, 0, 100, 100),
+                new WindowRect(0, 0, 100, 100),
+                new WindowRect(200, 0, 100, 100),
             };
             var snapshot = NavigationSnapshot.Capture(rects, 1);
-            Assert.Equal(snapshot.Candidates[1], snapshot.Active);
+            Assert.Equal(snapshot.Value.Candidates[1], snapshot.Value.Active);
         }
 
         public static void Run_NavigationSnapshot_ActiveIndexOutOfRange_ReturnsNull()
@@ -1368,39 +1589,59 @@ namespace NeoVisual.Tests
             // returns without indexing Candidates[ActiveIndex] out of range.
             var rects = new[]
             {
-                new RectCoordinate(0, 0, 100, 100),
-                new RectCoordinate(200, 0, 100, 100),
+                new WindowRect(0, 0, 100, 100),
+                new WindowRect(200, 0, 100, 100),
             };
             Assert.Equal(null, NavigationSnapshot.Capture(rects, -1));
             Assert.Equal(null, NavigationSnapshot.Capture(rects, rects.Length));
         }
 
         // ================================================================
-        // WindowAdapter.TryGetScreenRect — M12 null-frame + Empty fallback (BP-4)
-        // RED: `WindowAdapter.TryGetScreenRect` doesn't exist -> compile error (CS0117)
+        // WindowFrameAdapter.TryGetScreenRect — M12 null-frame + Empty fallback (BP-4)
+        // RED: `WindowFrameAdapter.TryGetScreenRect` doesn't exist -> compile error (CS0117)
         // ================================================================
 
         public static void Run_WindowAdapter_TryGetScreenRect_NullFrameReturnsNull()
         {
             // M12 (BP-4): a null IVsWindowFrame4 must yield null (the old code path
             // `(IVsWindowFrame4)_frame` throws InvalidCastException on a non-conforming frame).
-            Assert.Equal(null, WindowAdapter.TryGetScreenRect(null));
+            Assert.Equal(null, WindowFrameAdapter.TryGetScreenRect(null));
         }
 
-        public static void Run_WindowAdapter_TryGetScreenRect_EmptyRectExcludedBySelectTarget()
+        public static void Run_WindowNavigationEngine_EmptyRectExcludedBySelectTarget()
         {
-            // M12 (BP-4): RefreshRect falls back to RectCoordinate.Empty (BP-4 adds the
-            // constant) when the frame4 cast/rect fetch fails; SelectTarget must exclude
-            // that (0,0,0,0) entry and return the real candidate — mirrors
+            // m55: this test never calls WindowFrameAdapter.TryGetScreenRect (a COM frame cannot be
+            // built hermetically) — it asserts the "Empty fallback" contract directly: when a
+            // frame's rect fetch fails and RefreshRect falls back to WindowRect.Empty, the
+            // engine must exclude that (0,0,0,0) entry and return the real candidate — mirrors
             // Run_WindowNavigationEngine_HiddenZeroRect_Excluded above.
             var settings = NavigationSettings.FromDpi(96, 96);
-            var active = new RectCoordinate(100, 100, 100, 100);
+            var active = new WindowRect(100, 100, 100, 100);
             var candidates = new[]
             {
-                new RectCoordinate(0, 0, 0, 0),        // RectCoordinate.Empty fallback (BP-4 adds the constant)
-                new RectCoordinate(100, 0, 100, 50),  // the only real candidate
+                new WindowRect(0, 0, 0, 0),        // WindowRect.Empty fallback (BP-4 adds the constant)
+                new WindowRect(100, 0, 100, 50),  // the only real candidate
             };
             Assert.Equal(1, WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+        }
+
+        // ================================================================
+        // WindowNavigator.BuildActiveWindows — m44 null-active-window helper (BP-31)
+        // RED: `WindowNavigator.BuildActiveWindows` doesn't exist -> compile error (CS0117)
+        // ================================================================
+
+        public static void Run_WindowNavigator_BuildActiveWindowsNullActive()
+        {
+            // m44 (BP-31): a null active window must degrade to an empty/no-op window list —
+            // the null check must run BEFORE WindowFrameAdapter.LinkedTo dereferences activeWindow
+            // (WindowNavigator.cs:47-58 today derefs first, so the graceful-degradation branch is
+            // dead). The helper takes the adapters as a primitive list (WindowFrameAdapter is a
+            // VS-coupled COM-paired type that cannot be constructed hermetically), so the test
+            // passes an empty list — the null-active path must not touch it and must not throw.
+            // RED: `WindowNavigator.BuildActiveWindows` does not exist -> compile error (CS0117).
+            var adapters = new List<WindowFrameAdapter>();
+            var result = WindowNavigator.BuildActiveWindows(null, adapters);
+            Assert.Equal(0, result.Count);
         }
 
         // ================================================================
@@ -1575,27 +1816,26 @@ namespace NeoVisual.Tests
 
         public static void Run_LeaderMatcher_PrefixSetBuiltOnce()
         {
-            // M7: the matcher must precompute a prefix set once at construction (a readonly field)
-            // so the per-key prefix check is a set lookup instead of a StartsWith scan. RED today:
-            // no prefix set exists -> the field is absent (assertion failure).
+            // m56: assert BEHAVIOR instead of the private field. The prefix set's observable
+            // contract: with only "F,F" bound, typing "F" after the leader must NOT abort (it is a
+            // proper prefix of a longer binding) — the matcher keeps waiting (Consume). Then "F"
+            // again executes "F,F". If the prefix set were absent/broken, the first "F" would Abort.
+            var executed = 0;
             var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
             {
-                ["F"] = () => { },
-                ["F,F"] = () => { },
+                ["F,F"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
-            var field = typeof(LeaderSequenceMatcher).GetFields(
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                .FirstOrDefault(f => f.Name.IndexOf("prefix", StringComparison.OrdinalIgnoreCase) >= 0);
-            Assert.True(field != null, "LeaderSequenceMatcher must precompute a prefix set (M7)");
-            Assert.True(field!.IsInitOnly, "the prefix set must be readonly (built once at construction)");
+            matcher.HandleKey(Keys.Space, false, false, false, false); // leader
+            var first = matcher.HandleKey(Keys.F, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Consume, first.Kind);
+            Assert.True(matcher.IsActive, "a proper prefix keeps the sequence active");
+            Assert.Equal(0, executed);
 
-            object? value = field.GetValue(matcher);
-            Assert.True(value != null, "the prefix set is populated at construction");
-            bool containsF = value is System.Collections.IEnumerable seq
-                && seq.Cast<object?>().Any(o => string.Equals(o?.ToString(), "F", StringComparison.OrdinalIgnoreCase));
-            Assert.True(containsF, "prefix set contains 'F' (a proper prefix of 'F,F')");
+            var second = matcher.HandleKey(Keys.F, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Execute, second.Kind);
+            Assert.Equal(1, executed);
         }
 
         // ================================================================
@@ -1901,6 +2141,61 @@ namespace NeoVisual.Tests
 
             Assert.True(sink.Contains("[MyExtension] init x failed: boom"),
                 "a throwing sync step logs failed and does not throw");
+        }
+
+        public static void Run_RoslynGatherers_IsWriteLocation()
+        {
+            // m4 (BP-63): the reflection read of ReferenceLocation.IsWrittenTo must be unit-testable
+            // offline. RED: `RoslynGatherers` does not exist -> compile error (CS0246).
+            var writeLoc = MakeReferenceLocation(isWrittenTo: true);
+            var readLoc = MakeReferenceLocation(isWrittenTo: false);
+
+            Assert.True(RoslynGatherers.IsWriteLocation(writeLoc),
+                "a write location must report IsWrittenTo=true");
+            Assert.False(RoslynGatherers.IsWriteLocation(readLoc),
+                "a read-only location must report IsWrittenTo=false");
+            Assert.False(RoslynGatherers.IsWriteLocation(default(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation)),
+                "a default location must report false (the reflection-failure defensive path)");
+        }
+
+        // Constructs a ReferenceLocation with the given IsWrittenTo flag via the internal ctor
+        // (Roslyn 4.14 makes the ctor + IsWrittenTo internal; the production IsWriteLocation reads
+        // the property via reflection, so the test builds the struct the same way). The 7-param
+        // ctor is (document, alias, location, isImplicit, symbolUsageInfo, additionalProperties,
+        // candidateReason) and ReferenceLocation.IsWrittenTo is DERIVED from
+        // SymbolUsageInfo.IsWrittenTo() — so the write/read flag must be encoded in the
+        // SymbolUsageInfo (ValueUsageInfo.Write -> IsWrittenTo=true, ValueUsageInfo.Read -> false),
+        // not in the isImplicit arg (which is always false here). SymbolUsageInfo/ValueUsageInfo
+        // are internal in the Roslyn 4.14 netstandard2.0 build, so the SymbolUsageInfo is built
+        // via the internal static SymbolUsageInfo.Create(ValueUsageInfo) through reflection.
+        private static Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation MakeReferenceLocation(bool isWrittenTo)
+        {
+            var type = typeof(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation);
+            var ctor = type.GetConstructors(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                .First(c => c.GetParameters().Length == 7);
+            var ps = ctor.GetParameters();
+            var args = new object[7];
+            args[0] = null; // Document
+            args[1] = null; // IAliasSymbol
+            args[2] = null; // Location
+            args[3] = false; // isImplicit
+            args[4] = MakeSymbolUsageInfo(isWrittenTo); // SymbolUsageInfo
+            args[5] = Activator.CreateInstance(ps[5].ParameterType); // ImmutableArray<(string,string)>
+            args[6] = Activator.CreateInstance(ps[6].ParameterType); // CandidateReason
+            return (Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation)ctor.Invoke(args);
+        }
+
+        // Builds a SymbolUsageInfo whose IsWrittenTo() matches the requested flag via the internal
+        // static SymbolUsageInfo.Create(ValueUsageInfo) (both types are internal in Roslyn 4.14).
+        private static object MakeSymbolUsageInfo(bool isWrittenTo)
+        {
+            var asm = typeof(Microsoft.CodeAnalysis.FindSymbols.ReferenceLocation).Assembly;
+            var suiType = asm.GetType("Microsoft.CodeAnalysis.SymbolUsageInfo", throwOnError: true)!;
+            var vuiType = asm.GetType("Microsoft.CodeAnalysis.ValueUsageInfo", throwOnError: true)!;
+            var create = suiType.GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)
+                .First(m => m.Name == "Create" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == vuiType);
+            var usage = Enum.Parse(vuiType, isWrittenTo ? "Write" : "Read");
+            return create.Invoke(null, new[] { usage })!;
         }
     }
 

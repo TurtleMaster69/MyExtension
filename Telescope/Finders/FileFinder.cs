@@ -19,10 +19,12 @@ namespace Telescope.Finders
     public sealed class FileFinder : FinderBase<FileHit>
     {
         private readonly Func<DTE> _dteFactory;
+        private readonly ProjectFileCache? _fileCache;
 
         // Hermetic-test seam: when set, candidate enumeration and file opening go through these
         // instead of DTE, so the finder's logic can be unit-tested without Visual Studio.
         private readonly Func<IReadOnlyList<string>>? _testCandidateSource;
+        private readonly Func<IReadOnlyList<string>>? _testEnumerate;
         private readonly Action<string>? _testOpener;
 
         public override string Name => "Files";
@@ -45,8 +47,29 @@ namespace Telescope.Finders
             _dteFactory = () => null!;
         }
 
+        /// <summary>Test-only constructor: routes the enumerate delegate through the shared cache (m34).</summary>
+        internal FileFinder(ProjectFileCache cache, Func<IReadOnlyList<string>> enumerate, Action<string> opener)
+        {
+            _fileCache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _testEnumerate = enumerate;
+            _testOpener = opener;
+            _dteFactory = () => null!;
+        }
+
         protected override IReadOnlyList<FileHit> GatherHits()
         {
+            if (_testEnumerate != null)
+            {
+                // Hermetic test path: no VS thread affinity; the shared cache serves the enumerate
+                // delegate once across gathers.
+                var testHits = new List<FileHit>();
+                foreach (string path in _fileCache!.Get(_testEnumerate))
+                {
+                    testHits.Add(new FileHit(path, 0));
+                }
+                return testHits;
+            }
+
             if (_testCandidateSource != null)
             {
                 // Hermetic test path: no VS thread affinity.
@@ -59,7 +82,10 @@ namespace Telescope.Finders
             }
 
             var hits = new List<FileHit>();
-            foreach (string path in ProjectFiles.Enumerate(_dteFactory()))
+            IReadOnlyList<string> files = _fileCache != null
+                ? _fileCache.Get(() => ProjectFiles.Enumerate(_dteFactory()))
+                : ProjectFiles.Enumerate(_dteFactory());
+            foreach (string path in files)
             {
                 hits.Add(new FileHit(path, 0));
             }
@@ -73,18 +99,16 @@ namespace Telescope.Finders
 
         protected override void OpenHit(FileHit hit)
         {
-            // A missing file is a no-op on BOTH paths (the hermetic _testOpener branch and the
-            // real HitOpener path, which also guards internally). Restored guard (m13/BP-6).
-            if (!File.Exists(hit.FilePath)) return;
-
             if (_testOpener != null)
             {
-                // Hermetic test path: no VS thread affinity.
+                // Hermetic test path: no VS thread affinity. Keeps its own missing-file no-op.
+                if (!File.Exists(hit.FilePath)) return;
                 _testOpener(hit.FilePath);
                 TelescopeLog.Log($"opened file: {hit.FilePath}");
                 return;
             }
 
+            // The real HitOpener path owns the missing-file no-op (HitOpener guards internally).
             HitOpener.OpenAtLine(hit, (path, line) =>
             {
                 _dteFactory()?.ItemOperations.OpenFile(path);

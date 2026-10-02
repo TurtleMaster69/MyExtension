@@ -18,6 +18,9 @@ namespace MyExtension.ToolWindows
         protected ToolWindowControllerBase(ToolWindowType type)
         {
             _type = type;
+            // A window's initial mode comes from whether its type is a text-input surface (m23 —
+            // the base/initial-mode flow owns this so every controller starts correctly).
+            _isInputMode = GeneralToolWindowController.IsTextInputType(type);
         }
 
         public ToolWindowType Type => _type;
@@ -41,6 +44,17 @@ namespace MyExtension.ToolWindows
         /// <summary>Shared vim text-motion action wiring for the focused text surface (search box /
         /// text-input window): routes the key through <see cref="TextMotionHelper.TryMoveFocusedSurface"/>.</summary>
         protected Func<bool> TextMotion(Keys key) => () => TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode);
+
+        /// <summary>
+        /// Adds the shared w/b/e vim text-motion action wiring to <paramref name="actions"/> (m16 —
+        /// the single source for the text-input surfaces' word motions).
+        /// </summary>
+        protected void AddTextMotionKeys(Dictionary<Keys, Func<bool>> actions)
+        {
+            actions[Keys.W] = TextMotion(Keys.W);
+            actions[Keys.B] = TextMotion(Keys.B);
+            actions[Keys.E] = TextMotion(Keys.E);
+        }
 
         public abstract bool TryMove(Keys key);
 

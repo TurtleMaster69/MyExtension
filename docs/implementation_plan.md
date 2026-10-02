@@ -1,695 +1,686 @@
-# Combined Plan — Code-Review Fixes (67 findings) + Repository Restructure
+# Combined Plan — Code-Review Fixes (98 findings) + Functional Restructure
 
 > **Lane: feature/bugfix program + refactor (unit-only, e2e deferred).**
-> Source: `docs/code-review.md` (2026-09-30, whole-repo 10-worker review of the
-> post-consolidation codebase) + a user-requested repository restructure
-> (folders + namespaces + tools + docs).
+> Source: `docs/reviews/code-review.md` (2026-10-01, whole-repo 10-worker review of
+> the post-67-fix codebase) + a user-requested repository restructure (main files
+> separated from helpers/utils by functionality + renames that reflect actual function).
 >
-> **User decisions (2026-09-30, via question):** (1) **folders + namespaces** —
-> move files AND rename namespaces to match the new folders; (2) **one combined
-> plan** — code-review fixes as early phases, restructure as the final phase;
-> (3) **source + tools + docs** scope.
+> **User decisions (2026-10-01, via question):** (1) **Utils subfolder + 5 renames** —
+> per functional folder, main files stay in the folder and helpers/utils move to a
+> `Utils/` subfolder; rename WindowMatrix→WindowNavigator,
+> CardinalNavigationConstants→NavigationConstants, UtilityMethods→WindowFrameUtils,
+> RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter; (2) **namespaces stay
+> unchanged** (MyExtension.Navigation etc.); (3) **one combined plan** — code-review
+> fixes as early phases, restructure as the final phases; (4) **e2e deferred** (this
+> machine cannot boot the VS Experimental Instance — user confirmed).
 >
-> **Research:** 1 whole-repo `trailmark-recon` digest (1691 nodes, 681 proxies,
-> 0 entrypoints — all 12 structural claims CONFIRMED) + 2 `arch-auditor`
-> slices (code-review fix verification: 33 findings verified + 6 flagged minors
-> + 4 fix-direction corrections; restructure impact: 7-section inventory).
-> `feature-researcher` SKIPPED (both tasks are internal bug fixes + refactor —
-> no LazyVim reference needed).
+> **Research:** 1 whole-repo `trailmark-recon` digest (1763 nodes, 717 proxies,
+> 0 entrypoints) + 2 `arch-auditor` slices (code-review fix verification: all 98
+> findings CONFIRMED against current code with fix direction + unit seam; restructure
+> impact: 90 files classified MAIN vs HELPER/UTIL + target structure + rename blast
+> radius per rename). `feature-researcher` SKIPPED (both tasks are internal bugfix +
+> refactor — no LazyVim reference needed).
 >
-> **Ground truth:** `dotnet build MyExtension.slnx` = 0 errors (115 pre-existing
-> warnings). Repo is GREEN (commit `f4450cb` + progress `164e757`).
+> **Ground truth:** `dotnet build MyExtension.slnx` = 0 errors. Repo is GREEN
+> (commit `92b119f` — the 67-findings + restructure plan).
 >
-> e2e scenarios are DEFERRED to `e2e-queue.md` (status QUEUED) — this machine
-> cannot boot the VS Experimental Instance. NO e2e RED/VERIFY step is planned;
-> every fix is verified by unit tests (where a hermetic seam exists) + `dotnet
-> build` + the existing unit suites, with the live behavior gated by the
-> deferred e2e scenarios.
+> e2e scenarios are DEFERRED to `e2e-queue.md` (status QUEUED) — this machine cannot
+> boot the VS Experimental Instance. NO e2e RED/VERIFY step is planned; every fix is
+> verified by unit tests (where a hermetic seam exists) + `dotnet build` + the
+> existing unit suites, with the live behavior gated by the deferred e2e scenarios.
 
 ## Goal
 
-Fix all 67 code-review findings in dependency order (the 2 consolidation
-regressions first, then the hook hot-path contract, the finder UI-stall
-cluster, the motion/preview correctness bugs, the navigation robustness, the
-hook-path safety, the duplication merges, the dead-code deletions, the harness
-hardening, the test hermeticity, and the docs drift), then restructure the
-repository into logical folders with matching namespaces (source + tools +
-docs) — with every behavior change proven by a RED unit test (or, where no
-hermetic seam exists, by build + existing suites + the deferred e2e gate), and
-the restructure proven behavior-preserving by build + unit suites + doc-ref
-lint + the deferred full-suite e2e re-run.
+Fix all 98 code-review findings in dependency order (the 2 functional bugs first,
+then the finder UI-stall cluster, the FocusGuard/routing drift, the VsVim interop
+fragility, the navigation robustness, the controller/state issues, the duplication
+merges, the dead-code deletions, the harness hardening, the test hermeticity, and
+the docs/queue drift), then restructure the repository into functional folders
+(main files + a `Utils/` subfolder per area) with the 5 approved renames — with
+every behavior change proven by a RED unit test (or, where no hermetic seam exists,
+by build + existing suites + the deferred e2e gate), and the restructure proven
+behavior-preserving by build + unit suites + doc-ref lint + the deferred full-suite
+e2e re-run.
 
 ## Approach
 
-The research passes produced a verified verdict + fix direction + unit-test
-seam for every finding, plus a full restructure impact inventory. The plan is
-organized into 14 phases in dependency order: Phases 0-10 are the code-review
-fixes, Phases 11-14 are the restructure. Cross-cutting constraints:
+The research passes produced a verified verdict + fix direction + unit-test seam for
+every finding, plus a full restructure impact inventory (90 files classified) with
+rename blast radius. The plan is organized into 15 phases in dependency order:
+Phases 0-10 are the code-review fixes, Phases 11-14 are the restructure. Cross-cutting
+constraints:
 
-- **Log-line-as-contract:** several fixes touch lines the e2e harness asserts
-  on (`navigate direction=L/R/D/U`, `shortcut-binding executed:`,
-  `leader-binding executed:`, `[Telescope] focus target=List|Preview`,
+- **Log-line-as-contract:** several fixes touch lines the e2e harness asserts on
+  (`navigate direction=L/R/D/U`, `[Telescope] focus target=List|Preview`,
   `vim-mode=Insert|Normal|Replace`, `preview caret=... line=...`,
-  `text-motion key=...`, `textinput-enter-input ...`). Any fix that changes a
-  signature or a log site MUST preserve the emitted token byte-identical.
-- **Proxy traps:** cross-class calls land on `proxy.unresolved:<Type>.<Member>`;
-  a bare `callers_of` returning 0 is SUSPECT, not dead code. Never report
-  `KeyInjection.Press`, `NeoVisualLog.Close/Log/Debug`, `InstallDebugListener`,
-  `TextMotionHelper.MapMotion`, `controller.TryMove/ExitInputMode` as dead.
+  `text-motion key=...`, `textinput-enter-input ...`, `prompt-motion key=...`). Any
+  fix that changes a signature or a log site MUST preserve the emitted token
+  byte-identical.
+- **Proxy traps:** cross-class calls land on `proxy.unresolved:<Type>.<Member>`; a
+  bare `callers_of` returning 0 is SUSPECT, not dead code. Never report
+  `KeyInjection.Press`, `NeoVisualLog.Log`, `LogFileWriter.Write`,
+  `FocusGuard.ShouldRouteToolWindowKey`, `WindowNavigationEngine.SelectTarget`,
+  `LeaderSequenceMatcher.Reset`, `TextMotionNavigator.SetText`, `FinderBase.GetCandidates`
+  as dead.
 - **Fix-direction corrections from research (fold into the phases):**
-  1. **CR1** — the existing exact-set test
-     `Run_ActionTable_TextInput_ActionKeysMatchTable` (NeoVisual.Tests:527-537)
-     pins the buggy `{W,B,E,A,H,L}` set (count 6) and MUST be updated to
-     include `I` (count 7) in the same change.
-  2. **M10** — the existing test
-     `Run_Preview_UpFromSecondLineWithLeadingBlankLine` (Telescope.Tests:846-853)
-     asserts the buggy `LineNumber==2` result and MUST be corrected to assert
-     line 1/caret 0 in the same change.
-  3. **M19** — the motion **math is already shared** (`TextMotionHelper`
-     delegates to `TextMotionNavigator`); only the key→motion **dispatch** is
-     duplicated (`TryDispatch` vs `TextMotionHelper.MapMotion`). Fix = unify
-     the two dispatch tables, NOT "make TextMotionHelper delegate".
-  4. **M27** — scope the `results count=[1-9]\d*` tightening to
-     `test-e2e.ps1:518` ONLY; `:1533/:1537` legitimately assert `count=0`
-     (`telescope-no-selection`).
-  5. **m28** — the "Text.UI not referenced" comment is STALE
-     (NeoVisual.Tests.csproj now references `Microsoft.VisualStudio.Text.UI`),
-     so `TextInputToolWindowController.TryMove` IS unit-testable; only
-     `SelectFirstSourceFile` stays VS-coupled.
-  6. **M11** — the "NRE in HitType cast" part is REFUTED (`FinderBase` has a
-     clean `is not` return); the real issue is the silent no-op fallback.
-- **No-seam findings** (VS/WPF/harness-coupled, no hermetic unit surface):
-  M1 (cache), M8 (hook try/catch), M9 (CheckDte), M12 (pane latch), M14
-  (ctor), M25 (Dte?), M26/M27 (harness regexes), m17/m18/m19/m20 (harness),
-  m2/m7/m8/m9/m10 (VS/WPF-coupled). For these the plan states the honest
-  verification (build + existing suites + deferred e2e) and, where possible,
-  extracts a small pure seam to make part of the behavior unit-testable.
+  1. **M1** — the fix is in `TryPromptMotion`: return false when `TryDispatch`
+     reports an insert placement (`out CaretPlacement != null`), so `a`/`A`/`I`
+     fall through to `OverlayKeyHandler`. The `telescope-mode` e2e `a` assertion is
+     a false positive (fixed-baseline re-match) — the unit test is the real gate.
+  2. **M2** — the comment at GrepFinder.cs:105-107 claims "background + marshal" but
+     `.GetAwaiter().GetResult()` blocks synchronously. Fix = make `GetCandidates`
+     truly async (await in `RefreshQueryDrivenAsync`) OR drop the `Task.Run` (same
+     blocking, no wasted thread hop). **BP-4 chooses the drop-Task.Run alternative**
+     (GrepFinder-only, fully scoped, behavior-preserving) — the async interface
+     change is NOT taken.
+  3. **M8** — `FileNames` is 1-based; `FileNames[1]` is the primary file's full path
+     (the comment's "index 1 is the short name" is wrong). Extract a pure
+     primary-path pick into a testable helper.
+  4. **M5** — route `EditorFocusedVeto` through the same cached
+     `_windowManager.IsTextInputType` (or a single `ownsKeyboard` bool into
+     `FocusGuard`) so all three routing formulations read one source.
+  5. **M7** — replace the GC-poll with a deterministic seam (the timeout path exposes
+     the awaited-task outcome via a `TaskCompletionSource`/awaited-read count).
+- **No-seam findings** (VS/WPF/harness-coupled, no hermetic unit surface): M3, M6,
+  m3, m6 (the hook-wiring part only — the `LogFileWriter` format part has a hermetic
+  seam, BP-51), m10, m14, m18, m20, m21, m24, m25, m28 (wiring), m38, m39, m40,
+  m45, m46, m47, m49, m60, m63, m64, m65, m66, m67, m68, m69, n2, n4, n5, n7, n8,
+  n9, n10, n12, n13, n14, n15, n16, n17, n18, n19, n20, n21. For these the plan
+  states the honest verification (build + existing suites + deferred e2e) and, where
+  possible, extracts a small pure seam to make part of the behavior unit-testable.
 - **Restructure constraint:** the restructure is behavior-preserving — NO
-  `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` log literal may change,
-  no public API may change, and the unit suites must pass with UNCHANGED
-  counts. The doc-ref lint (`tools/check-doc-refs.ps1`) must stay clean after
-  the reference sweep.
+  `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` log literal may change, no
+  internal type/API change except the 5 approved renames (which are the point), and
+  the unit suites must pass with UNCHANGED counts. The doc-ref lint
+  (`tools/lint/check-doc-refs.ps1`) must stay clean after the reference sweep.
 
 ---
 
 # Part A — Code-review fixes (Phases 0-10)
 
-## Phase 0 — Criticals (CR1, CR2)
+## Phase 0 — Functional bugs (M1, M8, m36, m52)
 
-- **CR1** (critical, CONFIRMED) — `TextInputToolWindowController` dropped
-  `Keys.I` from `_actions` (consolidation regression). `_actions` has
-  W/B/E/A/H/L but not `Keys.I`; the docstring (:18) still documents `I` =
-  insert at line start, and the harness presses `I` on the Command Window and
-  asserts `textinput-enter-input start caret=0` (test-e2e.ps1:1133). Today `I`
-  falls through to the generic `i` branch. **Fix:** add
-  `[Keys.I] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.I, ref _isInputMode)`
-  to `_actions` (bare `i` still falls through). **Unit seam (NeoVisual.Tests):**
-  update `Run_ActionTable_TextInput_ActionKeysMatchTable` to the exact set
-  `{W,B,E,A,H,L,I}` (count 7) + add `Run_TextInput_KeysIMapsToInsertStart`
-  asserting `TryMove(Keys.I)` maps to `InsertStart`. RED: the exact-set test
-  fails (count 6 vs 7) before the fix.
-- **CR2** (critical, CONFIRMED) — `VsVimModeSource.Detach(view)` ignores
-  `view` and unsubscribes the single global `_currentTextBuffer`;
-  `SubscribeBuffer` unsubscribes the previous buffer on every `Attach`. With
-  2+ views, closing a non-focused view kills the focused view's `SwitchedMode`
-  subscription → `_cachedTyping` goes stale → Space starts a leader sequence
-  in insert mode. **Fix:** track the subscribed buffer per view
-  (`Dictionary<ITextView, object>`), `Detach(view)` unsubscribes only that
-  view's buffer, re-subscribe the focused view's buffer on `OnViewGotFocus`.
-  **Unit seam (NeoVisual.Tests):** extract a pure per-view subscription map
-  (e.g. `VimBufferSubscriptions` — `Attach(view, buffer)`, `Detach(view)`,
-  `BufferFor(view)`, `FocusedBuffer`) with a fake `IVimModeSource`; tests:
-  attach A, attach B, detach A → B's subscription survives (RED today: the
-  map doesn't exist → compile error); detach non-attached view → no-op;
-  re-attach after detach → re-subscribed.
+- **M1** (major, CONFIRMED) — `a`/`A`/`I` in the Telescope prompt are intercepted by
+  `TryPromptMotion` (TelescopeOverlay.cs:562,583-597) as caret motions and never
+  enter insert mode; `OverlayKeyHandler`'s `a`/`A`/`I` actions are unreachable dead
+  code; the `telescope-mode` e2e `a` assertion is a false positive. **Fix:** extract
+  a pure routing seam `PromptMotionRouter.ShouldConsume(Key key, bool shift, out
+  CaretPlacement? insertPlacement)` (new `Telescope/Overlay/PromptMotionRouter.cs`,
+  dependency-free, delegates to `TextMotionDispatcher.MapKey`) that returns TRUE only
+  for motions (h/l/w/b/e/0/$/gg/G) and FALSE for the insert placements (a/A/I, with
+  the placement reported via `out`). `TryPromptMotion` and `HandlePreviewKey` call
+  `ShouldConsume` first and return false (fall through to `_keyHandler.Handle` /
+  no preview motion) when it reports an insert placement. **Unit seam
+  (Telescope.Tests):** `Run_PromptMotionRouter_InsertPlacementsNotConsumed` —
+  `ShouldConsume(Key.A/A/I, ...)` returns false with a non-null `insertPlacement`
+  (RED: today the prompt consumes them because `TryPromptMotion` discards the
+  placement); `Run_PromptMotionRouter_MotionsConsumed` — `ShouldConsume(Key.H/W/...,
+  ...)` returns true with a null placement.
+- **M8** (major, CONFIRMED) — `SolutionExplorerController.cs:331`
+  `pi.FileNames[(short)pi.FileCount]` indexes the LAST file of a multi-file project
+  item (FileNames is 1-based; FileCount=3 → `Form1.resx`), so `g` opens the wrong
+  file. **Fix:** use `pi.FileNames[1]` (the primary file's full path). **Unit seam
+  (NeoVisual.Tests):** pin a dependency-free helper signature —
+  `HierarchyResolver.PrimaryFilePath(IReadOnlyList<string> fileNames)` returns
+  `fileNames[0]` (the primary file; `EnvDTE.ProjectItem` is a COM interface that
+  cannot be constructed hermetically, so the helper takes primitive inputs) —
+  `Run_HierarchyResolver_PrimaryFilePath` asserts the primary file is picked for a
+  multi-file list (RED: today the caller indexes the last).
+- **m36** (minor, CONFIRMED) — `EnterInsert(Current)` calls `FocusPrompt()` which
+  resets `_promptBox.CaretIndex` to the end (TelescopeOverlay.cs:516,486) — `i`
+  discards the caret position set by h/l/w/b/e/0/$. **Fix:** `FocusPrompt` must not
+  reset `CaretIndex` when entering insert at the current position — capture the
+  caret before focusing and restore it for `CaretPlacement.Current`. **Unit seam
+  (Telescope.Tests):** `Run_PromptMotionRouter_InsertPlacementsNotConsumed` covers
+  the routing half (a/A/I fall through); the caret-preservation half is verified by
+  the deferred e2e `telescope-mode` (E2E-NCR-1) — the WPF `TextBox.CaretIndex` reset
+  has no hermetic seam, so m36 is RED-proven at the routing level + e2e-deferred.
+- **m52** (minor, CONFIRMED) — `HandlePreviewKey` routes `a`/`A`/`I` in the read-only
+  preview (TelescopeOverlay.cs:616) — insert placements move the caret in a read-only
+  surface. **Fix:** exclude the insert placements from the preview motion surface via
+  the same `PromptMotionRouter.ShouldConsume` seam (return false → no preview motion).
+  **Unit seam (Telescope.Tests):** `Run_PromptMotionRouter_InsertPlacementsNotConsumed`
+  (shared with M1 — the router is the single decision point for both surfaces; RED:
+  today the preview maps them).
 
-## Phase 1 — Hook hot-path contract (M1, M2, M15, M7, m17)
+## Phase 1 — Finder path amortization (M2, M4, m5, m15, m27, m30, m31, m32, m33, m34, m37, m50)
 
-One focused pass on `InputHandler`/`WindowManager`/`LeaderSequenceMatcher` to
-make the pre-filter genuinely cheap again (the review's recommendation #2).
+- **M2** (major, CONFIRMED) — `GrepFinder.GetCandidates` (GrepFinder.cs:109-121)
+  blocks the UI thread with `Task.Run(...).GetAwaiter().GetResult()` for the whole
+  scan. **Fix (chosen — BP-4):** DROP the `Task.Run` wrapper and run the per-file
+  content scan inline (the synchronous blocking is unchanged; only the wasted thread
+  hop is removed). This is fully scoped to GrepFinder.cs and does NOT change the
+  `IFinder.GetCandidates` / `FinderBase<THit>` interface. **Unit seam
+  (Telescope.Tests):** behavior-preserving (no RED — the synchronous scan is
+  unchanged): the hermetic `GrepFinder` path (injected enumerate + opener) asserts
+  `GetCandidates` returns the same hits and the `grep hits=...` log is byte-identical.
+- **M4** (major, CONFIRMED) — `PreviewRenderer` re-tokenizes + rebuilds the
+  `FlowDocument` on every selection change (PreviewRenderer.cs:36,62-75); the mtime
+  cache only avoids the disk read. **Fix:** cache the tokenized segments + built
+  `FlowDocument` keyed by mtime (or content hash); keep `ApplyCaret`/`MoveToLine`
+  per-selection. **Unit seam (Telescope.Tests):** a pure mtime-keyed token cache —
+  `Run_PreviewTokenCache_UnchangedMtimeCached` / `_ChangedMtimeRetokenizes` (RED:
+  cache class doesn't exist → compile error).
+- **m5** (minor, CONFIRMED) — `MyExtensionPackage.ReadLine` (MyExtensionPackage.cs:665-675)
+  re-opens + re-scans the file prefix per reference hit (O(hits × line)). **Fix:**
+  read once per gather (or reuse the Roslyn `SourceText`). **Unit seam
+  (Telescope.Tests):** `Run_FileContentCache_*` (the cache is the read-once seam).
+- **m27** (minor, CONFIRMED) — `FileContentCache` LRU `maxEntries` cap never passed
+  by any production caller (PreviewRenderer.cs:34, CodeIssuesFinder.cs:40,
+  GrepFinder.cs:29 all use `new FileContentCache()`). **Fix:** pass a cap (e.g. 500)
+  at the construction sites. **Gate:** `Run_FileContentCache_EvictsOldest` already
+  exists and passes (the LRU eviction is implemented) — the m27 bug is that
+  production callers don't pass a cap, so the gate is a code-review assertion that
+  the three construction sites pass a cap + build (no new RED test needed).
+- **m31** (minor, CONFIRMED) — `TryPromptMotion`/`ApplyInsertCaret` allocate a fresh
+  `new TextMotionNavigator()` per keystroke (TelescopeOverlay.cs:585,498). **Fix:**
+  reuse a `_promptNavigator` field. **Unit seam (Telescope.Tests):** behavior-preserving
+  (the motion math is unchanged).
+- **m32** (minor, CONFIRMED) — `TextMotionNavigator.LineNumber` is an O(n) scan read
+  on every preview keystroke log (TextMotionNavigator.cs:37-51). **Fix:** cache the
+  line number incrementally or use the existing `LineIndex`. **Unit seam
+  (Telescope.Tests):** `Run_TextMotionNavigator_LineNumber` (behavior-preserving).
+- **m33** (minor, CONFIRMED) — `ResultMapper.MapBack` rebuilds
+  `GroupBy(...).ToDictionary(...)` over the whole snapshot per keystroke
+  (ResultMapper.cs:21-24). **Fix:** cache the byDisplay map per snapshot. **Unit
+  seam (Telescope.Tests):** `Run_ResultMapper_*` (behavior-preserving).
+- **m34** (minor, CONFIRMED) — `FileFinder.GatherHits` calls `ProjectFiles.Enumerate`
+  directly (FileFinder.cs:62) — no shared `ProjectFileCache`. **Fix:** route through
+  the cache. **Unit seam (Telescope.Tests):** `Run_FileFinder_UsesProjectFileCache`.
+- **m37** (minor, CONFIRMED) — fzf subprocess spawned per keystroke (FzfFilter.cs:95);
+  documented bites-later. **Fix:** schedule `fzf --listen` / in-process matcher when
+  latency is measured to matter. **Unit seam (Telescope.Tests):** behavior-preserving.
+- **m50** (minor, CONFIRMED) — `FzfFilter.IsAvailable()` blocks the UI up to 500ms on
+  every overlay open (FzfFilter.cs:64-88). **Fix:** cache the availability once per
+  session or probe async. **Unit seam (Telescope.Tests):**
+  `Run_FzfFilter_IsAvailableBounded` (injected clock — note: the clock injection
+  lands in Phase 9's m58; the Phase 1 BP step defers the bounded assertion to Phase 9).
+- **m15** (minor, CONFIRMED) — `TextMotionHelper` per-motion key: 2 full buffer
+  copies + up to 3 `FindFocusedTextBox` visual-tree walks (TextMotionHelper.cs:82,149,158).
+  **Fix:** return the found box once, reuse the navigator. No-seam (WPF) — build +
+  deferred e2e `neovisual-textinput-motions`.
+- **m30** (minor, CONFIRMED) — `FileFinder.OpenHit` double `File.Exists` (outer guard
+  + `HitOpener`) (FileFinder.cs:78). **Fix:** drop the outer guard, let `HitOpener`
+  own it. **Unit seam (Telescope.Tests):** `Run_HitOpener_*` (behavior-preserving).
 
-- **M1** (major, CONFIRMED) — `IsKeyOfInterest` evaluates
-  `TextInputSurfaceFocused` (COM `GetProperty(VSFPROPID_DocView)` +
-  `Keyboard.FocusedElement` + visual-tree walk) on every key-down, violating
-  its own "no COM/interop" doc comment. **Fix:** cache the focused-surface
-  fact on focus-change events (like `_isTextInputType`) and read the cached
-  bool per key. No-seam (WindowManager is VS-coupled) — honest verification:
-  build + existing `Run_ToolWindowMode_*` classification tests + deferred e2e.
-- **M2** (major, CONFIRMED) — `RefreshStaleSentinel()` re-stats the sentinel
-  file (`File.Exists`) per key-down whenever `NEOVISUAL_LOG_DIR` is set.
-  **Fix:** stat on a timer or focus-change, not per key-down (the sentinel
-  toggles with NO focus change, so a pure focus-gated refresh would leave the
-  cache stale — cache the result and refresh on a bounded interval or on
-  `IsKeyOfInterest` entry with a cached value). **Unit seam (NeoVisual.Tests):**
-  the existing pure `StaleToolWindowSentinel` (path + `Refresh()` + cached
-  `IsStale`) — add a test that `IsStale` is cached until `Refresh()` (already
-  covered by `Run_StaleToolWindowSentinel_CachedWithoutRefresh`); the wiring
-  (when to call `Refresh()`) is no-seam.
-- **M15** (major, CONFIRMED) — the `key == Keys.I` branch (enter-input-mode
-  fallback) isn't guarded on `!_leaderMatcher.IsActive`; `IsKeyOfInterest`
-  returns true for bare Ctrl keys that `HandleKey` deliberately ignores.
-  **Fix:** add `!_leaderMatcher.IsActive &&` to the `Keys.I` condition; drop
-  the `ControlKey`/`LControlKey`/`RControlKey` cases from `IsKeyOfInterest`.
-  **Unit seam (NeoVisual.Tests):** `Run_LeaderMatcher_*` (pure) — a leader
-  sequence in progress must not be interrupted by `I`; the Ctrl-key pre-filter
-  change is no-seam (build-verified).
-- **M7** (major, CONFIRMED) — `LeaderSequenceMatcher` rebuilds the whole
-  sequence string + scans all bindings (`StartsWith`) per key while a leader
-  sequence is active. **Fix:** maintain the sequence string incrementally and
-  precompute a prefix set once at construction. **Unit seam (NeoVisual.Tests):**
-  the existing `Run_LeaderMatcher_*` family (behavior-preserving) + a new
-  `Run_LeaderMatcher_PrefixSetBuiltOnce` asserting the prefix set is computed
-  once (RED: no prefix set exists → compile error).
-- **m17** (minor, CONFIRMED) — `WindowManager.RefreshCurrentWindow` calls
-  `IVsMonitorSelection` without `ThrowIfNotOnUIThread()`. **Fix:** add the
-  guard. No-seam (build-verified).
+## Phase 2 — FocusGuard + routing (M5, m7, m42, m43, m47, n14, n15, n16)
 
-## Phase 2 — Finder path amortization (M3, M4, M5, M13, m15, m16)
+- **M5** (major, CONFIRMED) — the text-input keyboard-ownership exemption computed
+  twice: `EditorFocusedVeto` (InputHandler.cs:104-109) uses
+  `GeneralToolWindowController.IsTextInputType(_windowManager.Type)` (recomputed)
+  while `HasToolWindowActionKeys` (InputHandler.cs:84-90) uses the cached
+  `_windowManager.IsTextInputType`. **Fix:** route both through one cached
+  `IsTextInputType` (or a single `ownsKeyboard` bool into `FocusGuard`). **Unit seam
+  (NeoVisual.Tests):** `Run_FocusGuard_OwnsKeyboard` (behavior-preserving; RED:
+  signature change → compile error).
+- **m7** (minor, CONFIRMED) — the identical 5-arg `FocusGuard.ShouldRouteToolWindowKey`
+  call repeated 3× (InputHandler.cs:308,436,468). **Fix:** hoist to one private
+  helper. **Unit seam (NeoVisual.Tests):** `Run_FocusGuard_*` (behavior-preserving).
+- **m42** (minor, CONFIRMED) — `BuildBindings` classifies any binding key containing
+  "+" as a simple shortcut (InputHandler.cs:181-188) — a leader key like `F,+` can
+  never match. **Fix:** classify by a modifier prefix ("Ctrl+"/"Shift+"/"Alt+") not
+  any "+". **Unit seam (NeoVisual.Tests):** the classification lives in the private
+  VS-coupled `InputHandler.BuildBindings`, so extract a pure classification method
+  into `KeybindingConfig` (e.g. `KeybindingConfig.IsSimpleShortcut(string key)` — a
+  modifier-prefix check) — `Run_KeybindingConfig_IsSimpleShortcut` (RED: a `F,+`
+  leader binding is misclassified today).
+- **m43** (minor, CONFIRMED) — `InjectedKeyGuard` per-VK counter with no TTL
+  (InjectedKeyGuard.cs:42-67) — a stale pending record consumes the next physical
+  key-down. **Fix:** add a bounded TTL or accept+document. **Unit seam
+  (NeoVisual.Tests):** `Run_InjectedKeyGuard_*` (behavior-preserving).
+- **m47** (minor, CONFIRMED) — no outcome diagnostic for navigation (InputHandler.cs:498)
+  — a no-op passes the harness. **Fix:** log the target/outcome
+  (`[NeoVisual] navigate activated index=...` / `no-op: <reason>`). No-seam
+  (diagnostic) — deferred e2e.
+- **n14** (nit, CONFIRMED) — `Navigate` lacks a direct `ThrowIfNotOnUIThread()`
+  (InputHandler.cs:496). **Fix:** add the assert. No-seam (build).
+- **n15** (nit, CONFIRMED) — `IsLeaderActive` reads a plain (non-volatile) bool
+  (InputHandler.cs:72 + LeaderSequenceMatcher.cs:19) — AGENTS.md documents volatile.
+  **Fix:** make `_active` volatile or correct the doc. No-seam (build).
+- **n16** (nit, CONFIRMED) — Ctrl+N/P injected unconditionally with no popup-active
+  check (PopupNavigation.cs:39-53) — documented design, UX footgun. **Fix:**
+  accept+document or gate on `ICompletionBroker.IsCompletionActive`. No-seam.
 
-- **M3** (major, CONFIRMED) — fzf spawned per keystroke with the full
-  candidate list written synchronously to stdin on the UI thread; the timeout
-  path returns without awaiting the faulted `ReadToEndAsync` tasks. **Fix:**
-  move spawn/write into `Task.Run` (or switch to `fzf --listen`); `await` the
-  output/error tasks after `TryKill`. **Unit seam (Telescope.Tests):**
-  `FzfFilter(string? fzfPath)` injected-path seam — a stub exe that hangs →
-  timeout+kill+fallback; assert no unobserved-task noise (the timeout path
-  awaits both tasks). RED: the injected-path ctor doesn't exist → compile
-  error.
-- **M4** (major, CONFIRMED) — `GrepFinder.GetCandidates` scans every line of
-  every project file synchronously on the UI thread per debounced keystroke.
-  **Fix:** run the content scan on a background task and marshal only the
-  results back (keep the DTE enumeration on the UI thread). **Unit seam
-  (Telescope.Tests):** the hermetic `GrepFinder` path (injected enumerate +
-  opener) — a test that `GetCandidates` returns the same hits when the scan
-  runs off-thread (RED: no off-thread seam → compile error or behavior gap).
-- **M5** (major, CONFIRMED) — preview re-reads + re-tokenizes the whole file
-  per selection change; `_lineIndex`/`_linePointers` are static mutable state.
-  **Fix:** cache the last (path, mtime, content, segments) per file
-  (mtime-keyed) and re-tokenize only on change; make the line index instance
-  state reset on `SetContent`. **Unit seam (Telescope.Tests):** a pure
-  mtime-keyed content cache (or reuse `FileContentCache` from M13) — tests:
-  unchanged mtime → cached; changed mtime → re-read. RED: cache class doesn't
-  exist → compile error.
-- **M13** (major, CONFIRMED) — `FileContentCache` never evicts. **Fix:** cap
-  by count (LRU) or clear on solution change. **Unit seam (Telescope.Tests):**
-  `Run_FileContentCache_EvictsOldest` (LRU cap) — insert N+1 entries → the
-  oldest is evicted; `Run_FileContentCache_ClearOnSolutionChange`. RED: no
-  eviction → the eviction test fails.
-- **m15** (minor, CONFIRMED) — `CodeIssuesFinder.CollectTodos` reads files
-  without the shared `FileContentCache`. **Fix:** route through the cache.
-  **Unit seam (Telescope.Tests):** `Run_Issues_CollectTodosUsesCache` — a
-  counting reader proves the cache is hit on the second scan.
-- **m16** (minor, CONFIRMED) — `FzfFilter.IsAvailable()` can block the UI up
-  to 3s on a hung `fzf --version`. **Fix:** bound the wait (short timeout) or
-  run off-thread. **Unit seam (Telescope.Tests):** `Run_FzfFilter_IsAvailableBounded`
-  — a stub that hangs → `IsAvailable()` returns within a bounded wall time.
+## Phase 3 — Vim interop (m38, m39, m40, m41, m3, n1)
 
-## Phase 3 — Motion + preview correctness (M10, M11, M19, M6)
+- **m38** (minor, CONFIRMED) — `GetVim` sets `_resolved = true` even when `vim` is
+  null (VimModeSource.cs:419-421) — permanently latches "no VsVim" on an early
+  resolution. **Fix:** only latch on `vim != null`. No-seam (VsVim reflection) —
+  build + deferred e2e.
+- **m39** (minor, CONFIRMED) — `Attach` unconditionally re-points
+  `_currentBuffer`/`_currentTextBuffer` (VimModeSource.cs:117-125,177-183) — a
+  background/peek view hijacks the focused mode state. **Fix:** only re-point on
+  focus gain. No-seam (VsVim reflection).
+- **m40** (minor, CONFIRMED) — `Detach` unsubscribes the text buffer with no
+  reference counting (VimModeSource.cs:128-136) — two views sharing a buffer kill
+  each other's subscription (CR2 incomplete). **Fix:** refcount shared buffers.
+  No-seam (VsVim reflection).
+- **m41** (minor, CONFIRMED) — `OnViewLostFocus`/`OnViewClosed` return typing-change
+  not mode-change (VimModeState.cs:57-67,73-83) — `vim-mode=Unknown` never emitted
+  on editor-focus loss. **Fix:** return the mode-change (or log on `ModeName`
+  change). **Unit seam (NeoVisual.Tests):** `Run_VimModeState_*` (RED: the
+  mode-change return is missing today).
+- **m3** (minor, CONFIRMED) — `VimBufferSubscriptions` doc comment claims the CR2
+  wiring is "NOT wired yet" (VimBufferSubscriptions.cs:16-19) but `VsVimModeSource`
+  calls it. **Fix:** correct the comment. No-seam (doc).
+- **n1** (nit, CONFIRMED) — `VimModeState` `Normal`/`Insert`/`Replace` const aliases
+  duplicate `VimModeClassifier` (VimModeState.cs:22-24). **Fix:** delete the aliases,
+  use the classifier. **Unit seam (NeoVisual.Tests):** `Run_VimModeClassifier_*`.
 
-- **M10** (major, CONFIRMED) — `TextMotionNavigator.Up()` off-by-one on a
-  leading blank line (text starting with `\n`): `LastIndexOf('\n',
-  Math.Max(0, lineStart-2))` clamps to 0 and finds the `\n` at index 0, so
-  `prevStart == 1` (line 2's own start) and `Up()` stays put. **Fix:** only
-  search from `lineStart-2` when `lineStart-2 >= 0`, else `prevNewline = -1` /
-  `prevStart = 0`. **Unit seam (Telescope.Tests):** CORRECT the existing
-  `Run_Preview_UpFromSecondLineWithLeadingBlankLine` (asserts the buggy
-  `LineNumber==2`) to assert line 1/caret 0; add `Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed`
-  — `SetText("\nabc"); MoveToLine(2); Up();` must move to line 1. RED: the
-  corrected test fails before the fix.
-- **M11** (major, PARTIAL — the "NRE in HitType cast" part refuted) —
-  `ResultMapper` falls back to a null-payload `FinderEntry` whose `OnSelected`
-  silently no-ops on an unmatched display string. **Fix:** skip unknown
-  matches or give the fallback a safe no-op payload; log a warning. **Unit
-  seam (Telescope.Tests):** `Run_ResultMapper_UnknownStringSkippedOrLogged` —
-  an unmatched display string does not produce a null-payload entry that
-  silently no-ops (RED: today it produces the null-payload entry).
-- **M19** (major, PARTIAL — CORRECTED: motion math already shared; only the
-  key→motion dispatch is duplicated) — `TryDispatch` (Telescope) and
-  `TextMotionHelper.MapMotion` (tool windows) implement the same key→motion
-  dispatch as two tables. **Fix:** unify the two dispatch tables into one
-  shared pure dispatcher (each surface keeps its own shift source + its own
-  diagnostic log line). **Unit seam (Telescope.Tests + NeoVisual.Tests):**
-  rewrite the NeoVisual `MapMotion` groups to target the shared dispatcher;
-  add Telescope.Tests RED tests for the unified `$` contract (bare `4` in
-  preview must NOT LineEnd — fails against current preview semantics).
-- **M6** (major, CONFIRMED) — `TextMotionHelper` per-motion key: full buffer
-  copy (`snapshot.GetText()` / `wpf.Text`), fresh `TextMotionNavigator` +
-  `SetText` copy, and a second `FindFocusedTextBox()` visual-tree re-walk.
-  **Fix:** pass the already-found box into `ApplyMotionToBox`; reuse a
-  navigator; avoid the full `GetText()` copy on the editor path. **Unit seam
-  (Telescope.Tests):** the motion math is in `TextMotionNavigator` (already
-  tested); the copy-elimination is in the VS-coupled layer (no-seam — build +
-  deferred e2e `neovisual-textinput-motions`).
+## Phase 4 — Navigation robustness (m11, m12, m13, m14, m44, m45, m46, m48, m49, n3, n4, n5, n6, n19)
 
-## Phase 4 — Navigation robustness (M9, M14, m3, m4, m5, m6)
+- **m11** (minor, CONFIRMED) — `SelectTarget` runs two full passes re-evaluating all
+  3 predicates + `GapTo` per candidate (WindowNavigationEngine.cs:24-64). **Fix:**
+  single pass collecting (index, gap, adjacency) for passing candidates. **Unit seam
+  (NeoVisual.Tests):** `Run_WindowNavigationEngine_*` (behavior-preserving).
+- **m12** (minor, CONFIRMED) — `NavigationSettings.FromSystemDpi()` re-reads system
+  DPI on every navigation (WindowMatrix.cs:39). **Fix:** cache the settings. **Unit
+  seam (NeoVisual.Tests):** `Run_NavigationSettings_*` (behavior-preserving).
+- **m13** (minor, CONFIRMED) — `LinkedTo` re-filters every adapter with O(n·m)
+  `CompareWindows` COM reads (WindowAdapter.cs:94). **Fix:** precompute a key set /
+  index. **Unit seam (NeoVisual.Tests):** behavior-preserving.
+- **m14** (minor, CONFIRMED) — `GetIVsUIShell` no null check (UtilityMethods.cs:21) →
+  NRE escapes `WindowMatrix`'s catch, misdiagnosed as a binding failure. **Fix:**
+  null-guard + log. No-seam (VS-coupled).
+- **m44** (minor, CONFIRMED) — `activeWindow` dereferenced (`LinkedTo`) before the
+  null check (WindowMatrix.cs:47-58) — the graceful-degradation branch is dead (M9
+  not fixed). **Fix:** move the null check before `LinkedTo`. **Unit seam
+  (NeoVisual.Tests):** the null-check ordering is in the VS-coupled `WindowMatrix`
+  ctor (starts with `ThreadHelper.ThrowIfNotOnUIThread()`), so extract a pure static
+  helper (e.g. `WindowNavigator.BuildActiveWindows(EnvDTE.Window? active,
+  IReadOnlyList<WindowFrameAdapter> adapters)` that null-checks before linking) —
+  `Run_WindowMatrix_BuildActiveWindowsNullActive` (RED: today the deref precedes
+  the null check; renamed to `Run_WindowNavigator_...` in BP-70 after the Phase 11
+  rename).
+- **m45** (minor, CONFIRMED) — `Activate()`/`AutoHides()` deref `_dte` with no null
+  guard (WindowAdapter.cs:42,48). **Fix:** null-guard. No-seam.
+- **m46** (minor, CONFIRMED) — `_activeWindows.Select(w => w.Rect).ToList()` has no
+  per-window fault isolation (WindowMatrix.cs:94) — one stale frame kills all
+  navigation. **Fix:** per-window try/catch. No-seam.
+- **m48** (minor, CONFIRMED) — Down/Up tolerance asymmetry (`> 1` vs `<`)
+  (WindowNavigationEngine.cs:85-86). **Fix:** symmetric tolerance. **Unit seam
+  (NeoVisual.Tests):** `Run_WindowNavigationEngine_*` (RED: the 1px-gap case).
+- **m49** (minor, CONFIRMED) — `VSFPROPID_Type` HRESULT ignored; `(int)value` NREs
+  (WindowManager.cs:240-241). **Fix:** check HRESULT + null. No-seam.
+- **n3** (nit, CONFIRMED) — `Pipeline` `List<Func<...>>` abstraction for a 3-line
+  filter (WindowNavigationEngine.cs:10-16). **Fix:** inline the 3 predicates. **Unit
+  seam (NeoVisual.Tests):** behavior-preserving.
+- **n4** (nit, CONFIRMED) — `using System;` inside the namespace block
+  (Direction.cs:3). **Fix:** move to top. No-seam (build).
+- **n5** (nit, CONFIRMED) — `ExtractFrames` iterator — `ThrowIfNotOnUIThread` runs
+  lazily on first `MoveNext` (WindowAdapter.cs:97-99). **Fix:** assert before the
+  iterator. No-seam.
+- **n6** (nit, CONFIRMED) — `NavigationSnapshot` heap class for a 2-field value
+  (NavigationSnapshot.cs:9). **Fix:** make it a `readonly struct`. **Unit seam
+  (NeoVisual.Tests):** behavior-preserving.
+- **n19** (nit, CONFIRMED) — frames without `IVsWindowFrame4` silently map to
+  `RectCoordinate.Empty` with no diagnostic (WindowAdapter.cs:118,131). **Fix:** log
+  the fallback once. No-seam.
 
-- **M9** (major, CONFIRMED) — `WindowMatrix.CheckDte` fetches DTE twice per
-  navigation (ctor calls `CheckDte` which fetches DTE, then fetches DTE again
-  at :39); its inner try/catch duplicates the ctor's outer catch. **Fix:**
-  delete `CheckDte` and its call; keep the single fetch inside the existing
-  try/catch. No-seam (VS-coupled) — build + existing
-  `Run_WindowNavigationEngine_*` tests + deferred e2e `neovisual-window-nav`.
-- **M14** (major, CONFIRMED) — `WindowManager` ctor sets `CurrentWindow` but
-  not the classification (`_type`/`_isToolWindow` stay default until the first
-  focus event); `guid != null` on a `Guid` is always true → the `Unknown`
-  fallback is dead. **Fix:** call `OnWindowFocusChanged()` in the ctor after
-  `RefreshCurrentWindow()`; change to `guid != Guid.Empty`. No-seam (ctor is
-  VS-coupled) — build + existing classification tests + deferred e2e.
-- **m3** (minor, CONFIRMED) — `WindowNavigationEngine` `gap < minGap` in the
-  second pass is a dead branch (minGap is the minimum). **Fix:** remove the
-  dead branch. **Unit seam (NeoVisual.Tests):** the existing
-  `Run_WindowNavigationEngine_*` tests pin the algorithm (behavior-preserving).
-- **m4** (minor, CONFIRMED) — `CardinalNavigationConstants` `public readonly
-  static int` — non-idiomatic modifier order, not `const`, inconsistent names.
-  **Fix:** normalize to `public const int` + consistent naming. No-seam
-  (build-verified; the constants are referenced by the engine tests).
-- **m5** (minor, CONFIRMED) — `UtilityMethods` holds only static methods but
-  isn't `static`. **Fix:** make it `static`. No-seam (build-verified).
-- **m6** (minor, CONFIRMED) — `WindowMatrix` not `sealed` while sibling types
-  are. **Fix:** add `sealed`. No-seam (build-verified).
+## Phase 5 — Controller/state (m20, m21, m22, m23, m24, m25, m26, m59, n7, n8, n9, n10)
 
-## Phase 5 — Hook-path safety + logging (M8, M12, M16, M25, m14)
+- **m20** (minor, CONFIRMED) — literal `1500` vs the `FocusKeeperDurationMs`
+  constant (SolutionExplorerController.cs:234). **Fix:** use the constant. No-seam.
+- **m21** (minor, CONFIRMED) — FocusKeeper re-asserts `View.SolutionExplorer` on
+  every tick with no cancellation on window close (SolutionExplorerController.cs:119,234).
+  **Fix:** add a stop-on-close (verify the window is still visible before
+  re-asserting). No-seam (VS-coupled).
+- **m22** (minor, CONFIRMED) — shared `_defaultController` leaks `_isInputMode`
+  across all unknown-GUID tool windows (WindowManager.cs:25,186-190). **Fix:**
+  per-type default instances. **Unit seam (NeoVisual.Tests):** `Run_WindowManager_*`
+  (RED: the shared-instance leak is observable today).
+- **m23** (minor, CONFIRMED) — ctor `_isInputMode = IsTextInputType(type)` branch
+  dead (GeneralToolWindowController.cs:31). **Fix:** drop the branch. **Unit seam
+  (NeoVisual.Tests):** behavior-preserving.
+- **m24** (minor, CONFIRMED) — editor-view path passes `styleCaret: false`
+  (TextMotionHelper.cs:98) — block caret persists in insert mode after `a`/`A`/`I`.
+  **Fix:** style the editor view on insert placements. No-seam (WPF editor view).
+- **m25** (minor, CONFIRMED) — try/catch + `Log(...failed: {msg})` swallow idiom
+  repeated 3× with different prefixes (SolutionExplorerController.cs:137,248,376).
+  **Fix:** unify the catch/log helper. No-seam.
+- **m26** (minor, CONFIRMED) — `FirstSourceFilePath` returns the first physical file
+  regardless of extension (HierarchyResolver.cs:27) — the `.cs` filter lives only in
+  the forest builder. **Fix:** move the `.cs` filter into the resolver (or rename to
+  `FirstPhysicalFilePath`). **Unit seam (NeoVisual.Tests):** `Run_HierarchyResolver_*`
+  (RED: an unfiltered forest returns a non-.cs file today).
+- **m59** (minor, CONFIRMED) — `SolutionExplorerController.SelectFirstSourceFile`
+  (`g`) never unit-tested (NeoVisual.Tests/Program.cs:624-634). **Fix:** extract the
+  pure pick (which node to select) and test it. **Unit seam (NeoVisual.Tests):**
+  `Run_HierarchyResolver_*` / `Run_HierarchyForestBuilder_*`.
+- **n7** (nit, CONFIRMED) — `WindowManager` class body unindented at column 0
+  (WindowManager.cs:11). **Fix:** reindent. No-seam (build).
+- **n8** (nit, CONFIRMED) — redundant `keeperRef` local (FocusKeeper.cs:18). **Fix:**
+  delete it. No-seam.
+- **n9** (nit, CONFIRMED) — `ComputeTextInputSurfaceFocused()` computed in the
+  non-tool branch where it returns false immediately (WindowManager.cs:264). **Fix:**
+  skip in the else branch. No-seam.
+- **n10** (nit, CONFIRMED) — arrow-fallback log appends `focused=... hwnd=...`
+  (TextMotionHelper.cs:120) — differs from `TryMoveArrow`'s bare contract. **Fix:**
+  align the log contract. No-seam.
 
-- **M8** (major, CONFIRMED — PARTIAL→GUARDED: controller calls are
-  FocusGuard-gated but still unguarded by try/catch) — the tool-window branch
-  calls `controller.TryMove`/`EnterInputMode`/`ExitInputMode` with no
-  try/catch, and the hook callback has no top-level guard. **Fix:** wrap the
-  tool-window branch (or the whole `HandleKey` body) in try/catch that logs
-  `[NeoVisual] toolwindow-move failed: {msg}` and returns false (pass
-  through). No-seam (VS-coupled) — build + deferred e2e.
-- **M12** (major, CONFIRMED) — `NeoVisualLog.EnsurePane` sets
-  `_paneInitTried=true` before `GetGlobalService`; a null service
-  (pre-package-init) permanently disables the Output pane. **Fix:** reset
-  `_paneInitTried` on the null-service path so a later call retries. No-seam
-  (GetGlobalService) — build + deferred e2e.
-- **M16** (major, CONFIRMED) — `vim-mode=` logged on every focus gain/loss,
-  not just mode switches. **Fix:** log only when the mode value actually
-  changes. **Unit seam (NeoVisual.Tests):** `VimModeTracker` + `FakeVimModeSource`
-  — a focus change with the same mode does NOT emit a new `vim-mode=` line;
-  a real mode switch does. RED: today the focus change emits a line.
-- **M25** (major, CONFIRMED) — `VsServices.Dte` returns `dte!` (null-forgiving)
-  when `GetService(typeof(DTE))` returns null; callers NRE inside their catch
-  and log a misleading "Command failed". **Fix:** return `DTE?` and let
-  callers handle null explicitly. No-seam (VS-coupled) — build + deferred e2e.
-- **m14** (minor, CONFIRMED) — `FilterFailureLog.Format()` embeds the
-  `[Telescope]` prefix and warns callers must use `NeoVisualLog.Log` not
-  `TelescopeLog.Log` — a fragile contract that double-prefixes if misused.
-  **Fix:** make `Format()` return the UNPREFIXED message and have the caller
-  add the prefix via `TelescopeLog.Log` (or document the contract in code).
-  **Unit seam (Telescope.Tests):** `Run_FilterFailureLog_Format` — assert the
-  exact line format (RED: format changes).
+## Phase 6 — Duplication merges (m8, m9, m16, m17, m18, m19, m35, n11)
 
-## Phase 6 — Duplication merges (M18, M20, M21, M22, M24, m13)
+- **m9** (minor, CONFIRMED) — key→arrow-VK mapping implemented twice
+  (GeneralToolWindowController.cs:66-73 + TextMotionHelper.cs:117), both emitting
+  `toolwindow-move key=... -> arrow vk=...`. **Fix:** single-source `KeyToArrowVk`.
+  **Unit seam (NeoVisual.Tests):** `Run_GeneralToolWindowController_*`
+  (behavior-preserving).
+- **m16** (minor, CONFIRMED) — W/B/E vim-motion action wiring duplicated verbatim
+  (TextInputToolWindowController.cs:44-46 + SolutionExplorerController.cs:50-52).
+  **Fix:** move to `ToolWindowControllerBase`. **Unit seam (NeoVisual.Tests):**
+  `Run_ActionTable_*` (behavior-preserving).
+- **m17** (minor, CONFIRMED) — H/L hardcode `VK_LEFT`/`VK_RIGHT` instead of
+  `KeyToArrowVk` (SolutionExplorerController.cs:46-47). **Fix:** reuse `KeyToArrowVk`.
+  **Unit seam (NeoVisual.Tests):** behavior-preserving.
+- **m18** (minor, CONFIRMED) — `GetParent` visual/logical-tree walker duplicated
+  verbatim (WindowManager.cs:131-153 + TextMotionHelper.cs:241-263). **Fix:** share
+  one helper. No-seam (WPF).
+- **m19** (minor, CONFIRMED) — two parallel DTE tree-walk seams
+  (`HierarchyForestBuilder` vs `HierarchyWalker`/`ProjectFiles`). **Fix:** unify on
+  one walker. **Unit seam (NeoVisual.Tests):** `Run_HierarchyForestBuilder_*` +
+  **Telescope.Tests:** `Run_HierarchyWalker_*`.
+- **m35** (minor, CONFIRMED) — `ApplyPromptCaretStyle` duplicates
+  `TextMotionHelper.ApplyCaretStyle` (TelescopeOverlay.cs:603-613). **Fix:** delegate
+  to the shared helper — `BlockCaretStyle.ApplyCaretStyle` (the shared-caret seam; both
+  `TelescopeOverlay.ApplyPromptCaretStyle` and `TextMotionHelper.ApplyCaretStyle` delegate to it).
+  **Unit seam (Telescope.Tests):** behavior-preserving.
+- **n11** (nit, CONFIRMED) — `TryDispatch` is a 25-line trivial wrapper
+  (TryDispatch.cs:12-24). **Fix:** merge into `TextMotionDispatcher`. **Unit seam
+  (Telescope.Tests):** `Run_TryDispatch_*` → `Run_TextMotionDispatcher_*`.
+- **m8** (minor, CONFIRMED) — two `TelescopeLauncher` instances for the same
+  `TelescopeController` (InputHandler.cs:124 + MyExtensionPackage.cs:84) — duplicated
+  construction of a stateful-looking wrapper. **Fix:** inject the package's `_launcher`
+  into `InputHandler` instead of constructing a second one. No-seam (VS-coupled) —
+  build + deferred e2e.
 
-- **M18** (major, CONFIRMED) — `KeyNameBuilder.Build` has zero production
-  callers; `SimpleShortcutMatcher.BuildSimpleKey` re-implements the identical
-  canonical-shortcut logic. **Fix:** have `BuildSimpleKey` delegate to
-  `KeyNameBuilder.Build` and delete the duplicate. **Unit seam
-  (NeoVisual.Tests):** the existing `Run_KeyNameBuilder_*` + `Run_SimpleShortcutMatcher_*`
-  families (behavior-preserving; RED: `BuildSimpleKey` still duplicates →
-  the delegation test fails).
-- **M20** (major, CONFIRMED) — W/B/E action wiring duplicated verbatim across
-  `SolutionExplorerController` and `TextInputToolWindowController`; the J/K→
-  arrow mapping + `toolwindow-move` log re-implemented instead of reusing
-  `GeneralToolWindowController.KeyToArrowVk`. **Fix:** extract a shared
-  `TextMotionControllerBase` (or a static `TextMotionActions.Build()`); have
-  `SolutionExplorerController` reuse `KeyToArrowVk`/`TryMove` for the J/K
-  entries. **Unit seam (NeoVisual.Tests):** the action-table tests
-  (`Run_ActionTable_*`) pin the exact sets (behavior-preserving).
-- **M21** (major, CONFIRMED) — `HierarchyForestBuilder.Build` writes a
-  throwaway `pathToItem` map never read; the `.cs` filter applied twice.
-  **Fix:** drop the `pathToItem` param (or return it); keep the `.cs` filter
-  in exactly one place (the pure builder). **Unit seam (NeoVisual.Tests):**
-  the existing `Run_HierarchyForestBuilder_*` tests (behavior-preserving;
-  RED: the dead param removal changes the signature → compile error).
-- **M22** (major, CONFIRMED) — the text-input-surface keyboard-ownership
-  exemption computed twice with different formulations (`FocusGuard` params vs
-  `EditorFocusedVeto` inline). **Fix:** pass the veto into FocusGuard as a
-  single `ownsKeyboard` boolean, or route `EditorFocusedVeto` through the same
-  FocusGuard helper. **Unit seam (NeoVisual.Tests):** the existing
-  `Run_FocusGuard_*` tests (behavior-preserving; RED: signature change →
+## Phase 7 — Dead code + logging (m1, m2, m10, m28, m6, m29, m51, n2, n12, n13, n17, n18)
+
+- **m1** (minor, CONFIRMED) — `InputHandler.HasToolWindowActionKeys` dead code
+  (InputHandler.cs:79-92); AGENTS.md/SKILL.md document it as the pre-filter
+  mechanism. **Fix:** delete the property + fix the docs. **Unit seam
+  (NeoVisual.Tests):** `Run_FocusGuard_*` (the guard is already tested).
+- **m2** (minor, CONFIRMED) — `VimModeState.ResolveOnce` + `_resolved` latch dead
+  (VimModeState.cs:90-109); `VsVimModeSource.GetVim` has its own latch. **Fix:**
+  delete `ResolveOnce` + its test. **Unit seam (NeoVisual.Tests):** count drops by
+  the deleted test (deterministic signal).
+- **m10** (minor, CONFIRMED) — `WindowAdapter._frame` assigned never read
+  (WindowAdapter.cs:18,25). **Fix:** delete the field. No-seam (build).
+- **m28** (minor, CONFIRMED) — `OverlayClosed` event declared + raised, 0 subscribers
+  (TelescopeOverlay.cs:240,331). **Fix:** delete the event + raise. **Unit seam
+  (Telescope.Tests):** behavior-preserving.
+- **m6** (minor, CONFIRMED) — `GlobalKeyboardHook.Log` prepends its own timestamp
+  then `LogFileWriter.FormatLine` prepends a second (GlobalKeyboardHook.cs:200) —
+  every `[Hook]` line double-stamped. **Fix:** drop the local timestamp. **Unit seam
+  (Telescope.Tests):** `Run_LogFileWriter_*` (format contract).
+- **m29** (minor, CONFIRMED) — `DteFileOpener` manual `[Telescope] ` prefix concat
+  (DteFileOpener.cs:19). **Fix:** use `TelescopeLog.Log`. **Unit seam
+  (Telescope.Tests):** behavior-preserving.
+- **m51** (minor, CONFIRMED) — `NeoVisualLog.EnsurePane` catch leaves
+  `_paneInitTried = true` (NeoVisualLog.cs:172-178) — a transient `CreatePane`
+  failure permanently disables the pane (M12 fixed only the null-service path).
+  **Fix:** reset the latch in the catch. **Unit seam (Telescope.Tests):** the
+  `_paneInitTried` latch lives in the VS-coupled `NeoVisualLog.EnsurePane`, so
+  extract the retry latch into the pure `PaneFailureTracker` (e.g.
+  `ShouldRetry()`/`RecordAttempt()`) — `Run_PaneFailureTracker_RetryAfterFailure`
+  (RED: the retry-after-failure path is missing today).
+- **n2** (nit, CONFIRMED) — `BlockCaretAdornment.Update()` calls
+  `RemoveAdornmentsByTag` even when `_active` is false (BlockCaretAdornment.cs:109).
+  **Fix:** early-return before the remove. No-seam.
+- **n13** (nit, CONFIRMED) — `PaneGuid` mutable static (NeoVisualLog.cs:28). **Fix:**
+  make `readonly`. No-seam (build).
+- **n12** (nit, CONFIRMED) — `RenderResults` rebuilds the whole result string + re-sets
+  the TextBox text on every render (TelescopeOverlay.cs:441) — O(n) string build +
+  WPF text set per keystroke/j-k. **Fix:** only re-render when the results or
+  selection actually changed. No-seam (WPF) — build + deferred e2e.
+- **n17** (nit, CONFIRMED) — `GetCaretOffset`'s DTE fallback uses
+  `selection.ActivePoint.DisplayColumn` (tab-expanded display column) as a character
+  offset into `SourceText` (MyExtensionPackage.cs:647-654) — on lines with tabs the
+  offset is too large, so the references/implementations finders can resolve the
+  wrong symbol. **Fix:** use a non-expanded character column (or map display→char via
+  the text line). No-seam (VS-coupled) — build + deferred e2e.
+- **n18** (nit, CONFIRMED) — `SetHook` calls `Process.GetCurrentProcess().MainModule`
+  which can throw `Win32Exception` (GlobalKeyboardHook.cs:165-173) — if it throws,
+  the hook init step fails and the extension degrades to a no-op. **Fix:** guard the
+  `MainModule` access and fall back to `IntPtr.Zero` for `hMod` (valid for
+  `WH_KEYBOARD_LL` when the proc is in-process), logging the failure. No-seam (build).
+
+## Phase 8 — Harness hardening (M3, m60, m63, m64, m65)
+
+- **M3** (major, CONFIRMED) — `Send-Text` never applies Shift for uppercase letters
+  (harness-common.ps1:121-134) — `Send-Text 'Program'` types `program`; e2e
+  assertions pass only via case-insensitive `-match`. **Fix:** add a shift flag for
+  `[char]::IsUpper($ch)`. No-seam (PowerShell harness) — deferred e2e.
+- **m60** (minor, CONFIRMED) — `Resolve-VsRoot` hardcodes Community-only paths before
+  the vswhere fallback (harness-common.ps1:229-233). **Fix:** add
+  Professional/Enterprise/Preview candidates. No-seam (PowerShell).
+- **m63** (minor, CONFIRMED) — scenarios share one live VS instance and are
+  order-dependent by design (test-e2e.ps1:822-874,989-1062). **Fix:** document the
+  ordering + make subsets self-seeding. No-seam (PowerShell).
+- **m64** (minor, CONFIRMED) — `results count=\d+ selected=0` matches `count=0`
+  (test-e2e.ps1:1161). **Fix:** require `count=[1-9]\d*`. No-seam (PowerShell).
+- **m65** (minor, CONFIRMED) — `Wait-LogLine` joins the whole tail + `-match`es it —
+  can match across line boundaries; O(assertions × tail) (harness-common.ps1:176).
+  **Fix:** per-line match over the cache. No-seam (PowerShell).
+
+## Phase 9 — Test hermeticity (M7, m4, m53, m54, m55, m56, m57, m58, m62)
+
+- **M7** (major, CONFIRMED) — `Run_FzfFilter_TimeoutKillsAndFallsBack` is
+  timing-dependent (5s wall-clock bound + 2s GC-poll for `UnobservedTaskException`)
+  (Telescope.Tests/Program.cs:554-608). **Fix:** expose the awaited-task outcome via
+  a deterministic seam (TaskCompletionSource / awaited-read count) and assert on it.
+  **Unit seam (Telescope.Tests):** `Run_FzfFilter_TimeoutAwaitsTasks` (RED: no seam →
   compile error).
-- **M24** (major, CONFIRMED) — `RunInitStep` (sync) and `InitSteps.RunAsync`
-  (async) implement the same per-step try/catch + `[MyExtension] init <name>
-  ok/failed` contract in two places. **Fix:** fold the log-config steps into
-  the `InitSteps` list (or have `RunInitStep` delegate to the same logging
-  helper). **Unit seam (NeoVisual.Tests):** the existing `Run_InitSteps_*`
-  tests (behavior-preserving; RED: signature change → compile error).
-- **m13** (minor, CONFIRMED) — the `File.Exists` guard + open pattern
-  duplicated 4× (`FileFinder`, `CodeIssuesFinder`, `GrepFinder`, `HitOpener`).
-  **Fix:** consolidate into the tested `HitOpener`. **Unit seam
-  (Telescope.Tests):** the existing `Run_HitOpener_*` tests (behavior-preserving).
+- **m53** (minor, CONFIRMED) — `Run_Preview_UpFromSecondLineWithLeadingBlankLine` and
+  `_Fixed` are byte-identical duplicates (Telescope.Tests/Program.cs:942-965).
+  **Fix:** delete one. **Unit seam (Telescope.Tests):** count drops by 1.
+- **m54** (minor, CONFIRMED) — `Run_GrepFinder_GatherHitsThrowsNotSupported` never
+  exercises the throw (calls `GetCandidates("")`) (Telescope.Tests/Program.cs:2180-2206).
+  **Fix:** rename to what it asserts + add a test that reaches the base gather stub.
+  **Unit seam (Telescope.Tests).**
+- **m55** (minor, CONFIRMED) — `Run_WindowAdapter_TryGetScreenRect_...` never calls
+  `TryGetScreenRect` (NeoVisual.Tests/Program.cs:1390-1404). **Fix:** rename or call
+  it. **Unit seam (NeoVisual.Tests).**
+- **m56** (minor, CONFIRMED) — `Run_LeaderMatcher_PrefixSetBuiltOnce` asserts a
+  private field via reflection (NeoVisual.Tests/Program.cs:1576-1599). **Fix:** assert
+  behavior instead. **Unit seam (NeoVisual.Tests).**
+- **m57** (minor, CONFIRMED) — `Run_FzfFilter_FilterMatchesPrefix` requires fzf on
+  PATH (Mystery Guest) + weak presence assertion (Telescope.Tests/Program.cs:482-500).
+  **Fix:** hermetic fzf stub / stronger assertion. **Unit seam (Telescope.Tests).**
+- **m58** (minor, CONFIRMED) — `Run_FzfFilter_IsAvailableBounded` asserts `< 1s`
+  wall-clock (Telescope.Tests/Program.cs:630-648). **Fix:** inject a clock / relax.
+  **Unit seam (Telescope.Tests).**
+- **m62** (minor, CONFIRMED) — `TestRunner.method.Invoke(null, null)` discards the
+  return value (TestRunner.cs:60) — a future async test silently passes. **Fix:**
+  await `Task`-returning methods. **Unit seam (tests/TestRunner.cs).**
+- **m4** (minor, CONFIRMED) — ~270 lines of Roslyn/VS-coupled gatherer logic
+  (`TryGetCaretSymbol`, `GatherReferences`, `GatherImplementations`, `GetCaretOffset`,
+  `ReadLine`, `IsWriteLocation`) live inside `MyExtensionPackage` (MyExtensionPackage.cs:423-696)
+  with no test seam; `IsWriteLocation` reads the internal `ReferenceLocation.IsWrittenTo`
+  via reflection with no offline test. **Fix:** extract the gatherers to a
+  `RoslynGatherers` class with an injectable seam (mirroring the finder host-injection
+  pattern) + a reflection-robustness test for `IsWriteLocation`. **Unit seam
+  (NeoVisual.Tests):** `Run_RoslynGatherers_IsWriteLocation` (RED: no seam → compile
+  error).
 
-## Phase 7 — Dead code deletion (M17, M23, m11, m12)
+## Phase 10 — Docs drift (M6, m61, m66, m67, m68, m69, n20, n21)
 
-- **M17** (major, CONFIRMED — production-dead, tests only) — `VimModeState`
-  has a false docstring ("pure owner of the Vim typing/mode state");
-  `VimModeTracker` keeps its own `_cachedTyping`/`_editorFocused`. **Fix:**
-  wire `VimModeTracker` through `VimModeState` (single owner) OR delete the
-  class and move its tests onto `VimModeClassifier`/`VimModeTracker`.
-  **Coordinate with M16** (both touch the `vim-mode=` log). **Unit seam
-  (NeoVisual.Tests):** if wired — `Run_VimModeState_*` become the single owner
-  tests; if deleted — move the tests onto `VimModeClassifier` (already
-  tested). RED: the chosen path's tests fail before the change.
-- **M23** (major, CONFIRMED — all four zero production callers) — dead code
-  cluster in `CardinalMovment`: `GetWindowsList` (UtilityMethods.cs:30),
-  `IsOnScreen` (WindowAdapter.cs:51), `DirectionExtensions.Sign`
-  (Direction.cs:24), `DistinctBy` (LinqExtensionMethods.cs:19, test-only).
-  **Fix:** delete them; drop the AGENTS.md `DistinctBy` claim (or wire it into
-  a real call site). No-seam (deletion) — build + the `Run_DistinctBy_*` test
-  is deleted/relocated.
-- **m11** (minor, CONFIRMED) — `OverlayKeyHandler.ResultCount` property dead
-  (only `SetResults` used). **Fix:** delete. No-seam (build-verified).
-- **m12** (minor, CONFIRMED) — `TextMotionNavigator.ColumnNumber` has no
-  production callers (test-only surface). **Fix:** delete (or keep if the
-  tests pin it — verify first). No-seam (build-verified).
-
-## Phase 8 — Harness hardening (M26, M27, M28, m18, m19, m20)
-
-- **M26** (major, CONFIRMED) — `preview tokens=\d+` (test-e2e.ps1:974) is a
-  vacuous presence check — `\d+` matches `tokens=0`. **Fix:** assert
-  `preview tokens=[1-9]\d*` or pin the exact seeded-file token count. No-seam
-  (harness) — deferred e2e.
-- **M27** (major, CONFIRMED — scope to :518 ONLY) — `results count=(\d+)`
-  (test-e2e.ps1:518) matches `count=0`. **Fix:** assert `results count=[1-9]\d*`
-  at :518 only; do NOT touch :1533/:1537 (`telescope-no-selection`
-  legitimately asserts `count=0`). No-seam (harness) — deferred e2e.
-- **M28** (major, CONFIRMED) — `LogFileWriter` flush-timer tests are
-  timing-dependent (wall-clock polls for a ~200ms timer). **Fix:** inject a
-  controllable timer/clock seam into `LogFileWriter`; keep the poll only as a
-  fallback. **Unit seam (Telescope.Tests):** `Run_LogFileWriter_FlushTimer_*`
-  rewritten against the injected clock (RED: no clock seam → compile error).
-- **m18** (minor, CONFIRMED) — `Stop-HarnessVs` kills any devenv whose title
-  matches 'Experimental'/'MyExtension' — can terminate a user's unrelated VS
-  instance. **Fix:** PID-scoped kills (the M-M5 pattern). No-seam (harness).
-- **m19** (minor, CONFIRMED) — `iterate-telescope.ps1:226` sets
-  `NEOVISUAL_LOG_DIR` at USER scope — persistent env mutation. **Fix:**
-  Process scope. No-seam (harness).
-- **m20** (minor, CONFIRMED) — `check-doc-refs.ps1` stale allowlist:
-  `LeaderSequenceMatcher` and `tools/harness-common.ps1` marked "proposed" but
-  now exist — masks real drift. **Fix:** remove them from the proposed lists.
-  No-seam (harness) — run the lint to verify.
-
-## Phase 9 — Test hermeticity + naming sweep (m1, m2, m7, m8, m9, m10, m21-m30, m32, n1, n2)
-
-- **m21** (minor, CONFIRMED) — `TestRunner.TempDir.Dispose` swallows all
-  exceptions — failed recursive deletes leak temp dirs silently. **Fix:**
-  rethrow (or log) on dispose failure. **Unit seam:** the shared `TestRunner`
-  — a test that a failing delete surfaces the error.
-- **m22** (minor, CONFIRMED) — `Run_FzfFilter_FilterMatchesPrefix` requires
-  the external fzf binary on PATH (Mystery Guest). **Fix:** use the
-  `FzfFilter(string? fzfPath)` injected-path seam; fail loudly when fzf is
-  absent (don't silently pass). **Unit seam (Telescope.Tests):** the test now
-  uses the injected path.
-- **m23** (minor, CONFIRMED) — `Run_FinderBase_OpenErrorSwallowed` has no
-  assertion. **Fix:** add a real assertion (the error is logged exactly once).
-  **Unit seam (Telescope.Tests):** assert the log line.
-- **m24** (minor, CONFIRMED) — `Run_Syntax_KeywordsAndIdentifiers` brace check
-  is a weak presence assertion. **Fix:** strengthen (assert the exact token
-  sequence). **Unit seam (Telescope.Tests).**
-- **m25** (minor, CONFIRMED) — `Run_HierarchyResolver_FirstSourceFile` is an
-  Eager Test bundling 4 behaviors with no per-assert messages. **Fix:** split
-  into focused tests with messages. **Unit seam (NeoVisual.Tests).**
-- **m26** (minor, CONFIRMED) — magic `actionKeyCount: 5` vs hardcoded `6` in
-  text-input-surface tests — inconsistent. **Fix:** use a named constant
-  matching the real count (7 after CR1). **Unit seam (NeoVisual.Tests).**
-- **m27** (minor, CONFIRMED) — `Run_GrepFinder_GatherHitsThrowsNotSupported`
-  reaches a protected member via reflection (implementation coupling). **Fix:**
-  use the public `GetCandidates` path or a cleaner seam. **Unit seam
-  (Telescope.Tests).**
-- **m28** (minor, CONFIRMED — CORRECTED: `TryMove` IS testable now) —
-  `TextInputToolWindowController.TryMove` and
-  `SolutionExplorerController.SelectFirstSourceFile` (`g`) never unit-tested.
-  **Fix:** add `Run_TextInput_TryMove_*` (the stale "Text.UI not referenced"
-  comment is wrong — the csproj references it); `SelectFirstSourceFile` stays
-  VS-coupled (no-seam). **Unit seam (NeoVisual.Tests).**
-- **m29** (minor, CONFIRMED) — redundant action-key presence tests duplicate
-  the exact-set `Run_ActionTable_*_ActionKeysMatchTable` tests. **Fix:**
-  delete the redundant ones. **Unit seam (NeoVisual.Tests):** count drops by
-  the deleted tests (deterministic signal).
-- **m30** (minor, CONFIRMED) — stale "RED today" comment on
-  `Run_LogFileWriter_ClearPerPath` contradicts the all-green suite. **Fix:**
-  remove the comment. No-seam (comment).
-- **m1** (minor, CONFIRMED) — `WindowManager` class body unindented at column
-  0 inside `namespace MyExtension`. **Fix:** reindent. No-seam (build).
-- **m2** (minor, CONFIRMED) — `KeybindingConfig` `File.Exists` evaluated twice;
-  `return new KeybindingConfig(...)` at column 0. **Fix:** single `File.Exists`
-  + reindent. No-seam (build).
-- **m7** (minor, CONFIRMED) — `FocusGuard.IsTyping`'s
-  `isToolWindow ? isInputMode : ...` sub-branch is dead (isInputMode always
-  false there). **Fix:** remove the dead branch. **Unit seam (NeoVisual.Tests):**
-  the existing `Run_FocusGuard_*` tests (behavior-preserving).
-- **m8** (minor, CONFIRMED) — `FocusKeeper` uses `Environment.TickCount` (int)
-  which wraps every ~24.9 days. **Fix:** use `Environment.TickCount64` (net472
-  has it) or a monotonic clock. **Unit seam (NeoVisual.Tests):** the existing
-  `Run_FocusKeeperSchedule_*` tests (behavior-preserving).
-- **m9** (minor, CONFIRMED) — `SolutionExplorerController` keeper duration
-  `1500` passed twice (to `FocusKeeper.Run` and `FocusKeeperSchedule.Decide`).
-  **Fix:** a single named constant. **Unit seam (NeoVisual.Tests):** the
-  existing `Run_FocusKeeperSchedule_*` tests.
-- **m10** (minor, CONFIRMED) — `FocusGuard.IsTyping`'s `editorFocused` param
-  actually receives `EditorFocusedVeto` — name/doc lie. **Fix:** rename the
-  param. **Unit seam (NeoVisual.Tests):** the existing `Run_FocusGuard_*`
-  tests (behavior-preserving).
-- **m32** (minor, CONFIRMED) — SKILL.md:179 "the typo `CardinalMovment`
-  folder/namespace is intentional" conflates folder and namespace (the
-  namespace is `CardinalNavigation`). **Fix:** correct the wording. No-seam
-  (docs) — note: this wording changes again in the restructure (Phase 11).
-- **n1** (nit, CONFIRMED) — `Assert.False(controller.ActionKeys.Count == 0)`
-  double negative. **Fix:** `Assert.True(controller.ActionKeys.Count > 0)`.
-  **Unit seam (NeoVisual.Tests).**
-- **n2** (nit, CONFIRMED) — `Run_CaretPlacement_EnumValues` only checks member
-  names/count, not values. **Fix:** assert the enum values. **Unit seam
-  (Telescope.Tests).**
-
-## Phase 10 — Docs drift (M29, M30, M31, m31)
-
-- **M29** (major, CONFIRMED) — `docs/spec.md:353-354`,
-  `.opencode/skills/vs-extension-dev/SKILL.md:210-211`, `docs/progress.md:72-73`
-  still say 77/74 while AGENTS.md and spec.md §5.1 say 135/130. **Fix:** update
-  to 135/130 (verify against `--list` output at execution time — counts drift
-  upward as tests are added). No-seam (docs).
-- **M30** (major, CONFIRMED) — `docs/spec.md:162` §4 diagnostics contract
-  omits 8 harness-asserted lines (`stale-toolwindow sentinel active`,
-  `leader-binding failed:`, `shortcut-binding failed:`, `output pane
-  unavailable:`, `[MyExtension] init <step> ok/failed:`, `fzf filter failed:`,
-  `fzf unavailable — showing unfiltered list`, `filter failed:`). **Fix:** add
-  them to §4. No-seam (docs).
-- **M31** (major, CONFIRMED) — `docs/spec.md:47` + `SKILL.md:50,68` key-files
-  tables list none of the ~25 post-consolidation seams. **Fix:** add the
-  missing seams to the tables. No-seam (docs).
-- **m31** (minor, CONFIRMED) — `docs/progress.md:10` header not bumped for the
-  2026-09-30 Code-review GREEN. **Fix:** bump the header. No-seam (docs).
+- **M6** (major, CONFIRMED) — `docs/progress.md:16,205,401-402` claims the 67-findings
+  plan's deferred e2e gates are "queued in e2e-queue.md (E2E-NCR-*, E2E-RESTRUCTURE-1)"
+  but the file has NO such entries — the restructure's e2e verification is lost.
+  **Fix:** append the E2E-NCR-*/E2E-RESTRUCTURE-1 entries (from the prior
+  implementation_plan.md:739-769) to `e2e-queue.md`, or correct the claims. No-seam
+  (docs).
+- **m61** (minor, CONFIRMED) — `check-doc-refs.ps1` external allowlist permanently
+  masks future refs to removed symbols (`DistinctBy`, `CardinalMovment`,
+  `CardinalNavigation`) (check-doc-refs.ps1:87-98). **Fix:** scope the allowlist to
+  the specific archive docs. No-seam (lint).
+- **m66** (minor, CONFIRMED) — `docs/progress.md:10` header "Chunk C restructure
+  pending" contradicts the Done entry (Chunk C COMPLETE). **Fix:** fix the header.
+  No-seam (docs).
+- **m67** (minor, CONFIRMED) — `docs/progress.md:20-28` "Next up" still lists F5/F8/F9
+  as open (covered by the GREEN combined plan). **Fix:** update the section. No-seam
+  (docs).
+- **m68** (minor, CONFIRMED) — `docs/spec.md:186-217` §4 diagnostics contract omits 4
+  harness-asserted lines (`open finder=`, `Focus prompt => True, mode=insert`,
+  `results count=... selected=...`, `key=... mode=... handled=...`). **Fix:** add the
+  4 lines. No-seam (docs).
+- **m69** (minor, CONFIRMED) — `docs/spec.md:47-109` §2.2 key-files table omits 13
+  real seam files (OverlayShowState, FocusTargetModel, LineIndex, TryDispatch,
+  PreviewRenderer, BlockCaretStyle, VimModeClassifier, InitSteps,
+  SimpleShortcutMatcher, NavigationSnapshot, FilterFailureLog, TelescopeLog,
+  PaneFailureTracker). **Fix:** add the rows. No-seam (docs).
+- **n20** (nit, CONFIRMED) — `docs/progress.md:73-74` baseline parenthetical
+  attributes 143/140 to the consolidation (it was the 67-findings plan). **Fix:** fix
+  the attribution. No-seam (docs).
+- **n21** (nit, CONFIRMED) — `docs/reviews/architecture-review.md:417` "Verified-clean"
+  still claims `CardinalNavigation`/`CardinalMovment` — post-restructure it's
+  `MyExtension.Navigation`/`Navigation/`. **Fix:** update the claim. No-seam (docs).
 
 ---
 
 # Part B — Repository restructure (Phases 11-14)
 
-## Restructure design (target folder/namespace mapping)
+## Restructure design (approved 2026-10-01)
 
-The restructure moves files into logical folders AND renames namespaces to
-match (user decision). It is **behavior-preserving**: no log literal, no public
-API, no test count changes. The doc-ref lint + all agent/tool references are
-updated in the same phase.
+The restructure separates MAIN files from their HELPERS/UTILS by functionality: each
+functional folder keeps its main files and gains a `Utils/` subfolder for the
+helpers. It also applies the 5 approved renames. It is **behavior-preserving**: no
+log literal, no public API change (except the renames), no test count changes.
+Namespaces stay UNCHANGED. The doc-ref lint + all agent/tool references are updated
+in the same phase.
 
-### MyExtension/ target (namespace `MyExtension.*`)
+### MyExtension/ target (namespaces unchanged)
 
-| New folder | New namespace | Files |
-|-----------|---------------|-------|
-| `Hooks/` | `MyExtension.Hooks` | GlobalKeyboardHook, NativeMethods, KeyInjection, InjectedKeyGuard |
-| `Input/` | `MyExtension.Input` | InputHandler, LeaderSequenceMatcher, SimpleShortcutMatcher, KeybindingConfig, KeyNames, KeyNameBuilder, PopupNavigation, StaleToolWindowSentinel |
-| `Vim/` | `MyExtension.Vim` | VimModeTracker, VimModeSource, VimModeClassifier, VimModeState |
-| `Package/` | `MyExtension.Package` | MyExtensionPackage, InitSteps, VsServices, TelescopeCommand, TelescopeLauncher, Actions |
-| `ToolWindows/` | `MyExtension.ToolWindows` | FocusGuard, FocusKeeper, HierarchyForestBuilder, GeneralToolWindowController, HierarchyResolver, SolutionExplorerController, IToolWindowController, TextInputToolWindowController, TextMotionHelper, ToolWindowControllerBase, WindowManager, ToolWindowTypeResolver (the last two moved from the root — window-management/classification types) |
-| `Navigation/` | `MyExtension.Navigation` | CardinalNavigationConstants, LinqExtensionMethods, Direction, NavigationSettings, NavigationSnapshot, RectCoordinate, UtilityMethods, WindowAdapter, WindowMatrix, WindowNavigationEngine (moved from `CardinalMovment/`, namespace `CardinalNavigation`) |
-| `Adornments/` | `MyExtension.Adornments` | BlockCaretAdornment |
-| `Properties/` | `MyExtension.Properties` | Settings.Designer.cs (unchanged) |
-| `Resources/` | (no namespace) | default-keybindings.json (embedded resource — csproj path update) |
-| root | — | MyExtension.csproj, source.extension.vsixmanifest (unchanged) |
+| Folder | MAIN files | Utils/ subfolder |
+|--------|-----------|------------------|
+| `Hooks/` | GlobalKeyboardHook | Utils/{NativeMethods, KeyInjection, InjectedKeyGuard} |
+| `Input/` | InputHandler | Utils/{KeybindingConfig, LeaderSequenceMatcher, SimpleShortcutMatcher, KeyNames, KeyNameBuilder, PopupNavigation, StaleToolWindowSentinel} |
+| `Vim/` | VimModeTracker | Utils/{VimModeState, VimModeSource, VimModeClassifier, VimBufferSubscriptions} |
+| `Package/` | MyExtensionPackage | Utils/{InitSteps, VsServices, Actions, TelescopeLauncher, TelescopeCommand} |
+| `Adornments/` | BlockCaretAdornment | (none — single file) |
+| `Navigation/` | **WindowNavigator** (was WindowMatrix), WindowNavigationEngine | Utils/{**WindowFrameAdapter** (was WindowAdapter), **WindowFrameUtils** (was UtilityMethods), **WindowRect** (was RectCoordinate), **NavigationConstants** (was CardinalNavigationConstants), NavigationSettings, NavigationSnapshot, Direction} |
+| `ToolWindows/` | WindowManager, GeneralToolWindowController, TextInputToolWindowController, SolutionExplorerController, ToolWindowControllerBase, IToolWindowController | Utils/{ToolWindowTypeResolver, TextMotionHelper, HierarchyResolver, HierarchyForestBuilder, FocusKeeper, FocusGuard} |
 
-> **DEVIATION from AGENTS.md (flag for user):** AGENTS.md says "the source
-> folder is spelled `CardinalMovment` (typo) — keep it consistent, do not
-> 'fix' it (breaks references)". The restructure renames it to `Navigation/`
-> with namespace `MyExtension.Navigation` because (a) the user chose
-> "folders + namespaces" and this is the one folder whose namespace doesn't
-> match, and (b) the restructure updates ALL references anyway, so the
-> "breaks references" concern is moot. The `CardinalMovment` entry is removed
-> from the doc-ref lint external allowlist. Alternative (if the user prefers):
-> keep namespace `CardinalNavigation` and rename the folder to
-> `CardinalNavigation/` (folder = namespace, no namespace change).
+### Telescope/ target (namespaces unchanged)
 
-### Telescope/ target (namespace `Telescope.*`)
+| Folder | MAIN files | Utils/ subfolder |
+|--------|-----------|------------------|
+| `Controller/` | TelescopeController | (none — single file) |
+| `Overlay/` | TelescopeOverlay | Utils/{OverlayKeyHandler, TextMotionNavigator, TextMotionDispatcher, TryDispatch, SyntaxHighlighter, ResultsFormatter, ResultMapper, PreviewRenderer, OverlayShowState, LineIndex, FocusTargetModel, BlockCaretStyle} |
+| `Filter/` | FzfFilter | (none — single file) |
+| `Finders/` | FileFinder, CodeIssuesFinder, ReferencesFinder, GrepFinder, ImplementationFinder, FinderBase, TelescopeFinder | Utils/{ProjectFiles, ProjectFileCache, FileContentCache, HitOpener, HierarchyWalker, DteFileOpener, FileLocation, IFileLocation, FileHit, CodeIssue, GrepHit, ImplementationHit, ReferenceHit} |
+| `Logging/` | NeoVisualLog | Utils/{TelescopeLog, PaneFailureTracker, NeoVisualTraceListener, LogFileWriter, FilterFailureLog, DiagnosticLog} |
 
-| New folder | New namespace | Files |
-|-----------|---------------|-------|
-| `Overlay/` | `Telescope.Overlay` | TelescopeOverlay, OverlayKeyHandler, OverlayShowState, FocusTargetModel, PreviewRenderer, BlockCaretStyle, TextMotionNavigator, TryDispatch, ResultsFormatter, ResultMapper, SyntaxHighlighter, LineIndex |
-| `Finders/` | `Telescope.Finders` | TelescopeFinder, FinderBase, FileFinder, CodeIssuesFinder, ReferencesFinder, GrepFinder, ImplementationFinder, FileHit, GrepHit, ReferenceHit, ImplementationHit, FileLocation, IFileLocation, CodeIssue, HitOpener, HierarchyWalker, ProjectFiles, ProjectFileCache, FileContentCache, DteFileOpener |
-| `Filter/` | `Telescope.Filter` | FzfFilter |
-| `Logging/` | `Telescope.Logging` | NeoVisualLog, LogFileWriter, NeoVisualTraceListener, DiagnosticLog, TelescopeLog, FilterFailureLog, PaneFailureTracker |
-| `Controller/` | `Telescope.Controller` | TelescopeController |
-| root | — | Telescope.csproj (unchanged; `RootNamespace>Telescope</RootNamespace>` stays) |
+### Rename blast radius (from research — the reference sweep must cover these)
 
-> **Note:** `tests/Telescope.Tests/Program.cs` declares `namespace
-> Telescope.Tests` (a child of `Telescope`). After the move, no file declares
-> `namespace Telescope` directly — the child namespace is still valid C#, but
-> the test file needs `using Telescope.Overlay;` / `using Telescope.Finders;`
-> / `using Telescope.Logging;` etc. The `StartupObject>Telescope.Tests.Program`
-> in the test csproj stays valid.
+- `WindowMatrix` → `WindowNavigator`: referenced by `Input/InputHandler.cs:503`
+  (`new WindowMatrix` + `wm.NavigateInDirection`), `WindowMatrix.cs` (decl), doc
+  refs in AGENTS.md:326, SKILL.md, docs/spec.md:80,123,134, docs/progress.md,
+  architecture-review.md, agent docs.
+- `CardinalNavigationConstants` → `NavigationConstants`: referenced by
+  `Navigation/NavigationSettings.cs:20-21` (4 refs) + doc refs (AGENTS.md:407,
+  SKILL.md, docs/spec.md:85,136, docs/progress.md, architecture-review.md, agent docs).
+- `UtilityMethods` → `WindowFrameUtils`: referenced by `Navigation/WindowAdapter.cs:59,83,93,94`
+  (`GetIVsUIShell`, `GetLinkedWindowsList`, `CompareWindows`) + doc refs
+  (docs/spec.md:84, docs/progress.md, architecture-review.md, agent docs).
+- `RectCoordinate` → `WindowRect`: referenced by `Navigation/NavigationSnapshot.cs`,
+  `WindowMatrix.cs:94`, `WindowAdapter.cs`, `WindowNavigationEngine.cs`,
+  `tests/NeoVisual.Tests/Program.cs` (many) + doc refs (AGENTS.md:93, SKILL.md,
+  docs/spec.md:86,244, docs/progress.md, architecture-review.md, agent docs).
+- `WindowAdapter` → `WindowFrameAdapter`: referenced by
+  `ToolWindows/WindowManager.cs:18,211,213,218`, `Navigation/WindowMatrix.cs:14,16,47,62`,
+  `tests/NeoVisual.Tests/Program.cs:1386` + doc refs (AGENTS.md:404, SKILL.md,
+  docs/spec.md:81, docs/progress.md, architecture-review.md, agent docs).
 
-### tools/ target
-
-| New folder | Files |
-|-----------|-------|
-| `tools/harness/` | test-e2e.ps1, iterate-telescope.ps1, harness-common.ps1, dte-command.ps1 |
-| `tools/lint/` | check-doc-refs.ps1 |
-
-> The harness scripts dot-source each other via `$PSScriptRoot` — moving them
-> together into `tools/harness/` keeps those paths valid. `check-doc-refs.ps1`
-> moves to `tools/lint/`; its function scan
-> (`Get-ChildItem (Join-Path $repoRoot 'tools')`) must point at
-> `tools/harness`.
-
-### docs/ target
-
-| New folder | Files |
-|-----------|-------|
-| `docs/` (root, unchanged) | spec.md, progress.md, implementation_plan.md, e2e-queue.md (operational contract docs — referenced by exact path from ~11 agent files + the doc-ref lint default set; moving them is high-risk, low-value) |
-| `docs/reviews/` | code-review.md, architecture-review.md, architecture-consolidation.md |
-| `docs/plans/` | backlog-plans.md |
-
-> **Flag for user:** the operational docs (spec.md, progress.md,
-> implementation_plan.md, e2e-queue.md) are referenced by exact path from many
-> agent files and the doc-ref lint default set. The plan keeps them in `docs/`
-> root and groups only the review/plan archive docs. If the user wants ALL
-> docs grouped, the reference sweep grows substantially (every agent file that
-> references `docs/progress.md` etc. must be updated).
-
-## Phase 11 — Restructure: MyExtension project (folders + namespaces)
-
-- **BP steps (per the mapping above):**
-  1. `git mv` each MyExtension root .cs file into its target folder (Hooks/,
-     Input/, Vim/, Package/, Adornments/); `git mv` CardinalMovment/* →
-     Navigation/; keep ToolWindows/ + Properties/ in place.
-  2. Update each moved file's `namespace` declaration to the target namespace
-     (e.g. `namespace MyExtension` → `namespace MyExtension.Input`).
-  3. Update every `using` directive + fully-qualified reference across
-     MyExtension/ + tests/NeoVisual.Tests/Program.cs:
-     - `using CardinalNavigation;` (3 files: Actions, InputHandler,
-       WindowManager + tests) → `using MyExtension.Navigation;`
-     - `using MyExtension.ToolWindows;` — ADD to the 6 root files that
-       reference ToolWindows types unqualified (BlockCaretAdornment,
-       InjectedKeyGuard, InputHandler, MyExtensionPackage, VimModeState,
-       WindowManager) + tests
-     - `using MyExtension;` in tests stays (the root namespace still exists
-       via Package/Hooks/etc.? NO — no file declares `namespace MyExtension`
-       directly after the move; the test's `using MyExtension;` must become
-       the specific sub-namespaces it references)
-     - `using Telescope;` (4 files) → the specific `Telescope.*` sub-namespaces
-       (see Phase 12)
-  4. Move `default-keybindings.json` → `Resources/`; update
-     `MyExtension.csproj` `EmbeddedResource Include="Resources\default-keybindings.json"`.
-  5. Update the doc-ref lint: remove `CardinalMovment` from the external
-     allowlist; update `$sourceRoots` if needed.
-- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests` all pass (count unchanged); `tools/check-doc-refs.ps1`
-  clean after the Phase 13 reference sweep.
-- **Fails-if:** build errors (missed using/namespace); any NeoVisual test
-  regresses; a `[NeoVisual]`/`[Telescope]`/`[Hook]` log literal changed.
-
-## Phase 12 — Restructure: Telescope project (folders + namespaces)
+## Phase 11 — Restructure: MyExtension (folders + Utils subfolders + 5 renames)
 
 - **BP steps:**
-  1. `git mv` each Telescope .cs file into its target folder (Overlay/,
-     Finders/, Filter/, Logging/, Controller/).
-  2. Update each moved file's `namespace` declaration to the target namespace
-     (e.g. `namespace Telescope` → `namespace Telescope.Overlay`).
-  3. Update every reference across MyExtension/ + tests/:
-     - `using Telescope;` (4 MyExtension files) → the specific sub-namespaces
-     - ~90 fully-qualified `Telescope.X` refs in 16 MyExtension files →
-       `Telescope.<Group>.X` (mechanical, per-type mapping)
-     - `tests/Telescope.Tests/Program.cs` `namespace Telescope.Tests` stays;
-       add `using Telescope.Overlay;` / `using Telescope.Finders;` /
-       `using Telescope.Logging;` etc.
-     - `tests/NeoVisual.Tests/Program.cs` references to `Telescope.*` types
-       (e.g. `Telescope.NeoVisualLog`) → the new sub-namespaces
-  4. Keep `RootNamespace>Telescope</RootNamespace>` in Telescope.csproj.
+  1. `git mv` each helper .cs into its target `Utils/` subfolder (Hooks/Utils/,
+     Input/Utils/, Vim/Utils/, Package/Utils/, Navigation/Utils/, ToolWindows/Utils/).
+  2. Apply the 5 renames (`git mv` + class rename): WindowMatrix→WindowNavigator,
+     CardinalNavigationConstants→NavigationConstants, UtilityMethods→WindowFrameUtils,
+     RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter.
+  3. Update every `using` directive + fully-qualified reference across MyExtension/ +
+     tests/NeoVisual.Tests/Program.cs for the moved files (namespaces unchanged, so
+     only the type names change for the 5 renames; the folder moves do NOT change
+     namespaces).
+  4. Update the doc-ref lint allowlist per BP-71: add the 5 OLD type names
+     (WindowMatrix, CardinalNavigationConstants, UtilityMethods, RectCoordinate,
+     WindowAdapter) to the scoped external allowlist (they are still cited by the
+     archive docs after the rename); do NOT add the NEW names (they resolve via
+     source grep); do NOT remove `CardinalMovment`/`CardinalNavigation` (m61's
+     scoping in BP-65 keeps them for the archive docs).
+- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project
+  tests/NeoVisual.Tests` all pass (count unchanged); no `[NeoVisual]`/`[Telescope]`/
+  `[Hook]`/`[MyExtension]` log literal changed; `pwsh tools/lint/check-doc-refs.ps1`
+  → 0 unresolved.
+- **Fails-if:** build errors (missed rename/reference); any NeoVisual test regresses;
+  a log literal changed; the doc-ref lint reports unresolved OLD-name refs in the
+  archive docs or a NEW name added to the allowlist.
+
+## Phase 12 — Restructure: Telescope (folders + Utils subfolders)
+
+- **BP steps:**
+  1. `git mv` each helper .cs into its target `Utils/` subfolder (Overlay/Utils/,
+     Finders/Utils/, Logging/Utils/).
+  2. Update every reference across MyExtension/ + tests/ (namespaces unchanged, so
+     only the file paths change — no type renames in Telescope).
+  3. Keep `RootNamespace>Telescope</RootNamespace>` in Telescope.csproj.
 - **Verify-with:** `dotnet build` 0 errors; `dotnet run --project
   tests/Telescope.Tests` all pass (count unchanged); `dotnet run --project
   tests/NeoVisual.Tests` all pass.
 - **Fails-if:** build errors (missed reference); any Telescope/NeoVisual test
   regresses; a log literal changed.
 
-## Phase 13 — Restructure: tools/ + docs/ + reference sweep
+## Phase 13 — Restructure: reference sweep (docs, agents, tools, tests) + doc-ref lint
 
 - **BP steps:**
-  1. `git mv` tools/*.ps1 → `tools/harness/` (test-e2e, iterate-telescope,
-     harness-common, dte-command) and `tools/lint/` (check-doc-refs).
-  2. Update `check-doc-refs.ps1`'s function scan to `tools/harness`; update
-     its `$proposedPaths` (`tools/harness-common.ps1`).
-  3. `git mv` docs/code-review.md, docs/architecture-review.md,
-     docs/architecture-consolidation.md → `docs/reviews/`; docs/backlog-plans.md
-     → `docs/plans/`. Keep spec.md, progress.md, implementation_plan.md,
-     e2e-queue.md in docs/ root.
-  4. **Reference sweep:** update every doc/agent/tool reference to the moved
-     paths:
+  1. Update every doc/agent/tool reference to the moved/renamed paths:
      - AGENTS.md, docs/spec.md, docs/progress.md, docs/implementation_plan.md,
-       docs/architecture-review.md, docs/code-review.md, docs/backlog-plans.md,
-       docs/architecture-consolidation.md, SKILL.md — every `MyExtension/*.cs`,
-       `Telescope/*.cs`, `CardinalMovment/*.cs`, `tools/*.ps1`, `docs/*.md`
-       path reference → the new path.
-     - `.opencode/agent/*.md` — every exact-path reference to
-       `tools/test-e2e.ps1`, `tools/check-doc-refs.ps1`,
-       `tools/iterate-telescope.ps1`, `tools/dte-command.ps1`,
-       `docs/code-review.md`, `docs/architecture-review.md`,
-       `docs/architecture-consolidation.md`, `docs/backlog-plans.md` → the new
-       path. (The operational docs — spec.md, progress.md,
-       implementation_plan.md, e2e-queue.md — keep their paths, so their agent
-       references stay valid.)
-     - `tools/check-doc-refs.ps1` default doc set + `$sourceRoots` if the
-       paths change.
-  5. Update the doc-ref lint allowlists: remove `CardinalMovment`; update
-     `$proposedPaths`/`$proposedSymbols` for the moved files.
-- **Verify-with:** `pwsh tools/lint/check-doc-refs.ps1` → `[PASS] ... 0
-  unresolved`; `dotnet build` 0 errors; both unit suites pass (counts
-  unchanged).
-- **Fails-if:** the doc-ref lint reports unresolved references (a moved path
-  missed in the sweep); an agent file still references an old path; a harness
-  script can't dot-source its sibling.
+       docs/reviews/*.md, SKILL.md — every `MyExtension/*.cs`, `Telescope/*.cs`
+       path + the 5 renamed type names.
+     - `.opencode/agent/*.md` — every exact-path reference to the moved files.
+     - `tools/lint/check-doc-refs.ps1` — update the allowlists (`CardinalMovment`,
+       `CardinalNavigation`, the renamed symbols) + `$sourceRoots` if needed.
+  2. Run `pwsh tools/lint/check-doc-refs.ps1` → `[PASS] ... 0 unresolved`.
+- **Verify-with:** doc-ref lint clean; `dotnet build` 0 errors; both unit suites pass
+  (counts unchanged).
+- **Fails-if:** the doc-ref lint reports unresolved references (a moved/renamed path
+  missed in the sweep); an agent file still references an old path.
 
 ## Phase 14 — Final verification (combined plan gate)
 
 - **BP steps:**
   1. `dotnet build MyExtension.slnx` → 0 errors.
-  2. `dotnet run --project tests/Telescope.Tests` → all pass (count unchanged
-     from the pre-restructure baseline).
+  2. `dotnet run --project tests/Telescope.Tests` → all pass (count unchanged).
   3. `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
   4. `pwsh tools/lint/check-doc-refs.ps1` → 0 unresolved.
-  5. Grep gate: no `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` log
-     literal changed by the restructure (diff the log literals before/after).
-  6. e2e deferred: full 35-scenario suite queued (E2E-RESTRUCTURE-1).
+  5. Grep gate: no `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` log literal
+     changed by the restructure (diff the log literals before/after).
+  6. e2e deferred: full 35-scenario suite queued (E2E-RESTRUCTURE-2).
 - **Verify-with:** the five gates above all pass.
-- **Fails-if:** any gate fails; a log literal drifted; a unit count changed
-  (unless a Phase 9 test deletion was the documented cause).
+- **Fails-if:** any gate fails; a log literal drifted; a unit count changed (unless a
+  Phase 9 test deletion was the documented cause).
 
 ---
 
 ## Acceptance criteria
 
-Every phase's acceptance criteria map to a diagnostic line and/or a unit test.
-The master table (each row = a phase's gate):
+Every phase's acceptance criteria map to a diagnostic line and/or a unit test. The
+master table (each row = a phase's gate):
 
 | Phase | Gate (unit tests GREEN + build + existing suites) | Diagnostic contract preserved/added |
 |-------|---------------------------------------------------|-------------------------------------|
-| 0 | `Run_ActionTable_TextInput_ActionKeysMatchTable` (count 7); `Run_TextInput_KeysIMapsToInsertStart`; `Run_VimBufferSubscriptions_*` | `textinput-enter-input start caret=0` (CR1, restored); `vim-mode=` (CR2, unchanged) |
-| 1 | `Run_LeaderMatcher_*` (prefix set); `Run_StaleToolWindowSentinel_*`; M1/M2/M15/m17 build gates | `navigate direction=...` unchanged; no per-key COM/stat |
-| 2 | `Run_FzfFilter_*` (injected path); `Run_GrepFinder_*` (off-thread); `Run_FileContentCache_*` (eviction); `Run_Issues_CollectTodosUsesCache`; `Run_FzfFilter_IsAvailableBounded` | `grep hits=...`, `results count=...`, `preview caret=...` unchanged |
-| 3 | `Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed`; `Run_ResultMapper_UnknownStringSkippedOrLogged`; `Run_TryDispatch_*` (unified `$`); `Run_TextMotionEngine_*` | `preview caret=... line=...`, `prompt-motion key=...`, `text-motion key=...` unchanged |
-| 4 | `Run_WindowNavigationEngine_*` (unchanged); M9/M14/m3-m6 build gates | `navigate direction=L/R/D/U` unchanged |
-| 5 | `Run_VimModeTracker_*` (log only on change); `Run_FilterFailureLog_Format`; M8/M12/M25 build gates | ADD `[NeoVisual] toolwindow-move failed: ...` (M8); `vim-mode=` unchanged |
-| 6 | `Run_KeyNameBuilder_*` + `Run_SimpleShortcutMatcher_*` (delegation); `Run_ActionTable_*`; `Run_HierarchyForestBuilder_*`; `Run_FocusGuard_*`; `Run_InitSteps_*`; `Run_HitOpener_*` | `[MyExtension] init <step> ok/failed` unchanged |
-| 7 | M17/M23/m11/m12 deletions (build + suite counts) | no log literal change |
-| 8 | `Run_LogFileWriter_FlushTimer_*` (injected clock); harness self-checks | `preview tokens=[1-9]\d*`, `results count=[1-9]\d*` (harness) |
-| 9 | test hermeticity + naming tests (counts per the runner) | none changed |
+| 0 | `Run_PromptMotionRouter_InsertPlacementsNotConsumed`; `Run_HierarchyResolver_PrimaryFilePath` | `prompt-motion key=...` unchanged; `solution-explorer select file=...` (M8, correct file) |
+| 1 | `Run_GrepFinder_*` (drop-Task.Run, behavior-preserving); `Run_PreviewTokenCache_*`; `Run_FileContentCache_*` (eviction); `Run_FileFinder_UsesProjectFileCache`; `Run_FzfFilter_IsAvailableBounded` | `grep hits=...`, `results count=...`, `preview caret=...` unchanged |
+| 2 | `Run_FocusGuard_OwnsKeyboard`; `Run_KeybindingConfig_*`; `Run_InjectedKeyGuard_*` | `navigate direction=...` unchanged; ADD `[NeoVisual] navigate activated/no-op` (m47) |
+| 3 | `Run_VimModeState_*` (mode-change); `Run_VimModeClassifier_*` | `vim-mode=Insert|Normal|Replace` unchanged |
+| 4 | `Run_WindowNavigationEngine_*`; `Run_WindowMatrix_BuildActiveWindowsNullActive`; `Run_NavigationSettings_*` | `navigate direction=L/R/D/U` unchanged |
+| 5 | `Run_WindowManager_*`; `Run_HierarchyResolver_*`; `Run_HierarchyForestBuilder_*` | `solution-explorer select file=...` unchanged |
+| 6 | `Run_GeneralToolWindowController_*`; `Run_ActionTable_*`; `Run_TextMotionDispatcher_*` | `toolwindow-move key=... -> arrow vk=...` unchanged |
+| 7 | `Run_LogFileWriter_*`; `Run_PaneFailureTracker_*`; deletions (count drops) | `[Hook]` single-stamped; no log literal change |
+| 8 | harness self-checks | `Send-Text` case-fidelity (M3, deferred e2e) |
+| 9 | `Run_FzfFilter_TimeoutAwaitsTasks`; test hermeticity tests | none changed |
 | 10 | doc-ref lint clean after the doc updates | none changed |
 | 11 | build + NeoVisual.Tests (count unchanged) + doc-ref lint (after Phase 13) | no log literal change |
 | 12 | build + Telescope.Tests + NeoVisual.Tests (counts unchanged) | no log literal change |
@@ -698,1492 +689,1190 @@ The master table (each row = a phase's gate):
 
 ## Unit test plan (summary)
 
-- **tests/Telescope.Tests** (pure classes): `TextInputToolWindowController`
-  action table (CR1 — actually NeoVisual), `TextMotionNavigator.Up` (M10),
-  `ResultMapper` (M11), `TryDispatch` unified `$` (M19), `FzfFilter`
-  injected-path timeout/fallback/IsAvailable-bounded (M3/m16), `GrepFinder`
-  off-thread scan (M4), `FileContentCache` eviction (M13/M5), `CodeIssuesFinder`
-  cache (m15), `LogFileWriter` injected clock (M28), `FilterFailureLog` format
-  (m14), `HitOpener` consolidation (m13), test hermeticity (m22-m24, n2).
-- **tests/NeoVisual.Tests** (pure classes): `VimBufferSubscriptions` (CR2),
-  `LeaderSequenceMatcher` prefix set (M7), `VimModeTracker` log-on-change
-  (M16), `VimModeState` owner (M17), `KeyNameBuilder`/`SimpleShortcutMatcher`
-  delegation (M18), `FocusGuard` single ownsKeyboard (M22), `FocusKeeper`
-  TickCount64 (m8), `TextInputToolWindowController.TryMove` (m28), action-table
-  exact sets (CR1/M20/m26/m29), `Run_HierarchyResolver_*` split (m25), n1.
-- **No-seam** (build + existing suites + deferred e2e): M1, M2 (wiring), M6
-  (copy-elimination), M8, M9, M12, M14, M25, M26/M27 (harness), m2/m7/m9/m10/
-  m17/m18/m19/m20/m21/m30/m32, M29/M30/M31/m31 (docs), and the entire
-  restructure (Phases 11-14 — build + suites + doc-ref lint + deferred e2e).
+- **tests/Telescope.Tests** (pure classes): `PromptMotionRouter` insert-placements-not-consumed
+  (M1/m52), `PreviewRenderer` token cache (M4),
+  `FileContentCache` eviction + read-once (m5/m27), `TextMotionNavigator.LineNumber`
+  (m32), `ResultMapper` byDisplay cache (m33), `FileFinder` ProjectFileCache (m34),
+  `FzfFilter` drop-Task.Run/IsAvailable-bounded/timeout-awaits (M2/M7/m50), `LogFileWriter`
+  format (m6), `PaneFailureTracker` retry (m51), `Run_TextMotionDispatcher_*` (n11),
+  test hermeticity (m53/m54/m57/m58).
+- **tests/NeoVisual.Tests** (pure classes): `HierarchyResolver.PrimaryFilePath`
+  (M8/m26/m59), `FocusGuard.OwnsKeyboard` (M5/m7), `KeybindingConfig` "+" classify
+  (m42), `InjectedKeyGuard` TTL (m43), `VimModeState` mode-change (m41),
+  `VimModeClassifier` (n1), `WindowNavigationEngine` single-pass + symmetric
+  tolerance (m11/m48), `WindowMatrix` null-active-window (m44), `NavigationSettings`
+  cache (m12), `WindowManager` per-type defaults (m22), `GeneralToolWindowController`
+  KeyToArrowVk (m9), `ToolWindowControllerBase` W/B/E (m16), `HierarchyForestBuilder`
+  (m19), test hermeticity (m55/m56).
+- **No-seam** (build + existing suites + deferred e2e): M3, M6, m3, m10, m14, m18,
+  m20, m21, m24, m25, m28 (wiring), m38, m39, m40, m45, m46, m47, m49, m60, m63,
+  m64, m65, m66, m67, m68, m69, n2, n4, n5, n7, n8, n9, n10, n12, n13, n14, n15,
+  n16, n17, n18, n19, n20, n21, and the entire restructure (Phases 11-14 — build +
+  suites + doc-ref lint + deferred e2e).
 
 ## Diagnostics (new/changed log lines)
 
-- ADD `[NeoVisual] toolwindow-move failed: {msg}` (M8).
+- ADD `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>`
+  (m47 — outcome diagnostic).
 - UNCHANGED (must stay byte-identical): `navigate direction=L/R/D/U`,
-  `shortcut-binding executed:`, `leader-binding executed:`,
   `[Telescope] focus target=List|Preview`, `vim-mode=Insert|Normal|Replace`,
-  `preview caret=... line=...`, `prompt-motion key=...`,
-  `text-motion key=...` / `textinput-enter-input ...`,
-  `[MyExtension] init <step> ok/failed`.
-- RESTORED: `textinput-enter-input start caret=0` (CR1 — the `I` action).
-- HARNESS (not product): `preview tokens=[1-9]\d*` (M26),
-  `results count=[1-9]\d*` at :518 only (M27).
+  `preview caret=... line=...`, `prompt-motion key=...`, `text-motion key=...` /
+  `textinput-enter-input ...`, `[MyExtension] init <step> ok/failed`,
+  `solution-explorer select file=...`, `toolwindow-move key=... -> arrow vk=...`.
+- HARNESS (not product): `Send-Text` case-fidelity (M3), `results count=[1-9]\d*`
+  at :1161 only (m64).
 
 ## Known-RED allowlist
 
 None — no known-RED e2e scenario remains (per docs/progress.md). All fixes are
 RED-proven by unit tests (or build + existing suites for no-seam items). The
-restructure is behavior-preserving (no RED — verified by build + suites +
-doc-ref lint + the deferred full-suite e2e re-run).
+restructure is behavior-preserving (no RED — verified by build + suites + doc-ref
+lint + the deferred full-suite e2e re-run).
 
 ## E2E queue reference (deferred — see e2e-queue.md)
 
 The following e2e scenarios are QUEUED (not created/executed until this plan is
-GREEN in docs/progress.md and the user is on a VS-capable machine). Each
-asserts the diagnostics listed above:
+GREEN in docs/progress.md and the user is on a VS-capable machine). Each asserts the
+diagnostics listed above:
 
-- **E2E-CR-1** (CR1): `neovisual-textinput-motions` — `textinput-enter-input
-  start caret=0` fires when `I` is pressed on the Command Window.
-- **E2E-CR-2** (CR2): a multi-view scenario — with 2+ editor views open,
-  closing a non-focused view does NOT kill the focused view's `vim-mode=`
-  subscription (Space types a literal space in insert mode).
-- **E2E-M1/M2/M15** (hook hot-path): full suite — no per-key COM/stat; all
-  `neovisual-*` scenarios still GREEN.
-- **E2E-M3/M4/M5/M13** (finder): `telescope-grep` / `telescope-search` /
-  `telescope-preview` — `grep hits=...`, `results count=...`, `preview
-  caret=...` unchanged; fzf failure paths log `fzf filter failed:` /
-  `filter failed:`.
-- **E2E-M10/M11/M19/M6** (motion/preview): `telescope-preview-motions` /
-  `telescope-prompt-motions` / `neovisual-textinput-motions` — caret positions
-  unchanged; the `$` drift fixed (bare `4` in preview no longer jumps).
-- **E2E-M9/M14** (navigation): `neovisual-window-nav` — `navigate
-  direction=L/R/D/U` unchanged.
-- **E2E-M8/M12/M16/M25** (safety/logging): `neovisual-editor-insert` +
-  `neovisual-textinput-motions` — `vim-mode=` unchanged; a controller
-  exception logs `toolwindow-move failed:` and passes through.
-- **E2E-M18/M20/M21/M22/M24** (duplication): full suite — no log-literal drift.
-- **E2E-M17/M23** (dead code): full suite — no log-literal drift.
-- **E2E-M26/M27/M28** (harness): full suite — the tightened `preview
-  tokens=`/`results count=` assertions pass; `seed-leak` still GREEN.
-- **E2E-RESTRUCTURE-1** (Phases 11-14): full 35-scenario suite — no behavior
-  change after the folder/namespace restructure (all diagnostics byte-identical).
+- **E2E-NCR-1** (M1): `telescope-mode` — `a`/`A`/`I` in the prompt enter insert mode
+  (`Focus prompt => True, mode=insert` after `a`); the false-positive gate is
+  replaced by a real assertion.
+- **E2E-NCR-2** (M8): `explorer-open-navigation` — `g` opens the primary `.cs` file
+  (`solution-explorer select file=.*\.cs`, not `.resx`).
+- **E2E-NCR-M2/M4** (finder): `telescope-grep` / `telescope-preview` — `grep hits=...`,
+  `preview caret=...` unchanged after the drop-Task.Run change (behavior-preserving).
+- **E2E-NCR-M5** (FocusGuard): `neovisual-textinput-motions` + `neovisual-explorer-*`
+  — routing unchanged after the single-source `ownsKeyboard` refactor.
+- **E2E-NCR-M3** (harness): full suite — `Send-Text` case-fidelity (the
+  `query='Program'` assertions now verify case).
+- **E2E-NCR-M7** (test): `telescope-search` — fzf timeout path still falls back.
+- **E2E-NCR-m47** (diagnostic): `neovisual-window-nav` — `navigate activated/no-op`
+  outcome line.
+- **E2E-RESTRUCTURE-2** (Phases 11-14): full 35-scenario suite — no behavior change
+  after the folder/Utils restructure + the 5 renames (all diagnostics byte-identical).
+- **E2E-NCR-BACKLOG** (M6 reconciliation): the prior plan's missing gates
+  (E2E-NCR-1..2, E2E-NCR-M1/M2/M15 .. E2E-NCR-M26/M27/M28, E2E-RESTRUCTURE-1 from
+  the 67-findings plan) are appended to `e2e-queue.md` in Phase 10 — they are the
+  deferred gates for the ALREADY-GREEN 67-findings plan and must be run on a capable
+  machine.
 
 ## Execution order note for neovim_hub
 
 Execute phases in order 0 → 14. Phases 0-10 are the code-review fixes (each
 RED-proven by its unit tests; phases 7-9 are deletions/refactors with
-behavior-preserving gates; phase 10 is docs). Phases 11-14 are the restructure
-(behavior-preserving — build + suites + doc-ref lint + the deferred full-suite
-e2e re-run). The unit-only lane applies throughout — e2e is deferred to
-`e2e-queue.md` (E2E-CR-1..2, E2E-M1..M28, E2E-RESTRUCTURE-1 above).
----
-
-## Build Plan (per-phase; one implementation-planner agent per phase)
-
-# BP-n Build Plan — Phases 0-5 (Code-Review Fixes)
-
-> **Source:** `plans/plan.md` (Combined Plan, Part A Phases 0-5). Lane: **unit-only** — e2e is
-> deferred to `e2e-queue.md`; NO e2e scenario name appears in any Verify-with/Fails-if.
-> **Ground truth:** `dotnet build MyExtension.slnx` = 0 errors (115 pre-existing warnings);
-> Telescope.Tests 135 passing; NeoVisual.Tests 130 passing.
-> **Known-RED allowlist:** NONE (per `docs/progress.md` — no known-RED e2e scenario remains).
-> **Research corrections folded in (do not second-guess):**
-> 1. **CR1** updates the existing exact-set test `Run_ActionTable_TextInput_ActionKeysMatchTable`
->    (NeoVisual.Tests:527) from count 6 to count 7 in the SAME change.
-> 2. **M10** corrects the existing `Run_Preview_UpFromSecondLineWithLeadingBlankLine`
->    (Telescope.Tests:846) to assert line 1/caret 0 in the SAME change.
-> 3. **M19** unifies the two key→motion **dispatch** tables (the motion **math** is already shared
->    via `TextMotionNavigator`); it does NOT "make TextMotionHelper delegate" only.
-> 4. **M27** is Phase 8 (harness) — OUT OF SCOPE here.
-> **Execution:** one top-to-bottom pass by the build-agent; each `## Phase` header is a hub
-> checkpoint with a mid-point verify gate.
+behavior-preserving gates; phase 10 is docs + the e2e-queue reconciliation). Phases
+11-14 are the restructure (behavior-preserving — build + suites + doc-ref lint + the
+deferred full-suite e2e re-run). The unit-only lane applies throughout — e2e is
+deferred to `e2e-queue.md` (E2E-NCR-*, E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG above).
 
 ---
 
-## Phase 0 — Criticals (CR1, CR2)
+# Build Plan (BP-n) — agent-executable steps
 
-### BP-1: CR1 — restore `Keys.I` in `TextInputToolWindowController._actions`
-- **Files:** `MyExtension/ToolWindows/TextInputToolWindowController.cs`; `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Add `[Keys.I] = () => TextMotionHelper.TryMoveFocusedSurface(Keys.I, ref _isInputMode)` to the `_actions` dictionary (after `Keys.L`). Bare `i` still falls through to the generic `InputHandler` branch (unchanged). In the SAME change, update the exact-set test `Run_ActionTable_TextInput_ActionKeysMatchTable` (NeoVisual.Tests:527) from `{W,B,E,A,H,L}` (count 6) to `{W,B,E,A,H,L,I}` (count 7). Add `Run_TextInput_KeysIMapsToInsertStart` asserting `TryMove(Keys.I)` maps to `InsertStart` (via `TextMotionHelper.MapMotion(Keys.I, shift:true)` → `TextMotion.InsertStart`).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- ActionTable` → `Run_ActionTable_TextInput_ActionKeysMatchTable` PASS (count 7); `dotnet run --project tests/NeoVisual.Tests -- TextInput` → `Run_TextInput_KeysIMapsToInsertStart` PASS, `Run_TextInput_StartsInInsertMode` PASS, `Run_TextInput_ActionKeys` PASS. Diagnostic restored: `[NeoVisual] textinput-enter-input start caret=0` (emitted by `TextMotionHelper.ApplyMotionToBox` when `I` → `InsertStart`).
-- **Fails-if:** `Run_ActionTable_TextInput_ActionKeysMatchTable` FAILS with count 6 (the `I` entry was not added or the test was not updated); `Run_TextInput_KeysIMapsToInsertStart` FAILS (`TryMove(Keys.I)` returns false or maps to the wrong motion); the `textinput-enter-input start caret=0` line is not produced by the `I` path.
+> **Lane:** unit-only. **NO RED evidence exists yet** — the unit tests named below are
+> NOT written; `neovim_hub`'s `e2e-test-builder` writes them (RED) before the build-agent
+> runs each step. Every Verify-with is a **unit test name + diagnostic format** (or
+> build + existing suites + doc-ref lint for no-seam items). **No e2e scenario is a
+> Verify-with gate** — e2e is deferred to the "E2E queue reference" section above
+> (E2E-NCR-*, E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG).
+>
+> **Execution:** one top-to-bottom pass, phases 0 → 14. Each phase header is a natural
+> checkpoint; the phase gate at each boundary is the mid-point verify (build + the
+> phase's unit tests GREEN + the phase's diagnostic contract intact).
+>
+> **Cross-cutting constraints (do not second-guess):**
+> - net472 — no `IReadOnlySet<T>`; `ThreadHelper.ThrowIfNotOnUIThread()` on every VS-API
+>   method; UI-thread affinity; `ExcludeAssets="runtime"` untouched.
+> - Log-line-as-contract: any fix that touches a log site MUST preserve the emitted token
+>   byte-identical (the UNCHANGED list in the plan's "Diagnostics" section).
+> - The restructure (Phases 11-14) is behavior-preserving: no log literal, no public API
+>   change (except the 5 approved renames), no test-count change; namespaces stay
+>   UNCHANGED (so no MEF/DI wiring changes — the renamed types are `new`-instantiated or
+>   static, never `[Export]`ed/registered).
+> - Doc-ref lint (`pwsh tools/lint/check-doc-refs.ps1`) is the acceptance gate for every
+>   step that renames/removes a doc-referenced symbol.
 
-### BP-2: CR2 — per-view Vim buffer subscription map (`VimBufferSubscriptions`)
-- **Files:** `MyExtension/VimBufferSubscriptions.cs` (new); `MyExtension/VimModeSource.cs`; `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Extract a pure per-view subscription map `VimBufferSubscriptions` (dependency-free, `Dictionary<ITextView, object>`): `Attach(ITextView view, object buffer)`, `Detach(ITextView view)` (no-op for a non-attached view), `BufferFor(ITextView view)`, `FocusedView`/`FocusedBuffer`. Wire `VsVimModeSource` to use it: `Attach(view)` stores the resolved buffer per view; `Detach(view)` unsubscribes ONLY that view's buffer (replacing the global `_currentTextBuffer` unsubscribe); re-subscribe the focused view's buffer on focus gain. Add `Run_VimBufferSubscriptions_*` tests.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- VimBufferSubscriptions` → `Run_VimBufferSubscriptions_AttachTwoDetachOneKeepsOther` PASS (attach A, attach B, detach A → `BufferFor(B)` still returns B's buffer), `Run_VimBufferSubscriptions_DetachNonAttachedNoOp` PASS, `Run_VimBufferSubscriptions_ReattachAfterDetach` PASS. Diagnostic unchanged: `[NeoVisual] vim-mode=Insert|Normal|Replace` (the focused view's subscription survives a non-focused view close).
-- **Fails-if:** a `Run_VimBufferSubscriptions_*` test FAILS (map semantics wrong); `dotnet build` errors (the map type doesn't exist → CS0246); the focused view's `vim-mode=` subscription is still killed by a non-focused view close (deferred e2e).
+## Phase 0 — Functional bugs (M1, M8, m36, m52)
 
-**Phase 0 gate:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (130 + 4 new).
+### BP-1 — M1 + m36: Telescope prompt `a`/`A`/`I` fall through to insert mode + caret preservation
+- **Files:** `Telescope/Overlay/PromptMotionRouter.cs` (new), `Telescope/Overlay/TelescopeOverlay.cs`,
+  `tests/Telescope.Tests/Program.cs`
+- **Change:** Add the pure `PromptMotionRouter.ShouldConsume(Key key, bool shift, out
+  CaretPlacement? insertPlacement)` seam (delegates to `TextMotionDispatcher.MapKey`): returns TRUE
+  only for motions (h/l/w/b/e/0/$/gg/G), FALSE for the insert placements (a/A/I) with the placement
+  reported via `out`. In `TryPromptMotion` (TelescopeOverlay.cs:583-597), call `ShouldConsume` first;
+  when it returns false (a/A/I), return `false` WITHOUT consuming the key and WITHOUT logging
+  `prompt-motion` — so `a`/`A`/`I` fall through to `_keyHandler.Handle` (OverlayKeyHandler maps
+  `OverlayKey.A`→`EnterInsertMode(CaretPlacement.End)`, `OverlayKey.I`→`EnterInsertMode(CaretPlacement.Current)`).
+  The `prompt-motion key=... caret=...` log must NOT be emitted for a/A/I. **m36:** `FocusPrompt`
+  (TelescopeOverlay.cs:486) must not reset `_promptBox.CaretIndex` to the end when entering insert at
+  the current position — capture the caret before focusing and restore it for `CaretPlacement.Current`.
+- **Verify-with:** `Run_PromptMotionRouter_InsertPlacementsNotConsumed` (Telescope.Tests) —
+  `ShouldConsume(Key.A/A/I, ...)` returns false with a non-null `CaretPlacement` (RED today: the
+  prompt consumes them because `TryPromptMotion` discards the placement); `Run_PromptMotionRouter_MotionsConsumed`
+  — `ShouldConsume(Key.H/W/..., ...)` returns true with a null placement; `Run_OverlayKeyHandler_*` —
+  `OverlayKey.A`/`OverlayKey.I` map to `EnterInsertAppend`/`EnterInsert`. Diagnostic: `prompt-motion
+  key=... caret=...` NOT emitted for a/A/I; the insert path emits `Focus prompt => True, mode=insert`.
+- **Fails-if:** `Run_PromptMotionRouter_InsertPlacementsNotConsumed` fails; `prompt-motion key=A ...`
+  still logged; `a`/`A`/`I` still consumed by `TryPromptMotion`; **m36** (e2e-deferred, E2E-NCR-1):
+  `i` discards the caret position set by h/l/w/b/e/0/$ (CaretIndex reset in `FocusPrompt`).
 
----
+### BP-2 — M8: Solution Explorer `g` picks the primary file
+- **Files:** `MyExtension/ToolWindows/SolutionExplorerController.cs`,
+  `MyExtension/ToolWindows/HierarchyResolver.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** In `MapChildren` (SolutionExplorerController.cs:331), replace
+  `pi.FileNames[(short)pi.FileCount]` (the LAST file of a multi-file item) with a call to the pure
+  `HierarchyResolver.PrimaryFilePath(...)` over the item's file-name list (the primary file). Fix
+  the stale comment at lines 329-330 (FileNames is 1-based; index 1 is the primary file's full
+  path — the comment's "index 1 is the short name" is wrong). The helper takes PRIMITIVE inputs:
+  `HierarchyResolver.PrimaryFilePath(IReadOnlyList<string> fileNames)` returns `fileNames[0]` (the
+  primary file; `EnvDTE.ProjectItem` is a COM interface that cannot be constructed hermetically, so
+  the helper takes a primitive string list — the caller extracts the names from the COM item).
+- **Verify-with:** `Run_HierarchyResolver_PrimaryFilePath` (NeoVisual.Tests) — over a primitive
+  multi-file string list, the primary (first) file is returned (RED today: the caller indexes the
+  last file). Diagnostic: `[NeoVisual] solution-explorer select file=...` now logs the primary
+  `.cs` path (not `.resx`).
+- **Fails-if:** `Run_HierarchyResolver_PrimaryFilePath` fails; `solution-explorer select file=...`
+  still logs the last file of a multi-file item.
 
-## Phase 1 — Hook hot-path contract (M1, M2, M15, M7, m17)
+### BP-3 — m52: exclude insert placements from the preview motion surface
+- **Files:** `Telescope/Overlay/PromptMotionRouter.cs` (new), `Telescope/Overlay/TelescopeOverlay.cs`,
+  `tests/Telescope.Tests/Program.cs`
+- **Change:** In `HandlePreviewKey` (TelescopeOverlay.cs:616-619), call the shared
+  `PromptMotionRouter.ShouldConsume(key, shift, out _)` seam and return `false` when it reports an
+  insert placement (a/A/I) — the preview is read-only, so insert placements must NOT move the caret
+  there. The a/A/I keys fall through to the list/mode state machine instead.
+- **Verify-with:** `Run_PromptMotionRouter_InsertPlacementsNotConsumed` (Telescope.Tests, shared with
+  BP-1) — `ShouldConsume(Key.A/A/I, ...)` returns false with a non-null `CaretPlacement` (RED today:
+  the preview maps them). Diagnostic: `[Telescope] preview caret=... line=...` NOT emitted for a/A/I
+  in the preview; `focus target=Preview` unchanged.
+- **Fails-if:** `Run_PromptMotionRouter_InsertPlacementsNotConsumed` fails; a/A/I still move the
+  caret in the read-only preview.
 
-### BP-3: M1 — cache the focused-surface fact (no per-key COM)
-- **Files:** `MyExtension/WindowManager.cs`
-- **Change:** Cache the `TextInputSurfaceFocused` result in a private bool field, updated in `OnWindowFocusChanged()` (which already runs on focus-change events, alongside `_isTextInputType`); `TextInputSurfaceFocused` reads the cached bool instead of doing the COM `GetProperty(VSFPROPID_DocView)` + `Keyboard.FocusedElement` + visual-tree walk per access. Sentinel-aware behavior preserved (`IsTestStaleInjected()` → false).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests -- ToolWindowMode` → `Run_ToolWindowMode_TextInputTypesClassified` / `Run_ToolWindowMode_NavigationTypesClassified` / `Run_ToolWindowMode_HjklMoves` PASS (classification unchanged). No per-key COM: the `TextInputSurfaceFocused` getter no longer calls `GetProperty`/`Keyboard.FocusedElement` on every read (code review).
-- **Fails-if:** `dotnet build` errors; a classification test regresses; `TextInputSurfaceFocused` still performs the COM/visual-tree walk per access (the cache was not wired into `OnWindowFocusChanged`).
+## Phase 1 — Finder path amortization (M2, M4, m5, m15, m27, m30, m31, m32, m33, m34, m37, m50)
 
-### BP-4: M2 — stop the per-key sentinel re-stat
-- **Files:** `MyExtension/InputHandler.cs`; `MyExtension/WindowManager.cs`
-- **Change:** Throttle `_windowManager.RefreshStaleSentinel()` in `IsKeyOfInterest` to at most once per bounded interval (e.g. 250ms, cached `DateTime` last-refresh), so the sentinel file is not `File.Exists`-stat'd on every key-down. The `StaleToolWindowSentinel` caching semantics are unchanged (already pinned by tests); the harness fault still toggles within the throttle window (deferred e2e).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- StaleToolWindowSentinel` → `Run_StaleToolWindowSentinel_CachedWithoutRefresh` PASS (IsStale cached until Refresh), `Run_StaleToolWindowSentinel_RefreshReportsChange` PASS, `Run_StaleToolWindowSentinel_NullPathNeverStale` PASS; `dotnet build MyExtension.slnx` → 0 errors. Diagnostic unchanged: `[NeoVisual] stale-toolwindow sentinel active` (still emitted on the false→true transition).
-- **Fails-if:** a `Run_StaleToolWindowSentinel_*` test regresses; `dotnet build` errors; `RefreshStaleSentinel()` is still invoked on every `IsKeyOfInterest` entry (the throttle was not added).
+### BP-4 — M2: GrepFinder drops the wasted `Task.Run` thread hop (fully scoped)
+- **Files:** `Telescope/Finders/GrepFinder.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** In `GrepFinder.GetCandidates` (GrepFinder.cs:109-121), DROP the
+  `Task.Run(...).GetAwaiter().GetResult()` wrapper and run the per-file content scan inline (the
+  scan is pure file I/O; the synchronous blocking is unchanged, only the wasted thread hop is
+  removed). This is the "drop the Task.Run" alternative from the M2 fix direction — it is fully
+  scoped to GrepFinder.cs and does NOT change the `IFinder.GetCandidates` / `FinderBase<THit>`
+  interface (which would force changes to all 5 finders + both overlay call sites at
+  TelescopeOverlay.cs:253,376). Keep the hermetic test path (injected enumerate + opener) and the
+  `grep hits={hits.Count}` log byte-identical.
+- **Verify-with:** behavior-preserving (no RED — the synchronous scan is unchanged): `Run_GrepFinder_*`
+  (Telescope.Tests) — the hermetic `GrepFinder` (injected enumerate + opener) returns the same hits;
+  `dotnet build` 0 errors; code review confirms the `Task.Run(...).GetAwaiter().GetResult()` wrapper
+  is gone. Diagnostic: `[Telescope] grep hits=...` unchanged.
+- **Fails-if:** `Run_GrepFinder_*` fails; `grep hits=...` missing or double-emitted; the
+  `Task.Run(...).GetAwaiter().GetResult()` wrapper is still present (code review).
 
-### BP-5: M15 — guard `Keys.I` on `!_leaderMatcher.IsActive`; drop bare-Ctrl pre-filter cases
-- **Files:** `MyExtension/InputHandler.cs`; `tests/NeoVisual.Tests/Program.cs`
-- **Change:** In `HandleKey`'s tool-window normal-mode block, change `if (key == Keys.I)` to `if (!_leaderMatcher.IsActive && key == Keys.I)` so an in-progress leader sequence is not interrupted by `I` (the key continues the sequence). In `IsKeyOfInterest`, delete the `ControlKey`/`LControlKey`/`RControlKey` cases (bare Ctrl keys are deliberately ignored by `HandleKey` — the pre-filter returning true for them is a wasted marshal). Add `Run_LeaderMatcher_ActiveSequenceConsumesI` (pure): after Space starts a sequence, `HandleKey(Keys.I, ...)` returns Consume (not PassThrough), proving `I` is treated as a sequence key while active.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- LeaderMatcher` → `Run_LeaderMatcher_ActiveSequenceConsumesI` PASS + the existing `Run_LeaderMatcher_*` family PASS (behavior-preserving); `dotnet build MyExtension.slnx` → 0 errors. Diagnostics unchanged: `[NeoVisual] leader-binding executed: ...` / `[NeoVisual] toolwindow-enter-input`.
-- **Fails-if:** `Run_LeaderMatcher_ActiveSequenceConsumesI` FAILS (the matcher passes `I` through while active); `dotnet build` errors; the `Keys.I` branch still fires during an active leader sequence (the guard was not added).
+### BP-5 — M4: PreviewRenderer token/FlowDocument cache
+- **Files:** `Telescope/Overlay/PreviewRenderer.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Add a pure mtime-keyed cache of the tokenized segments + built `FlowDocument`
+  (keyed by `LastWriteTimeUtc`) so `SetContent` (PreviewRenderer.cs:62-123) re-tokenizes/rebuilds
+  only on content change; keep `ApplyCaret`/`MoveToLine` per-selection. Extract the cache as a
+  dependency-free class (e.g. `PreviewTokenCache`) for hermetic testing.
+- **Verify-with:** `Run_PreviewTokenCache_UnchangedMtimeCached` /
+  `Run_PreviewTokenCache_ChangedMtimeRetokenizes` (Telescope.Tests) — unchanged mtime returns the
+  cached segments (no re-tokenize), changed mtime re-tokenizes (RED: cache class doesn't exist →
+  compile error). Diagnostic: `[Telescope] preview tokens=...` unchanged (same count on cache hit).
+- **Fails-if:** `Run_PreviewTokenCache_*` fails; `preview tokens=...` count changes on a cache
+  hit; the FlowDocument is rebuilt per selection change.
 
-### BP-6: M7 — incremental sequence string + precomputed prefix set
-- **Files:** `MyExtension/LeaderSequenceMatcher.cs`; `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Maintain the sequence string incrementally (append each key's `KeyNames.ToString` to a `StringBuilder` instead of `string.Join(",", _sequence.Select(...))` per key). Precompute a prefix set once at construction (every proper prefix of every binding sequence, e.g. `"F"` for `"F,F"`), stored as a readonly field; the per-key prefix check becomes a set lookup instead of `_bindings.Keys.Any(k => k.StartsWith(...))`. Add `Run_LeaderMatcher_PrefixSetBuiltOnce` asserting the precomputed prefix set is correct (e.g. bindings `{"F","F,F"}` → prefix set contains `"F"`; the field is readonly so it is built once).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- LeaderMatcher` → `Run_LeaderMatcher_PrefixSetBuiltOnce` PASS + the existing `Run_LeaderMatcher_*` family PASS (behavior-preserving: `Run_LeaderMatcher_MultiKeySequence`, `Run_LeaderMatcher_UnknownSequenceAborts`, `Run_LeaderMatcher_ThrowingActionIsCaught`, ...); `dotnet build MyExtension.slnx` → 0 errors.
-- **Fails-if:** `Run_LeaderMatcher_PrefixSetBuiltOnce` FAILS (prefix set wrong/absent → CS0246 or assertion failure); an existing `Run_LeaderMatcher_*` test regresses (the incremental sequence string changed the emitted sequence); `dotnet build` errors.
+### BP-6 — m5: `MyExtensionPackage.ReadLine` read-once per gather
+- **Files:** `MyExtension/Package/MyExtensionPackage.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** In the references-finder gather path, replace the per-hit `ReadLine`
+  (MyExtensionPackage.cs:665-675 — re-opens + re-scans the file prefix per reference hit) with a
+  read-once-per-gather `FileContentCache` (or reuse the Roslyn `SourceText`).
+- **Verify-with:** `Run_FileContentCache_*` (Telescope.Tests) — the cache returns the same line
+  content across repeated reads without re-reading (the read-once seam). Diagnostic:
+  `[Telescope] references gathered reads=... writes=...` unchanged.
+- **Fails-if:** `Run_FileContentCache_*` fails; the references gather still re-reads the file
+  per hit.
 
-### BP-7: m17 — `ThrowIfNotOnUIThread` on `WindowManager.RefreshCurrentWindow`
-- **Files:** `MyExtension/WindowManager.cs`
-- **Change:** Add `ThreadHelper.ThrowIfNotOnUIThread()` as the first line of `RefreshCurrentWindow()` (it calls `_monitorSelection.GetCurrentElementValue`, a VS API).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
-- **Fails-if:** `dotnet build` errors; the guard is missing from `RefreshCurrentWindow` (code review).
+### BP-7 — m27: FileContentCache LRU cap at construction sites
+- **Files:** `Telescope/Overlay/PreviewRenderer.cs`, `Telescope/Finders/CodeIssuesFinder.cs`,
+  `Telescope/Finders/GrepFinder.cs`
+- **Change:** Pass a cap (e.g. 500) at the three `new FileContentCache()` construction sites
+  (PreviewRenderer.cs:34, CodeIssuesFinder.cs:40, GrepFinder.cs:29) — `new FileContentCache(500)`.
+  The `FileContentCache` ctor already takes `int? maxEntries` (FileContentCache.cs:30); the m27 bug
+  is that no production caller passes it.
+- **Verify-with:** code-review assertion (NO new RED test — `Run_FileContentCache_EvictsOldest`
+  already exists at tests/Telescope.Tests/Program.cs:2244 and passes; the LRU eviction is
+  implemented): the three construction sites pass a cap + `dotnet build` 0 errors.
+- **Fails-if:** a construction site still uses `new FileContentCache()` with no cap (code review);
+  build error.
 
-**Phase 1 gate:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
+### BP-8 — m31: reuse `_promptNavigator` field
+- **Files:** `Telescope/Overlay/TelescopeOverlay.cs`
+- **Change:** Replace the per-keystroke `new TextMotionNavigator()` in `TryPromptMotion`
+  (TelescopeOverlay.cs:585) and `ApplyInsertCaret` (TelescopeOverlay.cs:498) with a reused
+  `_promptNavigator` field.
+- **Verify-with:** behavior-preserving — `Run_TryDispatch_*` / `Run_TextMotionNavigator_*`
+  (Telescope.Tests) still pass (motion math unchanged). Diagnostic: `prompt-motion key=... caret=...`
+  unchanged.
+- **Fails-if:** a motion test regresses; `prompt-motion` caret drifts.
 
----
+### BP-9 — m32: `TextMotionNavigator.LineNumber` cache
+- **Files:** `Telescope/Overlay/TextMotionNavigator.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Cache the line number incrementally (or use the existing `LineIndex`) instead of the
+  O(n) scan in `LineNumber` (TextMotionNavigator.cs:37-51).
+- **Verify-with:** `Run_TextMotionNavigator_LineNumber` (Telescope.Tests) — behavior-preserving
+  (same line numbers across motions). Diagnostic: `[Telescope] preview caret=... line=...` unchanged.
+- **Fails-if:** `Run_TextMotionNavigator_LineNumber` fails; `preview caret=... line=...` drifts.
 
-## Phase 2 — Finder path amortization (M3, M4, M5, M13, m15, m16)
+### BP-10 — m33: ResultMapper byDisplay cache
+- **Files:** `Telescope/Overlay/ResultMapper.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Cache the `GroupBy(...).ToDictionary(...)` byDisplay map per snapshot
+  (ResultMapper.cs:21-24) instead of rebuilding per keystroke.
+- **Verify-with:** `Run_ResultMapper_*` (Telescope.Tests) — behavior-preserving (same mapping incl.
+  duplicate-safe ordinal consumption). Diagnostic: `[Telescope] result-mapper unknown display: {display}`
+  unchanged.
+- **Fails-if:** `Run_ResultMapper_*` fails; the unknown-display warning drifts.
 
-### BP-8: M3 — FzfFilter off-thread spawn/write + await both tasks after kill
-- **Files:** `Telescope/FzfFilter.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Move the process spawn + stdin write into `Task.Run` (the candidate list is written off the UI thread); after `TryKill` on the timeout path, `await` BOTH `outputTask` and `errorTask` (so the faulted `ReadToEndAsync` tasks are observed — no unobserved-task noise). Extend `Run_FzfFilter_TimeoutKillsAndFallsBack` (Telescope.Tests:511) to assert the timeout path returns within a bounded wall time AND completes without unobserved-task noise (the existing `[Telescope] fzf filter failed: timeout` assertions stay).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FzfFilter` → `Run_FzfFilter_TimeoutKillsAndFallsBack` PASS (bounded wall time + `[Telescope] fzf filter failed: timeout after {ms}ms` logged), `Run_FzfFilter_NonexistentPathFallsBackAndLogs` PASS (`[Telescope] fzf filter failed: {msg}`), `Run_FzfFilter_FilterMatchesPrefix` PASS, `Run_FzfFilter_QuoteArg_TrailingBackslash` PASS; `dotnet build MyExtension.slnx` → 0 errors.
-- **Fails-if:** `Run_FzfFilter_TimeoutKillsAndFallsBack` FAILS (the timeout path still returns without awaiting both tasks, or the wall time is unbounded); `dotnet build` errors (the injected-path ctor / off-thread seam doesn't exist → CS1729/CS0246).
+### BP-11 — m34: FileFinder routes through ProjectFileCache
+- **Files:** `Telescope/Finders/FileFinder.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Route `FileFinder.GatherHits` (FileFinder.cs:62) through the shared `ProjectFileCache`
+  instead of calling `ProjectFiles.Enumerate` directly.
+- **Verify-with:** `Run_FileFinder_UsesProjectFileCache` (Telescope.Tests) — the finder's enumerate
+  delegate is served by the cache (single enumeration across gathers). Diagnostic:
+  `[Telescope] opened file: ...` unchanged.
+- **Fails-if:** `Run_FileFinder_UsesProjectFileCache` fails; the finder re-enumerates per gather.
 
-### BP-9: M4 — GrepFinder off-thread content scan
-- **Files:** `Telescope/GrepFinder.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Run the per-file content scan (`ScanFile` over the cached file list) on a background task and marshal only the results back; keep the DTE enumeration (`ProjectFiles.Enumerate`) on the UI thread. The hermetic test path (injected enumerate + opener) stays synchronous. Add `Run_GrepFinder_OffThreadScanSameHits` — `GetCandidates` returns the same hits when the scan runs off-thread (RED: no off-thread seam → compile error or behavior gap).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- GrepFinder` → `Run_GrepFinder_OffThreadScanSameHits` PASS + the existing `Run_GrepFinder_*` family PASS (`Run_GrepFinder_LineScanMatchesCaseInsensitive`, `Run_GrepFinder_HitCapBounded`, `Run_GrepFinder_CacheEnumeratesOnce`, ...). Diagnostic unchanged: `[Telescope] grep hits=...` (per-query summary).
-- **Fails-if:** `Run_GrepFinder_OffThreadScanSameHits` FAILS (off-thread scan returns different hits or the seam is missing → CS0246); an existing `Run_GrepFinder_*` test regresses; `dotnet build` errors.
+### BP-12 — m37 + m50: FzfFilter availability cache + latency note
+- **Files:** `Telescope/Filter/FzfFilter.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** (m50) Cache `IsAvailable()` once per session (or probe async) so the 500ms probe
+  (FzfFilter.cs:64-88) doesn't run on every overlay open. (m37) Document the per-keystroke
+  subprocess spawn as bites-later (no code change; the `--listen`/in-process matcher is deferred
+  until latency is measured).
+- **Verify-with:** the availability cache is in place — `Run_FzfFilter_IsAvailableBounded`
+  (Telescope.Tests) passes with the existing assertion. NOTE (phase-ordering dependency): the
+  bounded `< 1s` wall-clock assertion is DEFERRED to Phase 9 (BP-61, m58 — the clock injection
+  lands there); BP-12 does NOT inject the clock. Diagnostic: `[Telescope] fzf unavailable — showing
+  unfiltered list` unchanged (once at overlay open).
+- **Fails-if:** `Run_FzfFilter_IsAvailableBounded` fails; the probe still runs per overlay open
+  (cache not in place).
 
-### BP-10: M5 — preview mtime-keyed content cache + instance line-index state
-- **Files:** `Telescope/PreviewRenderer.cs`; `Telescope/FileContentCache.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Route `PreviewRenderer.Show`'s `File.ReadAllText` through a mtime-keyed cache (reuse `FileContentCache` from BP-11, or a dedicated mtime-keyed (path → content+segments) cache) so the file is re-read and re-tokenized only when the mtime changes. Make the `_lineIndex`/`_linePointers` state instance-scoped and reset on `SetContent` (no shared static mutable state across preview boxes). The unit seam is the mtime-keyed cache behavior pinned by the `Run_FileContentCache_*` tests.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FileContentCache` → `Run_FileContentCache_CachedRead` PASS (reader runs once for two reads on an unchanged file), `Run_FileContentCache_InvalidatesOnTimestampChange` PASS (reader runs twice on a changed timestamp); `dotnet run --project tests/Telescope.Tests -- Preview` → the `Run_Preview_*` family PASS; `dotnet build MyExtension.slnx` → 0 errors. Diagnostic unchanged: `[Telescope] preview tokens=...` (re-tokenize only on change).
-- **Fails-if:** a `Run_FileContentCache_*` test FAILS; `dotnet build` errors (the cache class doesn't exist → CS0246); the preview still re-reads/re-tokenizes the whole file per selection change (the mtime-keyed cache was not wired in).
-
-### BP-11: M13 — FileContentCache LRU eviction + clear-on-solution-change
-- **Files:** `Telescope/FileContentCache.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Cap `FileContentCache` by count (LRU: evict the least-recently-used entry when the cap is exceeded) and/or clear on solution change. Add `Run_FileContentCache_EvictsOldest` (insert N+1 entries → the oldest is evicted) and `Run_FileContentCache_ClearOnSolutionChange` (Clear() empties the cache).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FileContentCache` → `Run_FileContentCache_EvictsOldest` PASS, `Run_FileContentCache_ClearOnSolutionChange` PASS, `Run_FileContentCache_CachedRead` PASS, `Run_FileContentCache_InvalidatesOnTimestampChange` PASS; `dotnet build MyExtension.slnx` → 0 errors.
-- **Fails-if:** `Run_FileContentCache_EvictsOldest` FAILS (no eviction — the oldest entry is still served); `Run_FileContentCache_ClearOnSolutionChange` FAILS; `dotnet build` errors.
-
-### BP-12: m15 — CodeIssuesFinder.CollectTodos routes through FileContentCache
-- **Files:** `Telescope/CodeIssuesFinder.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Replace `File.ReadAllLines(path)` in `CollectTodos` with the shared `FileContentCache.GetLines(path)` (add a `FileContentCache` field to `CodeIssuesFinder`, injected for the hermetic test path). Add `Run_Issues_CollectTodosUsesCache` — a counting reader proves the cache is hit on the second scan (the reader runs once for two `GetCandidates` calls over the same file).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- Issues` → `Run_Issues_CollectTodosUsesCache` PASS + the existing `Run_Issues_*` family PASS (`Run_Issues_TodoScanFindsMarkers`, `Run_Issues_NoFalsePositiveOnTodoWord`, `Run_Issues_OnSelectedReportsPathAndLine`, ...); `dotnet build MyExtension.slnx` → 0 errors.
-- **Fails-if:** `Run_Issues_CollectTodosUsesCache` FAILS (the reader runs per scan — the cache is not hit); an existing `Run_Issues_*` test regresses; `dotnet build` errors.
-
-### BP-13: m16 — FzfFilter.IsAvailable bounded wait
-- **Files:** `Telescope/FzfFilter.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Bound `IsAvailable()`'s wait on a hung `fzf --version` (short timeout, e.g. reuse `FilterTimeoutMs` or a dedicated short bound) so it cannot block the UI up to 3s. Add `Run_FzfFilter_IsAvailableBounded` — a stub that hangs → `IsAvailable()` returns within a bounded wall time.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FzfFilter` → `Run_FzfFilter_IsAvailableBounded` PASS (returns within a bounded wall time), `Run_FzfFilter_IsAvailableFalseForMissingPath` PASS; `dotnet build MyExtension.slnx` → 0 errors.
-- **Fails-if:** `Run_FzfFilter_IsAvailableBounded` FAILS (the wait is unbounded on a hung stub); `dotnet build` errors.
-
-**Phase 2 gate:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/Telescope.Tests` → all pass (135 + new).
-
----
-
-## Phase 3 — Motion + preview correctness (M10, M11, M19, M6)
-
-### BP-14: M10 — `TextMotionNavigator.Up()` leading-blank-line off-by-one
-- **Files:** `Telescope/TextMotionNavigator.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** In `Up()`, only search from `lineStart - 2` when `lineStart - 2 >= 0`; otherwise `prevNewline = -1` / `prevStart = 0` (so a leading blank line moves to line 1/caret 0 instead of staying put). In the SAME change, CORRECT the existing `Run_Preview_UpFromSecondLineWithLeadingBlankLine` (Telescope.Tests:846, currently asserts the buggy `LineNumber==2`) to assert line 1/caret 0. Add `Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed` — `SetText("\nabc"); MoveToLine(2); Up();` must move to line 1.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- Preview` → `Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed` PASS (LineNumber==1, Caret==0) and the corrected `Run_Preview_UpFromSecondLineWithLeadingBlankLine` PASS; `dotnet run --project tests/Telescope.Tests -- PromptMotion` → the `Run_PromptMotion_*` family PASS (no motion regression). Diagnostic unchanged: `[Telescope] preview caret=... line=...`.
-- **Fails-if:** `Run_Preview_UpFromSecondLineWithLeadingBlankLine_Fixed` FAILS (Up() still stays on line 2); the corrected `Run_Preview_UpFromSecondLineWithLeadingBlankLine` FAILS (the test was not corrected or the fix regressed); a `Run_PromptMotion_*` test regresses.
-
-### BP-15: M11 — ResultMapper unknown-match skip/log (no silent null-payload no-op)
-- **Files:** `Telescope/ResultMapper.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** For an unmatched display string, skip the entry (do not add a null-payload `FinderEntry` whose `OnSelected` silently no-ops) OR give the fallback a safe no-op payload; log a warning. Update `Run_ResultMapper_UnknownStringNullPayload` (Telescope.Tests:2207, currently asserts the null-payload behavior) to assert the new contract. Add `Run_ResultMapper_UnknownStringSkippedOrLogged` — an unmatched display string does not produce a null-payload entry that silently no-ops.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- ResultMapper` → `Run_ResultMapper_UnknownStringSkippedOrLogged` PASS, the updated `Run_ResultMapper_UnknownStringNullPayload` PASS, `Run_ResultMapper_DuplicateDisplayPreserved` PASS, `Run_ResultMapper_UniqueDisplayMapped` PASS, `Run_ResultMapper_OrderPreserved` PASS; `dotnet build MyExtension.slnx` → 0 errors. New diagnostic (warning on unknown match): `[Telescope] result-mapper unknown display: {display}`.
-- **Fails-if:** `Run_ResultMapper_UnknownStringSkippedOrLogged` FAILS (a null-payload entry is still produced); `Run_ResultMapper_UnknownStringNullPayload` FAILS (the test was not updated to the new contract); `dotnet build` errors.
-
-### BP-16: M19 — unify the two key→motion dispatch tables into one shared pure dispatcher
-- **Files:** `Telescope/TextMotionDispatcher.cs` (new); `Telescope/TryDispatch.cs`; `MyExtension/ToolWindows/TextMotionHelper.cs`; `tests/Telescope.Tests/Program.cs`; `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Create a shared pure dispatcher (e.g. `TextMotionDispatcher`) owning the single key→motion table for BOTH surfaces: a WinForms-`Keys` mapping (`MapKey(Keys, bool shift)`) and a WPF-`Key` mapping (`MapKey(Key, bool shift)`), plus an `Apply(TextMotion, TextMotionNavigator, out CaretPlacement?)` that runs the motion on the navigator. `TextMotionHelper.MapMotion` and `TryDispatch.Handle` both delegate to it (each surface keeps its own shift source + its own diagnostic log line). Rewrite the NeoVisual `Run_TextMotionEngine_MapMotion_*` groups (NeoVisual.Tests:449-475) to target the shared dispatcher's `Keys` mapping. The Telescope `Run_TryDispatch_*` tests (Telescope.Tests:932-1012) stay — they pin the unified `$` contract (bare `Key.D4` without shift is NOT a motion).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- TryDispatch` → `Run_TryDispatch_DollarWithoutShiftNotHandled` PASS (bare D4 does NOT LineEnd), `Run_TryDispatch_DollarWithShiftLineEnds` PASS, `Run_TryDispatch_MotionsMapToNavigator` PASS, `Run_TryDispatch_InsertPlacements` PASS; `dotnet run --project tests/NeoVisual.Tests -- TextMotionEngine` → the rewritten `Run_TextMotionEngine_MapMotion_*` PASS; `dotnet build MyExtension.slnx` → 0 errors. Diagnostics unchanged: `[Telescope] prompt-motion key=... caret=...`, `[NeoVisual] text-motion key=... caret=...`, `[NeoVisual] textinput-enter-input ...`.
-- **Fails-if:** a `Run_TryDispatch_*` test FAILS (the unified `$` contract broke); a rewritten `Run_TextMotionEngine_MapMotion_*` test FAILS; `dotnet build` errors (the shared dispatcher doesn't exist → CS0246); the two dispatch tables still exist as separate switch statements (code review).
-
-### BP-17: M6 — reuse the focused box + navigator; avoid the full `GetText()` copy
+### BP-13 — m15: TextMotionHelper returns the focused box once + reuses the navigator
 - **Files:** `MyExtension/ToolWindows/TextMotionHelper.cs`
-- **Change:** Pass the already-found focused surface into `ApplyMotionToBox` (no second `FindFocusedTextBox()` visual-tree re-walk per motion); reuse a single `TextMotionNavigator` instance across motions on the same surface; avoid the full `snapshot.GetText()` copy on the editor path where possible. The motion math stays in `TextMotionNavigator` (already unit-tested).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests -- TextMotionEngine` → the `Run_TextMotionEngine_MapMotion_*` PASS (motion mapping unchanged); `dotnet run --project tests/Telescope.Tests -- PromptMotion` → the `Run_PromptMotion_*` PASS (motion math unchanged). Diagnostics unchanged: `[NeoVisual] text-motion key=... caret=...`, `[NeoVisual] textinput-enter-input ...`.
-- **Fails-if:** `dotnet build` errors; a motion-mapping test regresses; `ApplyMotionToBox` still re-walks the visual tree or re-copies the full buffer per motion (code review — the copy-elimination is in the VS-coupled layer, verified by build + deferred e2e).
+- **Change:** In `TryMoveFocusedSurface` (TextMotionHelper.cs:70-125), resolve the focused text
+  surface ONCE (a single `FindFocusedTextBox()` walk) and reuse it for both the motion apply and
+  the caret-style call — currently `ApplyMotionToBox` re-walks `FindFocusedTextBox()` up to 3×
+  (TextMotionHelper.cs:82,149,158) and copies the full buffer text twice per motion key. No-seam
+  (WPF) — the motion math and the `text-motion key=... caret=...` / `textinput-enter-input ...`
+  log contract are unchanged.
+- **Verify-with:** build 0 errors; existing suites pass (behavior-preserving). Diagnostic:
+  `[NeoVisual] text-motion key=... caret=...` / `[NeoVisual] textinput-enter-input start|end|after caret=...`
+  unchanged (deferred e2e `neovisual-textinput-motions`).
+- **Fails-if:** build error; the motion/caret-style behavior changes; a log literal drifts.
 
-**Phase 3 gate:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/Telescope.Tests` → all pass; `dotnet run --project tests/NeoVisual.Tests` → all pass.
+### BP-14 — m30: FileFinder.OpenHit drops the outer `File.Exists` guard
+- **Files:** `Telescope/Finders/FileFinder.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** In `OpenHit` (FileFinder.cs:74-93), drop the outer `if (!File.Exists(hit.FilePath)) return;`
+  guard (FileFinder.cs:78) and let `HitOpener` own the missing-file no-op (it guards internally).
+  The hermetic `_testOpener` branch keeps its own behavior (a missing file is a no-op there too).
+- **Verify-with:** `Run_HitOpener_*` (Telescope.Tests) — behavior-preserving (a missing file is a
+  no-op on both the hermetic and real open paths; an existing file opens). Diagnostic:
+  `[Telescope] opened file: ...` unchanged.
+- **Fails-if:** `Run_HitOpener_*` fails; a missing file throws instead of no-op'ing; the
+  opened-file line drifts.
 
----
+## Phase 2 — FocusGuard + routing (M5, m7, m42, m43, m47, n14, n15, n16)
 
-## Phase 4 — Navigation robustness (M9, M14, m3, m4, m5, m6)
+### BP-15 — M5: single-source `ownsKeyboard`
+- **Files:** `MyExtension/Input/InputHandler.cs`, `MyExtension/ToolWindows/FocusGuard.cs`,
+  `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Route `EditorFocusedVeto` (InputHandler.cs:104-109) through the same cached
+  `_windowManager.IsTextInputType` used by `HasToolWindowActionKeys` (InputHandler.cs:84-90) —
+  replace `GeneralToolWindowController.IsTextInputType(_windowManager.Type)` with
+  `_windowManager.IsTextInputType` (or pass a single `ownsKeyboard` bool into `FocusGuard`).
+- **Verify-with:** `Run_FocusGuard_OwnsKeyboard` (NeoVisual.Tests) — behavior-preserving (RED:
+  signature change → compile error). Diagnostic: `[NeoVisual] toolwindow-move key=... -> arrow vk=...`
+  unchanged.
+- **Fails-if:** `Run_FocusGuard_OwnsKeyboard` fails; the two routing formulations disagree (a
+  text-input window vetoed or a nav window not vetoed).
 
-### BP-18: M9 — delete `WindowMatrix.CheckDte` and its call
-- **Files:** `MyExtension/CardinalMovment/WindowMatrix.cs`
-- **Change:** Delete `CheckDte(AsyncPackage)` (lines 75-87) and its call at line 37; keep the single `DTE dteService = MyExtension.VsServices.Dte(package);` fetch inside the existing try/catch (the ctor's outer catch already handles DTE failures).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests -- WindowNavigationEngine` → the `Run_WindowNavigationEngine_*` family PASS (algorithm unchanged). Diagnostic unchanged: `[NeoVisual] navigate direction=L/R/D/U`.
-- **Fails-if:** `dotnet build` errors (a dangling reference to `CheckDte`); a `Run_WindowNavigationEngine_*` test regresses; DTE is still fetched twice per navigation (code review).
+### BP-16 — m7: hoist the 5-arg `ShouldRouteToolWindowKey` call
+- **Files:** `MyExtension/Input/InputHandler.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Hoist the identical 5-arg `FocusGuard.ShouldRouteToolWindowKey(...)` call
+  (InputHandler.cs:308,436,468) into one private helper.
+- **Verify-with:** `Run_FocusGuard_*` (NeoVisual.Tests) — behavior-preserving.
+- **Fails-if:** `Run_FocusGuard_*` fails; routing behavior changes.
 
-### BP-19: M14 — classify in the ctor + `guid != Guid.Empty`
-- **Files:** `MyExtension/WindowManager.cs`
-- **Change:** In the ctor, after `RefreshCurrentWindow()`, call `OnWindowFocusChanged()` so `_type`/`_isToolWindow`/`_isTextInputType` are classified immediately (not only after the first focus event). In `OnWindowFocusChanged`, change `if (guid != null)` to `if (guid != Guid.Empty)` (a `Guid` is never null — the `Unknown` fallback is currently dead).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests -- ToolWindow` → `Run_ToolWindowType_UnknownGuid` PASS, `Run_ToolWindowMode_*` PASS (classification unchanged); `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
-- **Fails-if:** `dotnet build` errors; a classification test regresses; the ctor still leaves `_type`/`_isToolWindow` default until the first focus event (code review); the `Unknown` fallback is still dead (`guid != null` unchanged).
+### BP-17 — m42: `BuildBindings` modifier-prefix classification
+- **Files:** `MyExtension/Input/InputHandler.cs`, `MyExtension/Input/KeybindingConfig.cs`,
+  `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Extract a pure classification method into `KeybindingConfig` —
+  `KeybindingConfig.IsSimpleShortcut(string key)` — a modifier-prefix check (true only for
+  `Ctrl+`/`Shift+`/`Alt+` prefixes, not any `+`). In `BuildBindings` (InputHandler.cs:181-188),
+  replace `pair.Key.Contains("+")` with `KeybindingConfig.IsSimpleShortcut(pair.Key)` so a leader
+  key like `F,+` is classified as a leader sequence, not a simple shortcut.
+- **Verify-with:** `Run_KeybindingConfig_IsSimpleShortcut` (NeoVisual.Tests) — a `F,+` leader
+  binding is classified as a leader sequence, not a simple shortcut (RED: misclassified today).
+  Diagnostic: `[NeoVisual] leader-binding executed: ...` unchanged.
+- **Fails-if:** `Run_KeybindingConfig_IsSimpleShortcut` fails; a `F,+` binding never matches.
 
-### BP-20: m3 — remove the dead `gap < minGap` branch in `WindowNavigationEngine`
-- **Files:** `MyExtension/CardinalMovment/WindowNavigationEngine.cs`
-- **Change:** In `SelectTarget`'s second pass, change `if (gap < minGap || gap > upperBound)` to `if (gap > upperBound)` (minGap is the minimum, so no gap can be `< minGap` — the branch is dead).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- WindowNavigationEngine` → the `Run_WindowNavigationEngine_*` family PASS (behavior-preserving: `Run_WindowNavigationEngine_Up_PicksLargestAdjacency`, `Run_WindowNavigationEngine_Down_ToleranceExcludes`, `Run_WindowNavigationEngine_DivideWindow_ExcludesBeyond`, ...); `dotnet build MyExtension.slnx` → 0 errors.
-- **Fails-if:** a `Run_WindowNavigationEngine_*` test regresses (the branch removal changed selection); `dotnet build` errors.
+### BP-18 — m43: InjectedKeyGuard TTL
+- **Files:** `MyExtension/Hooks/InjectedKeyGuard.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Add a bounded TTL to the per-VK pending counter (InjectedKeyGuard.cs:42-67) so a
+  stale pending record cannot consume the next physical key-down (or accept+document the current
+  behavior).
+- **Verify-with:** `Run_InjectedKeyGuard_*` (NeoVisual.Tests) — behavior-preserving (a stale record
+  expires; a fresh record still consumes once).
+- **Fails-if:** `Run_InjectedKeyGuard_*` fails; a stale record swallows a physical key.
 
-### BP-21: m4 — normalize `CardinalNavigationConstants` to `public const`
-- **Files:** `MyExtension/CardinalMovment/CardinalNavigationConstants.cs`
-- **Change:** Change `public readonly static int` → `public const int` and `public readonly static double` → `public const double`; normalize naming consistently (keep the existing names — they are referenced by `NavigationSettings`).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged; the constants feed `NavigationSettings`, exercised by the `Run_WindowNavigationEngine_*` tests).
-- **Fails-if:** `dotnet build` errors (a `const` conversion broke a reference); a `Run_WindowNavigationEngine_*` test regresses (a constant value changed).
+### BP-19 — m47 + n14 + n15: Navigate outcome diagnostic + UI-thread assert + volatile
+- **Files:** `MyExtension/Input/InputHandler.cs`, `MyExtension/Input/LeaderSequenceMatcher.cs`
+- **Change:** (m47) In `Navigate` (InputHandler.cs:496-505), log the outcome:
+  `[NeoVisual] navigate activated index=...` when a target was activated,
+  `[NeoVisual] navigate no-op: <reason>` when not (no-seam diagnostic — deferred e2e, E2E queue
+  reference E2E-NCR-m47). (n14) Add `ThreadHelper.ThrowIfNotOnUIThread()` at the top of `Navigate`.
+  (n15) Make `LeaderSequenceMatcher._active` volatile (or correct the doc).
+- **Verify-with:** build 0 errors (n14/n15); the new diagnostic format
+  `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>` is emitted.
+  `navigate direction=L/R/D/U` unchanged.
+- **Fails-if:** build error; `navigate direction=...` drifts; the outcome line is missing.
 
-### BP-22: m5 — make `UtilityMethods` static
-- **Files:** `MyExtension/CardinalMovment/UtilityMethods.cs`
-- **Change:** Change `class UtilityMethods` → `static class UtilityMethods` (it holds only static methods).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
-- **Fails-if:** `dotnet build` errors (an instance member reference to `UtilityMethods`); a test regresses.
+### BP-20 — n16: PopupNavigation accept+document or gate
+- **Files:** `MyExtension/Input/PopupNavigation.cs`
+- **Change:** Accept+document the unconditional Ctrl+N/P injection (PopupNavigation.cs:39-53) or
+  gate on `ICompletionBroker.IsCompletionActive`.
+- **Verify-with:** build 0 errors; existing suites pass.
+- **Fails-if:** build error; Ctrl+N/P behavior changes unexpectedly.
 
-### BP-23: m6 — make `WindowMatrix` sealed
-- **Files:** `MyExtension/CardinalMovment/WindowMatrix.cs`
-- **Change:** Change `class WindowMatrix` → `sealed class WindowMatrix` (sibling types are sealed).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
-- **Fails-if:** `dotnet build` errors (a subclass of `WindowMatrix` exists); a test regresses.
+## Phase 3 — Vim interop (m38, m39, m40, m41, m3, n1)
 
-**Phase 4 gate:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged).
+### BP-21 — m38: `GetVim` latch only on success
+- **Files:** `MyExtension/Vim/VimModeSource.cs`
+- **Change:** In `GetVim` (VimModeSource.cs:398-428), set `_resolved = true` only when `vim != null`
+  (currently latches "no VsVim" on an early resolution).
+- **Verify-with:** build 0 errors; existing suites pass (no-seam VsVim reflection — deferred e2e).
+- **Fails-if:** build error; VsVim resolution permanently latches "not found".
 
----
+### BP-22 — m39: `Attach` re-point only on focus gain
+- **Files:** `MyExtension/Vim/VimModeSource.cs`
+- **Change:** In `Attach`/`SubscribeBuffer` (VimModeSource.cs:117-125,177-183), only re-point
+  `_currentBuffer`/`_currentTextBuffer` on focus gain (a background/peek view must not hijack the
+  focused mode state).
+- **Verify-with:** build 0 errors; existing suites pass (no-seam VsVim reflection — deferred e2e).
+- **Fails-if:** build error; a background view hijacks the focused mode.
 
-## Phase 5 — Hook-path safety + logging (M8, M12, M16, M25, m14)
+### BP-23 — m40: `Detach` refcount shared buffers
+- **Files:** `MyExtension/Vim/VimModeSource.cs`
+- **Change:** In `Detach` (VimModeSource.cs:128-136), refcount shared text buffers so two views
+  sharing a buffer don't kill each other's subscription.
+- **Verify-with:** build 0 errors; existing suites pass (no-seam VsVim reflection — deferred e2e).
+- **Fails-if:** build error; closing one view kills the other's SwitchedMode subscription.
 
-### BP-24: M8 — try/catch around the tool-window branch + `toolwindow-move failed` log
-- **Files:** `MyExtension/InputHandler.cs`
-- **Change:** Wrap the tool-window branch of `HandleKey` (the `FocusGuard.ShouldRouteToolWindowKey` block calling `controller.TryMove`/`EnterInputMode`/`ExitInputMode`) in try/catch; on exception, log `[NeoVisual] toolwindow-move failed: {msg}` and return false (pass through — never crash the hook). (Optionally wrap the whole `HandleKey` body.)
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged). New diagnostic: `[NeoVisual] toolwindow-move failed: {msg}` (emitted when a controller call throws; the key passes through).
-- **Fails-if:** `dotnet build` errors; a controller exception still escapes `HandleKey` (no `toolwindow-move failed:` line, key not passed through) — code review + deferred e2e.
+### BP-24 — m41: `VimModeState` mode-change return
+- **Files:** `MyExtension/Vim/VimModeState.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** `OnViewLostFocus`/`OnViewClosed` (VimModeState.cs:57-83) return the mode-change (not
+  just the typing-change), so `vim-mode=Unknown` is emitted on editor-focus loss.
+- **Verify-with:** `Run_VimModeState_*` (NeoVisual.Tests) — the mode-change return is present (RED:
+  missing today). Diagnostic: `[NeoVisual] vim-mode=Insert|Normal|Replace` unchanged;
+  `vim-mode=Unknown` emitted on focus loss.
+- **Fails-if:** `Run_VimModeState_*` fails; `vim-mode=Unknown` never emitted on focus loss.
 
-### BP-25: M12 — reset `_paneInitTried` on the null-service path in `NeoVisualLog.EnsurePane`
-- **Files:** `Telescope/NeoVisualLog.cs`
-- **Change:** In `EnsurePane`, when `outputWindow == null` (null `GetGlobalService` result, pre-package-init), reset `_paneInitTried = false` (under `PaneSync`) so a later call retries instead of permanently disabling the Output pane.
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/Telescope.Tests` → all pass (count unchanged). Diagnostic unchanged: `[NeoVisual] output pane unavailable: {reason}` (the one-time fallback still fires only when the pane genuinely cannot be created).
-- **Fails-if:** `dotnet build` errors; `_paneInitTried` stays true after a null service (the pane is permanently disabled) — code review + deferred e2e.
+### BP-25 — m3 + n1: VimBufferSubscriptions comment + VimModeState aliases
+- **Files:** `MyExtension/Vim/VimBufferSubscriptions.cs`, `MyExtension/Vim/VimModeState.cs`,
+  `tests/NeoVisual.Tests/Program.cs`
+- **Change:** (m3) Fix the stale "NOT wired yet" comment (VimBufferSubscriptions.cs:16-19) —
+  `VsVimModeSource` calls it. (n1) Delete the `Normal`/`Insert`/`Replace` const aliases
+  (VimModeState.cs:22-24), use `VimModeClassifier` (update the M17 test surface).
+- **Verify-with:** `Run_VimModeClassifier_*` (NeoVisual.Tests) — the classifier is the single owner
+  of the truth table. Build 0 errors.
+- **Fails-if:** `Run_VimModeClassifier_*` fails; build error (a stale alias reference).
 
-### BP-26: M16 — `vim-mode=` logged only on change
-- **Files:** `MyExtension/VimModeTracker.cs`; `tests/NeoVisual.Tests/Program.cs`
-- **Change:** In `UpdateTypingFromMode`, track the last logged mode name (or mode value) and emit `[NeoVisual] vim-mode={name}` only when it actually changes (a focus gain/loss with the same mode emits nothing). Add `Run_VimModeTracker_LogOnlyOnChange` — via `FakeVimModeSource` + `VimModeTracker`: `Mode=2; RaiseModeChanged()` logs `vim-mode=Insert`; `Mode=2; RaiseModeChanged()` again does NOT add a second `vim-mode=Insert` line; `Mode=1; RaiseModeChanged()` logs `vim-mode=Normal`.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- VimMode` → `Run_VimModeTracker_LogOnlyOnChange` PASS (the log file contains exactly one `vim-mode=Insert` for two identical mode events), `Run_VimModeSource_FakeLogsVimMode` PASS, `Run_VimModeSource_FakeDrivesTypingFlag` PASS, `Run_VimModeClassifier_*` PASS; `dotnet build MyExtension.slnx` → 0 errors. Diagnostic unchanged: `[NeoVisual] vim-mode=Insert|Normal|Replace` (emitted only on a real mode switch).
-- **Fails-if:** `Run_VimModeTracker_LogOnlyOnChange` FAILS (a same-mode event still emits a new `vim-mode=` line); `Run_VimModeSource_FakeLogsVimMode` regresses (a real mode switch no longer logs); `dotnet build` errors.
+## Phase 4 — Navigation robustness (m11, m12, m13, m14, m44, m45, m46, m48, m49, n3, n4, n5, n6, n19)
 
-### BP-27: M25 — `VsServices.Dte` returns `DTE?`; callers handle null explicitly
-- **Files:** `MyExtension/VsServices.cs`; `MyExtension/InputHandler.cs`; `MyExtension/CardinalMovment/WindowMatrix.cs`; `MyExtension/MyExtensionPackage.cs`; `MyExtension/TelescopeLauncher.cs`
-- **Change:** Change `VsServices.Dte` to return `DTE?` (drop the `dte!` null-forgiving). Update the direct dereferencing callers to null-check before use: `InputHandler.ExecuteVsCommand` (log `Command '{command}' failed: DTE unavailable` and return), `InputHandler.ToggleSolutionExplorer`, `WindowMatrix` ctor (already inside try/catch — guard `dteService`), `MyExtensionPackage` (lines 436/457), `TelescopeLauncher` (line 41). For the `Func<DTE>` finder/controller factory lambdas (`MyExtensionPackage` lines 86-88/107), widen to `Func<DTE?>` (the finders already null-guard `dte?.Solution`) or use `!` at the lambda — the build gate resolves the exact ripple.
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors (every caller compiles against `DTE?`); `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged); `dotnet run --project tests/Telescope.Tests` → all pass (count unchanged). Diagnostics unchanged: `[NeoVisual] Command '{command}' failed: {msg}` (now also emitted when DTE is null, not a misleading NRE).
-- **Fails-if:** `dotnet build` errors (a caller still dereferences `DTE?` without a null check); a test regresses; a caller still NREs inside its catch when DTE is null (code review + deferred e2e).
+### BP-26 — m11 + n3: `SelectTarget` single pass + inline predicates
+- **Files:** `MyExtension/Navigation/WindowNavigationEngine.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** (m11) Rewrite `SelectTarget` (WindowNavigationEngine.cs:18-67) as a single pass
+  collecting (index, gap, adjacency) for passing candidates. (n3) Inline the 3-predicate `Pipeline`
+  (WindowNavigationEngine.cs:10-16).
+- **Verify-with:** `Run_WindowNavigationEngine_*` (NeoVisual.Tests) — behavior-preserving (same
+  target index for the same rects/direction/settings).
+- **Fails-if:** `Run_WindowNavigationEngine_*` fails; the target index changes for a known rect set.
 
-### BP-28: m14 — `FilterFailureLog.Format` returns the UNPREFIXED message
-- **Files:** `Telescope/FilterFailureLog.cs`; `Telescope/TelescopeOverlay.cs`; `tests/Telescope.Tests/Program.cs`
-- **Change:** Change `FilterFailureLog.Format(Exception ex)` to return `"filter failed: " + ex.Message` (no `[Telescope] ` prefix). Update the caller at `TelescopeOverlay.cs:410` from `NeoVisualLog.Log(FilterFailureLog.Format(ex))` to `TelescopeLog.Log(FilterFailureLog.Format(ex))` (which adds the `[Telescope] ` prefix). Update `Run_FilterFailureLog_Format` (Telescope.Tests:2155) to assert `"filter failed: boom"`.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FilterFailureLog` → `Run_FilterFailureLog_Format` PASS (asserts `"filter failed: boom"`); `dotnet build MyExtension.slnx` → 0 errors. Emitted line unchanged (byte-identical): `[Telescope] filter failed: {msg}` (via `TelescopeLog.Log`).
-- **Fails-if:** `Run_FilterFailureLog_Format` FAILS (the format still embeds the prefix, or the test was not updated); `dotnet build` errors; the emitted line double-prefixes (`[Telescope] [Telescope] filter failed: ...`) — the caller still uses `NeoVisualLog.Log`.
+### BP-27 — m48: symmetric Down/Up tolerance
+- **Files:** `MyExtension/Navigation/WindowNavigationEngine.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Make the Down/Up tolerance symmetric (WindowNavigationEngine.cs:85-86) — the `> 1`
+  Down tolerance vs the bare `<` Up.
+- **Verify-with:** `Run_WindowNavigationEngine_*` (NeoVisual.Tests) — the 1px-gap case is handled
+  symmetrically (RED: today Down rejects a 1px-gap candidate Up accepts).
+- **Fails-if:** `Run_WindowNavigationEngine_*` fails; a 1px-gap candidate is rejected in one
+  direction but accepted in the other.
 
-**Phase 5 gate:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project tests/NeoVisual.Tests` → all pass; `dotnet run --project tests/Telescope.Tests` → all pass.
+### BP-28 — m12: NavigationSettings cache
+- **Files:** `MyExtension/Navigation/NavigationSettings.cs`, `MyExtension/Navigation/WindowMatrix.cs`,
+  `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Cache the `NavigationSettings` (from `FromSystemDpi()`, WindowMatrix.cs:39) instead of
+  re-reading system DPI per navigation.
+- **Verify-with:** `Run_NavigationSettings_*` (NeoVisual.Tests) — behavior-preserving (same divides
+  for the same DPI).
+- **Fails-if:** `Run_NavigationSettings_*` fails; the divides change.
 
----
+### BP-29 — m13: `LinkedTo` precomputed key set
+- **Files:** `MyExtension/Navigation/WindowAdapter.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Precompute a key set / index in `LinkedTo` (WindowAdapter.cs:89-95) instead of the
+  O(n·m) `CompareWindows` COM reads.
+- **Verify-with:** behavior-preserving — `Run_WindowAdapter_*` (NeoVisual.Tests) still pass.
+- **Fails-if:** `Run_WindowAdapter_*` fails; the linked-window set changes.
 
-## Verification Trace
+### BP-30 — m14 + m45 + m49: null guards (GetIVsUIShell, Activate/AutoHides, VSFPROPID_Type)
+- **Files:** `MyExtension/Navigation/UtilityMethods.cs`, `MyExtension/Navigation/WindowAdapter.cs`,
+  `MyExtension/ToolWindows/WindowManager.cs`
+- **Change:** (m14) Null-guard `GetIVsUIShell` (UtilityMethods.cs:17-22) + log. (m45) Null-guard
+  `_dte` in `Activate()`/`AutoHides()` (WindowAdapter.cs:42,48). (m49) Check the `VSFPROPID_Type`
+  HRESULT + null before `(int)value` (WindowManager.cs:240-241).
+- **Verify-with:** build 0 errors; existing suites pass (no-seam VS-coupled).
+- **Fails-if:** build error; an NRE escapes the navigation catch and is misdiagnosed as a binding
+  failure.
 
-| failing test / gate | implicated steps | expected pass signal |
-|---|---|---|
-| `Run_ActionTable_TextInput_ActionKeysMatchTable` (count 6→7) | BP-1 | PASS with count 7; `Run_TextInput_KeysIMapsToInsertStart` PASS; `[NeoVisual] textinput-enter-input start caret=0` restored |
-| `Run_VimBufferSubscriptions_*` (new) | BP-2 | PASS; focused view's `vim-mode=` subscription survives a non-focused view close |
-| `Run_StaleToolWindowSentinel_*` | BP-4 | PASS (caching semantics unchanged); no per-key `File.Exists` |
-| `Run_LeaderMatcher_ActiveSequenceConsumesI` (new) | BP-5 | PASS; `Keys.I` guarded on `!_leaderMatcher.IsActive` |
-| `Run_LeaderMatcher_PrefixSetBuiltOnce` (new) | BP-6 | PASS; prefix set precomputed once; `Run_LeaderMatcher_*` family PASS |
-| `Run_FzfFilter_TimeoutKillsAndFallsBack` | BP-8 | PASS (bounded wall time, both tasks awaited); `[Telescope] fzf filter failed: timeout after {ms}ms` |
-| `Run_GrepFinder_OffThreadScanSameHits` (new) | BP-9 | PASS; `[Telescope] grep hits=...` unchanged |
-| `Run_FileContentCache_CachedRead` / `_InvalidatesOnTimestampChange` | BP-10 | PASS (mtime-keyed cache); preview re-tokenizes only on change |
-| `Run_FileContentCache_EvictsOldest` / `_ClearOnSolutionChange` (new) | BP-11 | PASS (LRU cap + clear) |
-| `Run_Issues_CollectTodosUsesCache` (new) | BP-12 | PASS (cache hit on second scan) |
-| `Run_FzfFilter_IsAvailableBounded` (new) | BP-13 | PASS (bounded wall time) |
-| `Run_Preview_UpFromSecondLineWithLeadingBlankLine` (corrected) + `_Fixed` (new) | BP-14 | PASS (line 1/caret 0); `[Telescope] preview caret=... line=...` unchanged |
-| `Run_ResultMapper_UnknownStringSkippedOrLogged` (new) + `_UnknownStringNullPayload` (updated) | BP-15 | PASS (no null-payload no-op); `[Telescope] result-mapper unknown display: {display}` |
-| `Run_TryDispatch_DollarWithoutShiftNotHandled` + rewritten `Run_TextMotionEngine_MapMotion_*` | BP-16 | PASS (unified `$` contract; single dispatch table) |
-| `Run_WindowNavigationEngine_*` | BP-18, BP-20, BP-21 | PASS (behavior-preserving); `[NeoVisual] navigate direction=L/R/D/U` unchanged |
-| `Run_ToolWindowType_UnknownGuid` / `Run_ToolWindowMode_*` | BP-19 | PASS (ctor classification + `Guid.Empty`) |
-| `Run_VimModeTracker_LogOnlyOnChange` (new) | BP-26 | PASS (no duplicate `vim-mode=` on same-mode event); `[NeoVisual] vim-mode=Insert|Normal|Replace` unchanged |
-| `Run_FilterFailureLog_Format` (updated) | BP-28 | PASS (`"filter failed: boom"`); emitted `[Telescope] filter failed: {msg}` byte-identical |
-| `dotnet build MyExtension.slnx` | BP-3, BP-7, BP-17, BP-22, BP-23, BP-24, BP-25, BP-27 | 0 errors |
-| both unit suites (counts unchanged) | all BP-n | Telescope.Tests 135+ / NeoVisual.Tests 130+ all PASS |
+### BP-31 — m44: null-active-window check before `LinkedTo` (pure helper)
+- **Files:** `MyExtension/Navigation/WindowMatrix.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Extract a pure static helper `WindowMatrix.BuildActiveWindows(EnvDTE.Window? active,
+  IReadOnlyList<WindowAdapter> adapters)` that null-checks `active` BEFORE linking (moves the
+  `activeWindow == null` check at WindowMatrix.cs:50-58 ahead of `WindowAdapter.LinkedTo(...)` at
+  WindowMatrix.cs:47, so the graceful-degradation branch is reachable). The ctor calls it.
+  **Phase 4 extracts the helper under the CURRENT names** (`WindowMatrix`/`WindowAdapter`); the
+  class is renamed `WindowMatrix`→`WindowNavigator` and `WindowAdapter`→`WindowFrameAdapter` in
+  Phase 11 (BP-69), and BP-70 updates the helper + test type references to the post-restructure
+  names (`WindowNavigator.BuildActiveWindows(EnvDTE.Window? active, IReadOnlyList<WindowFrameAdapter>
+  adapters)`).
+- **Verify-with:** `Run_WindowMatrix_BuildActiveWindowsNullActive` (NeoVisual.Tests) — a null
+  active window degrades to an empty/no-op window list (RED: today the deref precedes the null
+  check). NOTE for the Phase 4 build agent: write the test under the CURRENT class name
+  (`WindowMatrix`); BP-70 renames it to `Run_WindowNavigator_BuildActiveWindowsNullActive` after
+  the Phase 11 rename.
+- **Fails-if:** `Run_WindowMatrix_BuildActiveWindowsNullActive` fails; a null active window
+  throws.
 
-## Known-RED allowlist
+### BP-32 — m46: per-window fault isolation
+- **Files:** `MyExtension/Navigation/WindowMatrix.cs`
+- **Change:** Wrap each `w.Rect` read in `_activeWindows.Select(w => w.Rect).ToList()`
+  (WindowMatrix.cs:94) in a per-window try/catch so one stale frame can't kill all navigation.
+- **Verify-with:** build 0 errors; existing suites pass (no-seam VS-coupled).
+- **Fails-if:** build error; one stale frame still kills all navigation.
 
-**NONE** — per `docs/progress.md`, no known-RED e2e scenario remains. The following items are
-**no-seam** (verified by build + existing suites + the deferred e2e gate, NOT by a new unit test —
-do NOT flag them as regressions if their only verification is the build): M1 (BP-3), M2 wiring
-(BP-4), M6 copy-elimination (BP-17), M8 (BP-24), M9 (BP-18), M12 (BP-25), M14 (BP-19), M25
-(BP-27), m17 (BP-7), m4/m5/m6 (BP-21/22/23).
+### BP-33 — n4 + n5 + n6 + n19: Direction using, ExtractFrames assert, NavigationSnapshot struct, frame4 fallback log
+- **Files:** `MyExtension/Navigation/Direction.cs`, `MyExtension/Navigation/WindowAdapter.cs`,
+  `MyExtension/Navigation/NavigationSnapshot.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** (n4) Move `using System;` to the top of Direction.cs:3. (n5) Assert
+  `ThrowIfNotOnUIThread` before the `ExtractFrames` iterator (WindowAdapter.cs:97-99). (n6) Make
+  `NavigationSnapshot` a `readonly struct` (NavigationSnapshot.cs:9). (n19) Log the
+  `RectCoordinate.Empty` fallback once when a frame lacks `IVsWindowFrame4` (WindowAdapter.cs:118,131).
+- **Verify-with:** build 0 errors; `Run_WindowAdapter_*` / `Run_NavigationSnapshot_*`
+  (NeoVisual.Tests) pass (behavior-preserving).
+- **Fails-if:** build error; a navigation test regresses.
 
-## E2E queue reference (informational — deferred to `e2e-queue.md`, NOT part of this plan's Verify-with)
+## Phase 5 — Controller/state (m20, m21, m22, m23, m24, m25, m26, m59, n7, n8, n9, n10)
 
-- E2E-CR-1 (`neovisual-textinput-motions`): `textinput-enter-input start caret=0` on `I` (BP-1).
-- E2E-CR-2 (multi-view): closing a non-focused view does not kill the focused view's `vim-mode=` subscription (BP-2).
-- E2E-M1/M2/M15 (hook hot-path): no per-key COM/stat; `neovisual-*` still GREEN (BP-3/4/5).
-- E2E-M3/M4/M5/M13 (finder): `grep hits=...`, `results count=...`, `preview caret=...` unchanged; fzf failure paths log `fzf filter failed:` / `filter failed:` (BP-8/9/10/11/12/13).
-- E2E-M10/M11/M19/M6 (motion/preview): caret positions unchanged; the `$` drift fixed (BP-14/15/16/17).
-- E2E-M9/M14 (navigation): `navigate direction=L/R/D/U` unchanged (BP-18/19).
-- E2E-M8/M12/M16/M25 (safety/logging): `vim-mode=` unchanged; a controller exception logs `toolwindow-move failed:` and passes through (BP-24/25/26/27).
+### BP-34 — m20 + m21: FocusKeeper constant + stop-on-close
+- **Files:** `MyExtension/ToolWindows/SolutionExplorerController.cs`
+- **Change:** (m20) Replace the literal `1500` (SolutionExplorerController.cs:234) with the
+  `FocusKeeperDurationMs` constant. (m21) Add a stop-on-close to the FocusKeeper re-assert (verify
+  the window is still visible before re-asserting).
+- **Verify-with:** build 0 errors; existing suites pass (no-seam VS-coupled).
+- **Fails-if:** build error; the keeper re-asserts after the window closes.
 
-DONE
+### BP-35 — m22: per-type default controllers
+- **Files:** `MyExtension/ToolWindows/WindowManager.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Replace the shared `_defaultController` (WindowManager.cs:25,186-190) with per-type
+  default instances so `_isInputMode` doesn't leak across unknown-GUID tool windows.
+- **Verify-with:** `Run_WindowManager_*` (NeoVisual.Tests) — the shared-instance leak is gone (RED:
+  observable today).
+- **Fails-if:** `Run_WindowManager_*` fails; one tool window's input mode leaks into another.
 
----
+### BP-36 — m23: drop the dead ctor branch
+- **Files:** `MyExtension/ToolWindows/GeneralToolWindowController.cs`,
+  `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Drop the `_isInputMode = IsTextInputType(type)` ctor branch
+  (GeneralToolWindowController.cs:31) if the base/initial-mode flow already covers it.
+- **Verify-with:** behavior-preserving — `Run_GeneralToolWindowController_*` (NeoVisual.Tests) pass.
+- **Fails-if:** `Run_GeneralToolWindowController_*` fails; the initial mode changes.
 
-# Build Plan — Phases 6-10 (Code-Review Fixes: duplication, dead code, harness, tests, docs)
+### BP-37 — m24: style the editor view on insert placements
+- **Files:** `MyExtension/ToolWindows/TextMotionHelper.cs`
+- **Change:** In the editor-view path (TextMotionHelper.cs:98), pass `styleCaret: true` (or style
+  the editor view on insert placements) so the block caret doesn't persist in insert mode after
+  `a`/`A`/`I`.
+- **Verify-with:** build 0 errors; existing suites pass (no-seam WPF editor view — deferred e2e).
+- **Fails-if:** build error; the block caret persists in insert mode.
 
-> **Lane:** unit-only (e2e deferred to `e2e-queue.md`). Every `Verify-with` / `Fails-if`
-> references **unit test names + diagnostic formats ONLY** — no e2e scenario names. The
-> deferred e2e scenarios appear only informationally at the end.
->
-> **Ground truth:** `dotnet build MyExtension.slnx` = 0 errors; `tests/Telescope.Tests` 135
-> passing; `tests/NeoVisual.Tests` 130 passing (counts drift upward as Phases 0-9 add tests).
-> **Known-RED allowlist:** none — no known-RED e2e scenario remains (per `docs/progress.md`).
->
-> **Research corrections folded in (from the plan):**
-> - **M17** coordinates with **M16** (both touch the `vim-mode=` log — M16's log-on-change
->   contract must survive the M17 wiring).
-> - **M27** is scoped to `tools/test-e2e.ps1:518` ONLY; `:1533`/`:1537` legitimately assert
->   `count=0` (`telescope-no-selection`) and must NOT be touched.
-> - **m28**'s stale "Text.UI not referenced" comment is wrong — `tests/NeoVisual.Tests/NeoVisual.Tests.csproj`
->   references `Microsoft.VisualStudio.Text.UI` (line 31), so `TextInputToolWindowController.TryMove`
->   IS callable on the test host; only `SelectFirstSourceFile` stays VS-coupled.
-> - **m12** — `TextMotionNavigator.ColumnNumber` is test-pinned (`Run_Preview_JkMoveByLine`), so the
->   "verify first" resolves to: delete it AND update the 2 test assertions to assert `Caret` directly.
-> - **m19** — the `iterate-telescope.ps1:220-224` comment claims `NEOVISUAL_LOG_DIR` is
->   "intentionally User-scoped"; the adjudicated fix is Process scope, so that comment is updated too.
->
-> **Log-line-as-contract:** no `[Telescope]`/`[NeoVisual]`/`[MyExtension]` log literal may change in
-> Phases 6-10. The only product diagnostic touched is `vim-mode=` (M17, coordinated with M16 — the
-> emitted token stays `vim-mode=Insert|Normal|Replace|Unknown` byte-identical).
+### BP-38 — m25: unify the catch/log helper
+- **Files:** `MyExtension/ToolWindows/SolutionExplorerController.cs`
+- **Change:** Unify the 3× try/catch + `Log(...failed: {msg})` swallow idiom
+  (SolutionExplorerController.cs:137,248,376) into one helper.
+- **Verify-with:** build 0 errors; existing suites pass (no-seam).
+- **Fails-if:** build error; a failure path stops logging.
 
----
+### BP-39 — m26 + m59: HierarchyResolver `.cs` filter + `g` pick test
+- **Files:** `MyExtension/ToolWindows/HierarchyResolver.cs`,
+  `MyExtension/ToolWindows/HierarchyForestBuilder.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** (m26) Move the `.cs` filter into `HierarchyResolver.FirstSourceFilePath`
+  (HierarchyResolver.cs:22-36) (or rename to `FirstPhysicalFilePath`). (m59) Extract the pure pick
+  (which node to select) and test it.
+- **Verify-with:** `Run_HierarchyResolver_*` (NeoVisual.Tests) — an unfiltered forest returns a
+  `.cs` file, not a non-.cs file (RED: today it returns the first physical file regardless of
+  extension). `Run_HierarchyForestBuilder_*` still pass. Diagnostic: `[NeoVisual] solution-explorer
+  select file=...` unchanged.
+- **Fails-if:** `Run_HierarchyResolver_*` fails; `g` selects a non-.cs file.
 
-## Phase 6 — Duplication merges (M18, M20, M21, M22, M24, m13)
+### BP-40 — n8 + n9 + n10: WindowManager keeperRef, ComputeTextInputSurfaceFocused, arrow-fallback log
+- **Files:** `MyExtension/ToolWindows/WindowManager.cs`, `MyExtension/ToolWindows/FocusKeeper.cs`,
+  `MyExtension/ToolWindows/TextMotionHelper.cs`
+- **Change:** (n7 — DROPPED: the WindowManager class body is already correctly indented; the
+  reindent is a no-op, verified against the source). (n8) Delete the
+  redundant `keeperRef` local (FocusKeeper.cs:18). (n9) Skip `ComputeTextInputSurfaceFocused()` in
+  the non-tool branch (WindowManager.cs:264). (n10) Align the arrow-fallback log contract
+  (TextMotionHelper.cs:120) with `TryMoveArrow`'s bare `toolwindow-move key=... -> arrow vk=...`.
+- **Verify-with:** build 0 errors; existing suites pass. Diagnostic:
+  `[NeoVisual] toolwindow-move key=... -> arrow vk=...` unchanged (n10 aligns the fallback to the
+  same contract).
+- **Fails-if:** build error; the arrow-fallback log drifts from the contract.
 
-### BP-1 — M18: `SimpleShortcutMatcher` delegates to `KeyNameBuilder.Build`
-- **Files:** `MyExtension/SimpleShortcutMatcher.cs`, `MyExtension/KeyNameBuilder.cs`
-- **Change:** Delete the private `BuildSimpleKey` (SimpleShortcutMatcher.cs:77-85) and have
-  `HandleKey` call `KeyNameBuilder.Build(key, ctrl, shift, alt)` (the identical canonical-shortcut
-  logic, single-allocation). `KeyNameBuilder` is `internal static` in the same assembly — no
-  accessibility change. No behavior change: both produce `Ctrl+H` / `Shift+F4` / `Alt+X` /
-  `Ctrl+Shift+Alt+Delete` / printable-key strings.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- SimpleShortcutMatcher` → all
-  `Run_SimpleShortcutMatcher_*` pass (incl. `Run_SimpleShortcutMatcher_ModifierOrderShiftF4`,
-  `Run_SimpleShortcutMatcher_PrintableKeys`, `Run_SimpleShortcutMatcher_AltX`); `dotnet run --project
-  tests/NeoVisual.Tests -- KeyNameBuilder` → all `Run_KeyNameBuilder_*` pass; grep confirms no
-  `BuildSimpleKey` remains (the duplicate canonical-shortcut logic is gone).
-- **Fails-if:** `Run_SimpleShortcutMatcher_ModifierOrderShiftF4` or `Run_SimpleShortcutMatcher_PrintableKeys`
-  fails (the delegation changed the emitted string) or `BuildSimpleKey` still exists (dedup incomplete).
+## Phase 6 — Duplication merges (m8, m9, m16, m17, m18, m19, m35, n11)
 
-### BP-2 — M20: shared text-motion action wiring + J/K arrow reuse
+### BP-41 — m9 + m17: single-source `KeyToArrowVk`
+- **Files:** `MyExtension/ToolWindows/GeneralToolWindowController.cs`,
+  `MyExtension/ToolWindows/TextMotionHelper.cs`, `MyExtension/ToolWindows/SolutionExplorerController.cs`,
+  `tests/NeoVisual.Tests/Program.cs`
+- **Change:** (m9) Single-source `KeyToArrowVk` (GeneralToolWindowController.cs:66-76 +
+  TextMotionHelper.cs:117). (m17) Make SolutionExplorerController's H/L use `KeyToArrowVk` instead
+  of hardcoded `VK_LEFT`/`VK_RIGHT` (SolutionExplorerController.cs:46-47).
+- **Verify-with:** `Run_GeneralToolWindowController_*` (NeoVisual.Tests) — behavior-preserving.
+  Diagnostic: `[NeoVisual] toolwindow-move key=... -> arrow vk=...` unchanged.
+- **Fails-if:** `Run_GeneralToolWindowController_*` fails; the arrow VK mapping drifts.
+
+### BP-42 — m16: W/B/E wiring to `ToolWindowControllerBase`
 - **Files:** `MyExtension/ToolWindows/ToolWindowControllerBase.cs`,
   `MyExtension/ToolWindows/TextInputToolWindowController.cs`,
-  `MyExtension/ToolWindows/SolutionExplorerController.cs`,
-  `MyExtension/ToolWindows/GeneralToolWindowController.cs`
-- **Change:** (a) Add a protected helper on `ToolWindowControllerBase`:
-  `protected Func<bool> TextMotion(Keys key) => () => TextMotionHelper.TryMoveFocusedSurface(key, ref _isInputMode);`
-  and replace the verbatim W/B/E (and A/H/L in TextInput) entries in both controllers with
-  `[Keys.W] = TextMotion(Keys.W)` etc. (b) Make `GeneralToolWindowController.KeyToArrowVk` `internal
-  static` and extract the shared arrow path `internal static bool TryMoveArrow(Keys key)` that maps
-  via `KeyToArrowVk`, logs `[NeoVisual] toolwindow-move key={key} -> arrow vk={vk}` (byte-identical
-  format), presses via `KeyInjection.Press(vk)`, returns true. `GeneralToolWindowController.TryMove`
-  and `SolutionExplorerController`'s `[Keys.J]`/`[Keys.K]` entries both call it. No MEF/DI change —
-  the controllers are still registered in `MyExtensionPackage` exactly as today.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- ActionTable` → all
-  `Run_ActionTable_*` pass, incl. the exact-set `Run_ActionTable_SolutionExplorer_ActionKeysMatchTable`
-  and `Run_ActionTable_TextInput_ActionKeysMatchTable` (the key sets are unchanged — only the wiring
-  is shared). `dotnet build` 0 errors.
-- **Fails-if:** an exact-set `Run_ActionTable_*_ActionKeysMatchTable` test fails (a key was dropped
-  or added by the refactor) or the `toolwindow-move key=... -> arrow vk=...` format drifted (deferred
-  e2e `neovisual-toolwindow` would catch it — informational).
-
-### BP-3 — M21: drop the throwaway `pathToItem` param from `HierarchyForestBuilder.Build`
-- **Files:** `MyExtension/ToolWindows/HierarchyForestBuilder.cs`,
   `MyExtension/ToolWindows/SolutionExplorerController.cs`, `tests/NeoVisual.Tests/Program.cs`
-- **Change:** (a) `HierarchyForestBuilder.Build(IEnumerable<HierarchyItemInfo> items)` — remove the
-  `Dictionary<string, string> pathToItem` param and the `pathToItem[item.FullPath] = item.FullPath`
-  write (the map is never read by any caller). (b) Keep the `.cs` filter in exactly ONE place — the
-  pure builder (HierarchyForestBuilder.cs:49-50); remove the duplicate `.cs` filter from
-  `SolutionExplorerController.MapChildren` (line 324-325) so it passes all physical files through
-  (the builder filters; the DTE `pathToItem` map gains harmless non-.cs entries that are never picked).
-  (c) Update `ResolveTreeItem`'s `Build(items, ...)` call (line 270) to the new signature. (d) Update
-  the 5 `Run_HierarchyForestBuilder_*` tests to the new signature — `_FullPathFlowsThroughAndPathMap`
-  and `_NonFolderNonFileKindsSkipped` drop their map assertions and assert the forest only.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- HierarchyForestBuilder` → all
-  `Run_HierarchyForestBuilder_*` pass (forest output unchanged); `dotnet build` 0 errors.
-- **Fails-if:** build error (a caller/test still passes the old 2-arg signature — the RED) or a
-  `Run_HierarchyForestBuilder_*` test fails (the forest changed).
-
-### BP-4 — M22: single `FocusGuard.OwnsKeyboard` exemption
-- **Files:** `MyExtension/ToolWindows/FocusGuard.cs`, `MyExtension/InputHandler.cs`,
-  `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Add `public static bool OwnsKeyboard(bool isInputMode, bool isTextInputSurface, bool
-  textInputSurfaceFocused) => isInputMode || (isTextInputSurface && textInputSurfaceFocused);` to
-  `FocusGuard`. Route all three formulations through it: `HasToolWindowActionKeys` →
-  `(!editorFocused || OwnsKeyboard(isInputMode, isTextInputSurface, textInputSurfaceFocused))`;
-  `ShouldRouteToolWindowKey` → `isToolWindow && !(editorFocused && !OwnsKeyboard(...))`;
-  `InputHandler.EditorFocusedVeto` (line 95-98) → `_vsVim.IsEditorFocused && !FocusGuard.OwnsKeyboard(
-  _windowManager.CurrentController?.IsInputMode == true, GeneralToolWindowController.IsTextInputType(
-  _windowManager.Type), _windowManager.TextInputSurfaceFocused)`. The existing `HasToolWindowActionKeys`
-  / `ShouldRouteToolWindowKey` signatures are UNCHANGED (no test churn). Add
-  `Run_FocusGuard_OwnsKeyboard_TruthTable` asserting the helper (input-mode owns; text-input-surface
-  focused owns; neither → false).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- FocusGuard` → all `Run_FocusGuard_*`
-  pass (behavior-preserving) incl. the new `Run_FocusGuard_OwnsKeyboard_TruthTable`.
-- **Fails-if:** a `Run_FocusGuard_*` test fails (the exemption semantics changed) or
-  `Run_FocusGuard_OwnsKeyboard_TruthTable` fails (the helper's truth table is wrong).
-
-### BP-5 — M24: unify the sync/async init-step logging contract
-- **Files:** `MyExtension/InitSteps.cs`, `MyExtension/MyExtensionPackage.cs`
-- **Change:** Add `public static void RunSync(string name, Action step, Action<string> log)` to
-  `InitSteps` — the same per-step try/catch + `[MyExtension] init {name} ok` /
-  `[MyExtension] init {name} failed: {ex.Message}` contract as `RunAsync`, for a synchronous step.
-  Replace `MyExtensionPackage.RunInitStep` (lines 164-175) with a thin delegate to
-  `InitSteps.RunSync(name, step, msg => NeoVisualLog.Log(msg))` (or delete it and update the 3 call
-  sites at lines 61-63). The 3 log-config steps stay where they are (before `SwitchToMainThreadAsync`)
-  — only the try/catch + log contract is unified. Diagnostic contract unchanged:
-  `[MyExtension] init <step> ok/failed: {msg}`.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- InitSteps` → all `Run_InitSteps_*`
-  pass (behavior-preserving) + new `Run_InitSteps_RunSyncLogsOk` (a sync step logs
-  `[MyExtension] init x ok`) and `Run_InitSteps_RunSyncFailingLogsFailed` (a throwing sync step logs
-  `[MyExtension] init x failed: boom` and does not throw).
-- **Fails-if:** `Run_InitSteps_RunSyncLogsOk` / `Run_InitSteps_RunSyncFailingLogsFailed` fail
-  (`InitSteps.RunSync` missing → compile error, or the log format drifted) or a `Run_InitSteps_*`
-  test regresses.
-
-### BP-6 — m13: finders route the open guard through `HitOpener`
-- **Files:** `Telescope/FileFinder.cs`, `Telescope/CodeIssuesFinder.cs`, `Telescope/GrepFinder.cs`,
-  `Telescope/HitOpener.cs`
-- **Change:** Replace the duplicated `if (!File.Exists(hit.FilePath)) return;` guard + open in
-  `FileFinder.OpenHit` (line 75), `CodeIssuesFinder.OpenHit` (line 111), and `GrepFinder.OpenHit`
-  (line 137) with `HitOpener.OpenAtLine(hit, (path, line) => { ...open + log... })` (the hermetic
-  `_testOpener` branch stays first, unchanged). `HitOpener` already owns the null/missing-file guard
-  (HitOpener.cs:14). Log lines stay byte-identical: `[Telescope] opened file: ...`,
-  `[Telescope] opened issue: ... line=...`, `[Telescope] opened grep: file=... line=...`.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- HitOpener` → all `Run_HitOpener_*`
-  pass (incl. `Run_HitOpener_MissingFileDoesNotInvoke`); `dotnet run --project tests/Telescope.Tests
-  -- FileFinder` / `-- Grep` / `-- Issues` → the finder suites still pass.
-- **Fails-if:** `Run_HitOpener_MissingFileDoesNotInvoke` fails or a finder test regresses (the
-  consolidated guard changed open behavior) or a `[Telescope] opened ...` log literal drifted.
-
-**Phase 6 gate:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-tests/NeoVisual.Tests` and `dotnet run --project tests/Telescope.Tests` all pass.
-
----
-
-## Phase 7 — Dead code deletion (M17, M23, m11, m12)
-
-### BP-7 — M17: wire `VimModeTracker` through `VimModeState` (single owner) — coordinated with M16
-- **Files:** `MyExtension/VimModeState.cs`, `MyExtension/VimModeTracker.cs`,
-  `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Make `VimModeState.SetMode(int? mode)` return `bool` (whether the mode changed) so the
-  tracker can gate the `vim-mode=` log (M16's log-on-change contract). `VimModeTracker` replaces its
-  `_cachedTyping` field with a `private readonly VimModeState _state = new();`:
-  `IsInTypingMode => _state.IsTyping`; `UpdateTypingFromMode(int? mode)` calls
-  `if (_state.SetMode(mode)) Telescope.NeoVisualLog.Log($"{...}vim-mode={_state.ModeName}")`;
-  `OnViewLostFocus`/`OnViewClosed` delegate to `_state.OnViewLostFocus(isFocusedView)` /
-  `_state.OnViewClosed(isFocusedView)` and log `vim-mode=Unknown` only when the returned flag is true.
-  `_editorFocused` stays in the tracker (focus state, not mode state). The emitted token stays
-  `vim-mode=Insert|Normal|Replace|Unknown` byte-identical. Existing `Run_VimModeState_*` tests ignore
-  the new `SetMode` return (still compile).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- VimModeState` → all
-  `Run_VimModeState_*` pass; `dotnet run --project tests/NeoVisual.Tests -- VimModeSource` → all
-  `Run_VimModeSource_*` pass, incl. `Run_VimModeSource_FakeLogsVimMode` (asserts the file contains
-  `[NeoVisual] vim-mode=Insert` / `vim-mode=Normal` — the M16 log-on-change contract survives).
-- **Fails-if:** `Run_VimModeSource_FakeLogsVimMode` fails (the `vim-mode=` log broke or double-logs on
-  an unchanged mode) or a `Run_VimModeState_*` test fails (the state owner regressed).
-
-### BP-8 — M23 (code): delete the dead-code cluster
-- **Files:** `MyExtension/CardinalMovment/UtilityMethods.cs` (delete `GetWindowsList`, line 30),
-  `MyExtension/CardinalMovment/WindowAdapter.cs` (delete `IsOnScreen`, line 51),
-  `MyExtension/CardinalMovment/Direction.cs` (delete `DirectionExtensions.Sign`, line 24),
-  `MyExtension/CardinalMovment/LinqExtensionMethods.cs` (delete the whole file — it only held
-  `DistinctBy`), `tests/NeoVisual.Tests/Program.cs` (delete `Run_DistinctBy_DeduplicatesOnKey`,
-  line 1025)
-- **Change:** Delete the four zero-production-caller members (verified: `GetWindowsList`, `IsOnScreen`,
-  `DirectionExtensions.Sign`, `DistinctBy` have no callers outside the deleted test). Delete
-  `LinqExtensionMethods.cs` and `Run_DistinctBy_DeduplicatesOnKey`. No log literal is touched.
-- **Verify-with:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests` all pass with the count dropping by exactly 1 (the deleted DistinctBy test).
-- **Fails-if:** build error (a missed caller of a deleted member — the RED) or a NeoVisual test
-  regresses or the count does not drop by exactly 1.
-
-### BP-9 — M23 (docs): reference sweep for the deleted symbols + lint allowlist
-- **Files:** `AGENTS.md`, `docs/spec.md`, `.opencode/skills/vs-extension-dev/SKILL.md`,
-  `tools/check-doc-refs.ps1`
-- **Change:** Update every doc reference to the deleted symbols (grep `DistinctBy`, `IsOnScreen`,
-  `LinqExtensionMethods`):
-  - `AGENTS.md:314` — drop the "hand-rolls `DistinctBy`" net472 claim (reword to just
-    `IReadOnlySet<T>` is unavailable).
-  - `docs/spec.md:66` — remove `IsOnScreen` from the `WindowAdapter.cs` row; `:72` — remove the
-    `LinqExtensionMethods.cs` row; `:209` — drop `DistinctBy` from the test list; `:291` — reword the
-    net472 claim.
-  - `SKILL.md:67` — remove the `LinqExtensionMethods.cs` row; `:171` — reword the net472 claim.
-  - `tools/check-doc-refs.ps1` — add `DistinctBy` to the `$externalAllowlist` (the established
-    "recently removed" pattern, cf. `IsCompletionActive`/`Intersects` at lines 84-89) so the review
-    archives (`docs/architecture-review.md`, `.opencode/agent/code-review-worker.md`) that cite the
-    finding stay lint-clean.
-- **Verify-with:** `pwsh tools/check-doc-refs.ps1` → `[PASS] ... 0 unresolved` (the acceptance gate
-  for the removal sweep).
-- **Fails-if:** the lint reports unresolved `DistinctBy` / `IsOnScreen` / `LinqExtensionMethods.cs`
-  (a doc reference was missed) or a build error from a stale doc-driven reference.
-
-### BP-10 — m11: delete `OverlayKeyHandler.ResultCount`
-- **Files:** `Telescope/OverlayKeyHandler.cs`
-- **Change:** Delete the `ResultCount` property (OverlayKeyHandler.cs:78-82) — only `SetResults` is
-  used (verified: no callers). No log literal touched.
-- **Verify-with:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-  tests/Telescope.Tests -- KeyHandler` → all `Run_KeyHandler_*` pass (incl.
-  `Run_KeyHandler_NoSelectionWithoutResults`).
-- **Fails-if:** build error (a caller of `ResultCount` was missed — the RED) or a `Run_KeyHandler_*`
-  test regresses.
-
-### BP-11 — m12: delete `TextMotionNavigator.ColumnNumber` + update the pinned tests
-- **Files:** `Telescope/TextMotionNavigator.cs`, `tests/Telescope.Tests/Program.cs`
-- **Change:** Delete `ColumnNumber` (TextMotionNavigator.cs:54-65) — no production callers (verified);
-  the only users are the 2 assertions in `Run_Preview_JkMoveByLine` (lines 750, 755). Update those to
-  assert `Caret` directly: for `"alpha\nbeta\ngamma"`, `Down()` from caret 0 → caret 6 (line 2),
-  `Down()` → caret 11 (line 3), `Up()` → caret 6 (line 2). So `Assert.Equal(6, n.Caret)` replaces
-  `Assert.Equal(0, n.ColumnNumber - 1)` at both sites.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- Preview` → all `Run_Preview_*`
-  pass, incl. the updated `Run_Preview_JkMoveByLine`.
-- **Fails-if:** build error (a production caller of `ColumnNumber` was missed — the RED) or
-  `Run_Preview_JkMoveByLine` fails (the caret assertions are wrong).
-
-**Phase 7 gate:** `dotnet build MyExtension.slnx` 0 errors; both unit suites pass (NeoVisual count
-drops by 1 from BP-8); `pwsh tools/check-doc-refs.ps1` 0 unresolved (BP-9).
-
----
-
-## Phase 8 — Harness hardening (M26, M27, M28, m18, m19, m20)
-
-> Harness-only items (M26/M27/m18/m19/m20) have NO hermetic unit seam — their Verify-with is the
-> harness self-check seam where one exists, otherwise the deferred e2e. Stated honestly per item.
-
-### BP-12 — M26: tighten `preview tokens=\d+` → `preview tokens=[1-9]\d*`
-- **Files:** `tools/test-e2e.ps1`
-- **Change:** Line 974: `"$($script:PfxTel)preview tokens=\d+"` →
-  `"$($script:PfxTel)preview tokens=[1-9]\d*"` (a vacuous presence check — `\d+` matches `tokens=0`).
-  No-seam (harness).
-- **Verify-with:** harness self-check seam: none exists for this specific line — the honest gate is
-  the deferred e2e `telescope-preview` scenario asserting `[Telescope] preview tokens=[1-9]\d*`
-  (informational; the seeded `Motions.cs` always yields ≥1 token).
-- **Fails-if:** the deferred e2e `telescope-preview` fails on the tightened regex (a seeded file with
-  0 tokens — impossible for the seeded sources) or the regex was left as `\d+`.
-
-### BP-13 — M27: tighten `results count=(\d+)` → `results count=[1-9]\d*` at :518 ONLY
-- **Files:** `tools/test-e2e.ps1`
-- **Change:** Line 518: `"$($script:PfxTel)results count=(\d+)"` →
-  `"$($script:PfxTel)results count=[1-9]\d*"`. Do NOT touch `:1533`/`:1537` — `telescope-no-selection`
-  legitimately asserts `results count=0 selected=0`. No-seam (harness).
-- **Verify-with:** harness self-check seam: none for this line — the honest gate is the deferred e2e
-  `telescope-search` scenario (query `pro` matches ≥1 file → `results count=[1-9]\d*` passes) while
-  `telescope-no-selection` still passes (its `count=0` assertions are untouched).
-- **Fails-if:** the deferred e2e `telescope-search` fails on the tightened regex (a filter that
-  legitimately returns 0 — `pro` matches seeded files, so count ≥ 1) or `:1533`/`:1537` were
-  accidentally changed.
-
-### BP-14 — M28: inject a controllable timer seam into `LogFileWriter`; make the flush-timer tests deterministic
-- **Files:** `Telescope/LogFileWriter.cs`, `tests/Telescope.Tests/Program.cs`
-- **Change:** Add `internal static Func<Action, IDisposable>? TimerScheduler` to `LogFileWriter`.
-  `EnsureTimer()` uses it when set (`_flushTimer = TimerScheduler(Flush)`), else the real
-  `new Timer(...)`; change `_flushTimer` to `IDisposable?` and guard the re-arm in `GetWriter` to
-  `if (_flushTimer is Timer t) t.Change(200, Timeout.Infinite);`. Rewrite
-  `Run_LogFileWriter_FlushTimer_OneShotFires` and `Run_LogFileWriter_FlushTimer_IdleDoesNotFire` to
-  inject a fake scheduler that captures the flush callback, then fire it (or not) deterministically —
-  NO wall-clock `Thread.Sleep` polling. Reset `TimerScheduler = null` in a `finally`.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FlushTimer` → both
-  `Run_LogFileWriter_FlushTimer_OneShotFires` (firing the captured callback advances `FlushCount`) and
-  `Run_LogFileWriter_FlushTimer_IdleDoesNotFire` (not firing leaves `FlushCount` unchanged) pass
-  deterministically (no sleeps).
-- **Fails-if:** `Run_LogFileWriter_FlushTimer_*` still sleep-poll (the seam wasn't used) or
-  `Run_LogFileWriter_FlushTimer_OneShotFires` fails (the fake timer doesn't advance `FlushCount`).
-
-### BP-15 — m18: PID-scope `Stop-HarnessVs`
-- **Files:** `tools/test-e2e.ps1` (line 131), `tools/iterate-telescope.ps1` (line 98)
-- **Change:** Convert `Stop-HarnessVs` (both copies) from title-matching any devenv
-  (`MainWindowTitle -match 'MyExtension'|'Experimental'`) to PID-scoped kills via the M-M5
-  `Stop-VsPids`/`$script:SpawnedVsPids` pattern — kill ONLY the devenv PIDs this run spawned/tracked
-  (`Add-SpawnedVs` on every `Start-Process devenv`). A user's unrelated VS instance is never killed.
-  No-seam (harness).
-- **Verify-with:** harness self-check seam: `pwsh tools/iterate-telescope.ps1 -SelfCheck` already
-  proves `Stop-SpawnedVs` kills exactly the listed PID and leaves an unlisted one alive (the M-M5
-  pattern); the honest gate for the `Stop-HarnessVs` conversion is the deferred e2e full suite (no
-  user VS terminated).
-- **Fails-if:** the deferred e2e kills a user's unrelated VS instance (a title-scoped kill remains)
-  or the self-check fails (the PID-scoped kill is not exact).
-
-### BP-16 — m19: `NEOVISUAL_LOG_DIR` → Process scope
-- **Files:** `tools/iterate-telescope.ps1`
-- **Change:** Line 226: `[Environment]::SetEnvironmentVariable('NEOVISUAL_LOG_DIR', $logDir, 'User')`
-  → `'Process'` (no persistent User-scope env mutation). Update the stale comment at lines 220-224
-  that documents the "intentionally User-scoped" intent. Extend the `-SelfCheck` env-scope check
-  (lines 162-169) to also assert `NEOVISUAL_LOG_DIR` User-scope is unchanged before/after the run.
-  No-seam (harness).
-- **Verify-with:** harness self-check seam: `pwsh tools/iterate-telescope.ps1 -SelfCheck` → the
-  extended check asserts `NEOVISUAL_LOG_DIR` User-scope unchanged (not written by the harness).
-- **Fails-if:** the self-check reports `NEOVISUAL_LOG_DIR` still written to User scope, or the stale
-  "intentionally User-scoped" comment remains.
-
-### BP-17 — m20: clean the stale `check-doc-refs.ps1` allowlist
-- **Files:** `tools/check-doc-refs.ps1`
-- **Change:** Remove `LeaderSequenceMatcher` and `FocusKeeper` from `$proposedSymbols` (lines 132-135)
-  and `tools/harness-common.ps1` from `$proposedPaths` (lines 136-138) — all three now exist and the
-  "proposed" entries mask real drift. Keep `SimpleKeyBuilder` and `FzfFinder` (still proposed).
-  No-seam (harness).
-- **Verify-with:** `pwsh tools/check-doc-refs.ps1` → `[PASS] ... 0 unresolved` (the lint now actually
-  resolves `LeaderSequenceMatcher` / `FocusKeeper` / `tools/harness-common.ps1` against the source
-  tree instead of masking them).
-- **Fails-if:** the lint reports unresolved `LeaderSequenceMatcher` / `FocusKeeper` /
-  `tools/harness-common.ps1` (the removal exposed real drift — a doc references them but they don't
-  resolve) or the still-proposed `SimpleKeyBuilder`/`FzfFinder` were removed.
-
-**Phase 8 gate:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-tests/Telescope.Tests -- FlushTimer` deterministic; `pwsh tools/iterate-telescope.ps1 -SelfCheck`
-passes; `pwsh tools/check-doc-refs.ps1` 0 unresolved.
-
----
-
-## Phase 9 — Test hermeticity + naming sweep (m1, m2, m7, m8, m9, m10, m21-m30, m32, n1, n2)
-
-### BP-18 — m21: `TestRunner.TempDir.Dispose` surfaces delete failures
-- **Files:** `tests/TestRunner.cs`, `tests/Telescope.Tests/Program.cs`
-- **Change:** `TempDir.Dispose` (TestRunner.cs:144-147) rethrows on recursive-delete failure instead
-  of swallowing (`catch { }` → rethrow). Add `Run_TempDir_DisposeSurfacesFailure` (Telescope.Tests):
-  create a `TempDir`, sabotage the delete (delete the dir and create a file at the same path), call
-  `Dispose`, and assert it throws (try/catch — the runner fails the test if it does not throw).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- TempDir` →
-  `Run_TempDir_DisposeSurfacesFailure` passes (Dispose throws on the sabotaged delete).
-- **Fails-if:** `Run_TempDir_DisposeSurfacesFailure` fails (Dispose still swallows) or an existing
-  test that relied on silent dispose failure now fails (the surfaced error is real).
-
-### BP-19 — m22: `Run_FzfFilter_FilterMatchesPrefix` uses the injected-path seam
-- **Files:** `tests/Telescope.Tests/Program.cs`
-- **Change:** Rewrite `Run_FzfFilter_FilterMatchesPrefix` (line 464) to resolve the fzf path
-  explicitly (e.g. from PATH) and inject it via `new FzfFilter(fzfPath)`; fail loudly when fzf is
-  absent (no silent skip, no implicit PATH resolution via the default ctor — the Mystery Guest is
-  explicit).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FzfFilter` →
-  `Run_FzfFilter_FilterMatchesPrefix` passes with fzf on PATH (the injected path filters `alp` →
-  `alpha.cs`), or fails loudly without fzf.
-- **Fails-if:** the test silently passes without exercising the real filter (the Mystery Guest
-  remains) or the injected path is not used.
-
-### BP-20 — m23: `Run_FinderBase_OpenErrorSwallowed` gains a real assertion
-- **Files:** `tests/Telescope.Tests/Program.cs`
-- **Change:** Add the missing assertion to `Run_FinderBase_OpenErrorSwallowed` (line 1298): after
-  `finder.OnSelected(...)`, flush the log and assert exactly one `[Telescope] open item failed: open
-  boom` line (mirroring the existing `Run_FinderBase_OpenErrorSingleLog` pattern at line 1331).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- FinderBase` →
-  `Run_FinderBase_OpenErrorSwallowed` passes WITH the assertion (the log contains exactly one
-  `[Telescope] open item failed: open boom` line).
-- **Fails-if:** the test passes without asserting (no assertion added) or the single-log assertion
-  fails (the error is double-logged or not logged).
-
-### BP-21 — m24: `Run_Syntax_KeywordsAndIdentifiers` asserts the exact token sequence
-- **Files:** `tests/Telescope.Tests/Program.cs`
-- **Change:** Replace the weak presence checks in `Run_Syntax_KeywordsAndIdentifiers` (line 1563) with
-  an exact-sequence assertion for `SyntaxHighlighter.Tokenize("public class Foo { }")` — assert the
-  ordered `(Text, Category)` pairs (e.g. `public`/Keyword, ` ` /Default, `class`/Keyword, ` ` /Default,
-  `Foo`/Default, ` ` /Default, `{`/Default, ` ` /Default, `}`/Default — the exact run boundaries are
-  whatever `Tokenize` produces; the assertion pins them).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- Syntax` →
-  `Run_Syntax_KeywordsAndIdentifiers` passes with the exact-sequence assertion.
-- **Fails-if:** the test fails (the asserted sequence does not match `Tokenize`'s actual output — the
-  assertion was wrong or the tokenizer changed) or the weak presence checks remain.
-
-### BP-22 — m25: split `Run_HierarchyResolver_FirstSourceFile`
-- **Files:** `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Split the 4 bundled sub-assertions (line 251) into focused tests with messages:
-  `Run_HierarchyResolver_FirstSourceFile_FileVsFolder`, `_FolderRecursion`,
-  `_SkipsNonFileNonFolder`, `_EmptyReturnsNull` (each with an `Assert.True(..., "message")`).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- HierarchyResolver` → all 4 split
-  tests pass (behavior preserved).
-- **Fails-if:** a split test fails (behavior changed) or the original Eager Test remains.
-
-### BP-23 — m26: named action-key-count constant (7 after CR1)
-- **Files:** `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Update `PositiveActionKeyCount` (line 623) from `5` to `7` (the real
-  `TextInputToolWindowController` action-key count after CR1 adds `Keys.I`) and replace the hardcoded
-  `actionKeyCount: 6` at lines 731/744 with the named constant.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- FocusGuard` → all `Run_FocusGuard_*`
-  pass (the guard only checks `> 0`, so the value is behavior-neutral; the constant now matches the
-  real count).
-- **Fails-if:** a `Run_FocusGuard_*` test fails (the constant doesn't match the real count) or the
-  magic `5`/`6` literals remain.
-
-### BP-24 — m27: `Run_GrepFinder_GatherHitsThrowsNotSupported` uses the public path
-- **Files:** `tests/Telescope.Tests/Program.cs`
-- **Change:** Rewrite `Run_GrepFinder_GatherHitsThrowsNotSupported` (line 1984) to drop the reflection
-  (`GetMethod("GatherHits", NonPublic|Instance)`) and use the public `GetCandidates()` path: call
-  `finder.GetCandidates()` (the parameterless base path, which invokes the throwing `GatherHits()` and
-  catches it), then assert (a) it returns empty and (b) the log contains exactly one
-  `[Telescope] GrepFinder failed to enumerate:` line — proving the base gather stub is a loud failure,
-  not a silent empty, via observable behavior.
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- GrepFinder` → the rewritten
-  `Run_GrepFinder_GatherHitsThrowsNotSupported` passes (empty result + the logged failure line).
-- **Fails-if:** the test fails (GetCandidates does not log the failure — the stub silently returned
-  empty) or reflection is still used.
-
-### BP-25 — m28: add `Run_TextInput_TryMove_*` (the stale "Text.UI not referenced" comment is wrong)
-- **Files:** `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Add `Run_TextInput_TryMove_UnmappedKeyNotConsumed` — `new
-  TextInputToolWindowController(ToolWindowType.CommandWindow).TryMove(Keys.X)` returns false (no
-  throw), proving `TryMove` is callable on the test host (the csproj references
-  `Microsoft.VisualStudio.Text.UI`, so the `IWpfTextView` type JITs fine). Update the stale comment at
-  lines 541-543 (which claims Text.UI is not referenced). Mapped keys (W/B/E/A/H/L) reach
-  `Keyboard.FocusedElement` which throws on the MTA host — that is a documented limitation, NOT the
-  stale "not referenced" claim; `SelectFirstSourceFile` stays VS-coupled (no-seam).
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- TextInput` →
-  `Run_TextInput_TryMove_UnmappedKeyNotConsumed` passes (TryMove(Keys.X) → false, no throw).
-- **Fails-if:** the new test fails (TryMove throws on the test host — the stale comment was right) or
-  the stale "Text.UI not referenced" comment remains.
-
-### BP-26 — m29: delete redundant action-key presence tests
-- **Files:** `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Delete `Run_ActionTable_SolutionExplorer_HjklInActionKeys` (line 493),
-  `Run_ActionTable_TextInput_HjklInActionKeys` (line 503), and `Run_TextInput_ActionKeys` (line 477) —
-  all three are redundant with the exact-set `Run_ActionTable_*_ActionKeysMatchTable` tests.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests` → all pass; the count drops by exactly
-  3 (deterministic signal).
-- **Fails-if:** a remaining test fails or the count does not drop by exactly 3.
-
-### BP-27 — m30: remove the stale "RED today" comment on `Run_LogFileWriter_ClearPerPath`
-- **Files:** `tests/Telescope.Tests/Program.cs`
-- **Change:** Remove the stale comment at lines 177-178 ("RED today: the once-per-process
-  `_clearedThisProcess` flag...") — the suite is all-green, so the comment contradicts reality.
-  No-seam (comment).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- LogFileWriter` →
-  `Run_LogFileWriter_ClearPerPath` passes (unchanged).
-- **Fails-if:** n/a (comment-only) — the test still passes; the stale comment is gone.
-
-### BP-28 — m1: reindent `WindowManager` class body
-- **Files:** `MyExtension/WindowManager.cs`
-- **Change:** Reindent the class body (lines 10+) from column 0 to inside `namespace MyExtension {`.
-  No-seam (build).
-- **Verify-with:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests` all pass.
-- **Fails-if:** build error (indentation broke a token — unlikely) or a NeoVisual test regresses.
-
-### BP-29 — m2: `KeybindingConfig` single `File.Exists` + reindent
-- **Files:** `MyExtension/KeybindingConfig.cs`
-- **Change:** Evaluate `File.Exists(path)` once into a local (currently evaluated at line 94 and again
-  at line 104) and use it for both the load guard and the log line; reindent `return new
-  KeybindingConfig(leaderKey, bindings);` (line 106, currently at column 0). No-seam (build).
-- **Verify-with:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests -- Keybinding` → all `Run_Keybinding_*` pass.
-- **Fails-if:** build error or a `Run_Keybinding_*` test regresses.
-
-### BP-30 — m7 + m10: `FocusGuard.IsTyping` dead branch + param rename
-- **Files:** `MyExtension/ToolWindows/FocusGuard.cs`, `tests/NeoVisual.Tests/Program.cs`
-- **Change:** (m7) Remove the dead `isToolWindow ? isInputMode : ...` sub-branch in `IsTyping`
-  (FocusGuard.cs:46) — `isInputMode` is always false there (the outer ternary already handled true),
-  so `(isToolWindow ? isInputMode : editorInTypingMode)` simplifies to
-  `(isToolWindow ? false : editorInTypingMode)`. (m10) Rename the `editorFocused` param to
-  `editorFocusedVeto` (it receives `InputHandler.EditorFocusedVeto`, not the raw flag) and update the
-  named-arg call sites in `Run_FocusGuard_IsTypingTruthTable` / `Run_FocusGuard_IsTypingToolWindowInput`
-  (lines 751-773). Behavior-preserving.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- FocusGuard` → all `Run_FocusGuard_*`
-  pass, incl. `Run_FocusGuard_IsTypingTruthTable` and `Run_FocusGuard_IsTypingToolWindowInput`.
-- **Fails-if:** a `Run_FocusGuard_IsTyping*` test fails (behavior changed) or build error (a stale
-  `editorFocused:` named arg).
-
-### BP-31 — m8: `FocusKeeper` uses `Environment.TickCount64`
-- **Files:** `MyExtension/ToolWindows/FocusKeeper.cs`
-- **Change:** Replace `Environment.TickCount` (int, wraps every ~24.9 days) with
-  `Environment.TickCount64` (available in net472) in `FocusKeeper.Run` (lines 19, 25, 31). The pure
-  `FocusKeeperSchedule` is unchanged. No-seam for the timer (VS-coupled DispatcherTimer).
-- **Verify-with:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests -- FocusKeeperSchedule` → all `Run_FocusKeeperSchedule_*` pass (unchanged).
-- **Fails-if:** build error (`TickCount64` unavailable — it IS in net472) or a
-  `Run_FocusKeeperSchedule_*` test regresses.
-
-### BP-32 — m9: `SolutionExplorerController` single keeper-duration constant
-- **Files:** `MyExtension/ToolWindows/SolutionExplorerController.cs`
-- **Change:** Extract `private const int FocusKeeperDurationMs = 1500;` and use it for both
-  `FocusKeeper.Run(TimeSpan.FromMilliseconds(100), 1500, ...)` and
-  `FocusKeeperSchedule.Decide(..., 1500)` (lines 115-118).
-- **Verify-with:** `dotnet build MyExtension.slnx` 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests -- FocusKeeperSchedule` → all `Run_FocusKeeperSchedule_*` pass (unchanged).
-- **Fails-if:** build error or a `Run_FocusKeeperSchedule_*` test regresses.
-
-### BP-33 — m32: fix the SKILL.md `CardinalMovment` wording
-- **Files:** `.opencode/skills/vs-extension-dev/SKILL.md`
-- **Change:** Correct line 179 — the folder is `CardinalMovment` (typo), the NAMESPACE is
-  `CardinalNavigation` (not a typo); the current wording conflates them. Note: this wording changes
-  again in the restructure (Phase 11). No-seam (docs).
-- **Verify-with:** `pwsh tools/check-doc-refs.ps1` → 0 unresolved (the reworded text introduces no
-  unresolvable backticked token).
-- **Fails-if:** the lint reports a new unresolved reference (the reworded text introduced a backticked
-  token that doesn't resolve) or the conflation remains.
-
-### BP-34 — n1: `Assert.True(controller.ActionKeys.Count > 0)`
-- **Files:** `tests/NeoVisual.Tests/Program.cs`
-- **Change:** Replace the double-negative `Assert.False(controller.ActionKeys.Count == 0)` (line 441 in
-  `Run_TextInput_StartsInInsertMode`) with `Assert.True(controller.ActionKeys.Count > 0)`.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests -- TextInput` →
-  `Run_TextInput_StartsInInsertMode` passes.
-- **Fails-if:** the test fails (ActionKeys empty) or the double-negative remains.
-
-### BP-35 — n2: `Run_CaretPlacement_EnumValues` asserts the enum values
-- **Files:** `tests/Telescope.Tests/Program.cs`
-- **Change:** Extend `Run_CaretPlacement_EnumValues` (line 719) to assert the values:
-  `(int)CaretPlacement.Current == 0`, `(int)CaretPlacement.End == 1`, `(int)CaretPlacement.Start == 2`
-  (the declaration order in `OverlayKeyHandler.cs:51-56`).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- CaretPlacement` →
-  `Run_CaretPlacement_EnumValues` passes with the value assertions.
-- **Fails-if:** the test fails (the enum values differ from the asserted ones — the assertion was
-  wrong or the enum changed).
-
-**Phase 9 gate:** `dotnet build MyExtension.slnx` 0 errors; both unit suites pass (NeoVisual count
-drops by 3 from BP-26; Telescope count unchanged net of the Phase 9 additions/deletions).
-
----
-
-## Phase 10 — Docs drift (M29, M30, M31, m31)
-
-### BP-36 — M29: update the unit-test counts in the docs
-- **Files:** `docs/spec.md` (lines 353-354), `.opencode/skills/vs-extension-dev/SKILL.md` (lines
-  210-211), `docs/progress.md` (lines 72-73)
-- **Change:** Update the stale `77`/`74` counts to the ACTUAL `--list` counts at execution time
-  (135/130 as of the plan; counts drift upward as Phases 0-9 add tests — verify, don't hardcode).
-  No-seam (docs).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests -- --list` and `dotnet run --project
-  tests/NeoVisual.Tests -- --list` → count the listed tests; the docs match the counts.
-- **Fails-if:** the docs still say 77/74 or do not match the `--list` count.
-
-### BP-37 — M30: add the 8 missing diagnostics to `docs/spec.md` §4
-- **Files:** `docs/spec.md` (line 162 §4)
-- **Change:** Add the 8 harness-asserted lines omitted from the diagnostics contract:
-  `[NeoVisual] stale-toolwindow sentinel active`, `[NeoVisual] leader-binding failed: {seq}: {msg}`,
-  `[NeoVisual] shortcut-binding failed: {simple}: {msg}`, `[NeoVisual] output pane unavailable:
-  {reason}`, `[MyExtension] init <step> ok/failed: {msg}`, `[Telescope] fzf filter failed: {msg}` /
-  `fzf filter failed: timeout after {ms}ms`, `[Telescope] fzf unavailable — showing unfiltered list`,
-  `[Telescope] filter failed: {msg}`. No-seam (docs).
-- **Verify-with:** `pwsh tools/check-doc-refs.ps1` → 0 unresolved (log literals are not symbol/path
-  refs — the lint skips them, matching the existing §4 lines).
-- **Fails-if:** the lint flags a new unresolved reference (a backticked token in the added lines that
-  doesn't resolve) or a listed diagnostic's format differs from the product's emitted token.
-
-### BP-38 — M31: add the missing post-consolidation seams to the key-files tables
-- **Files:** `docs/spec.md` (line 47 §2.2), `.opencode/skills/vs-extension-dev/SKILL.md` (lines 50, 68)
-- **Change:** Add the ~25 post-consolidation seams missing from the key-files tables (grep the tables
-  for what's absent): `FocusGuard`, `FocusKeeper`, `HierarchyForestBuilder`, `StaleToolWindowSentinel`,
-  `LeaderSequenceMatcher`, `SimpleShortcutMatcher`, `KeyNameBuilder`, `VimModeState`,
-  `VimModeClassifier`, `VimModeSource`, `InitSteps`, `NavigationSnapshot`, `RectCoordinate`,
-  `WindowNavigationEngine`, `NavigationSettings`, `ToolWindowTypeResolver`, `InjectedKeyGuard`,
-  `PopupNavigation`, `FinderBase`, `HitOpener`, `FileContentCache`, `ProjectFileCache`,
-  `LogFileWriter`, `NeoVisualLog`, `PaneFailureTracker`, `FocusTargetModel`, `LineIndex`, `TryDispatch`,
-  `ResultsFormatter`, `ResultMapper`, `SyntaxHighlighter`, `OverlayKeyHandler`, `TextMotionNavigator`,
-  `FzfFilter`, `FileFinder`, `CodeIssuesFinder`, `ReferencesFinder`, `GrepFinder`,
-  `ImplementationFinder`, `ProjectFiles`, `HierarchyWalker`, `DteFileOpener`, `TelescopeController`,
-  `TelescopeOverlay`, `TelescopeLauncher`, `TelescopeCommand`, `Actions`, `KeyNames`, `KeyInjection`,
-  `GlobalKeyboardHook`, `NativeMethods`, `BlockCaretAdornment`, `ToolWindowControllerBase`,
-  `IToolWindowController`, `GeneralToolWindowController`, `TextMotionHelper`,
-  `SolutionExplorerController`, `HierarchyResolver`, `WindowManager`, `VimModeTracker`, `VsServices`,
-  `MyExtensionPackage` — as backticked file paths that resolve. No-seam (docs).
-- **Verify-with:** `pwsh tools/check-doc-refs.ps1` → 0 unresolved (every added path exists).
-- **Fails-if:** the lint flags a new unresolved reference (a path that doesn't exist) or a seam is
-  still missing from both tables.
-
-### BP-39 — m31: bump the `docs/progress.md` header
-- **Files:** `docs/progress.md` (line 10)
-- **Change:** Bump the header for the 2026-09-30 Code-review GREEN (e.g. `**Status:** ACTIVE ·
-  **Updated:** 2026-09-30 · **Last item:** Code-review fixes (67 findings) GREEN`). No-seam (docs).
-- **Verify-with:** the header reflects the 2026-09-30 date + the Code-review GREEN.
-- **Fails-if:** the header still says `Updated: 2026-09-28 · Last item: neovisual-editor-insert`.
-
-**Phase 10 gate:** `pwsh tools/check-doc-refs.ps1` → 0 unresolved; `dotnet build MyExtension.slnx` 0
-errors; both unit suites pass.
-
----
-
-## Verification Trace
-
-| failing test / gate | implicated steps | expected pass signal |
-|---|---|---|
-| `Run_SimpleShortcutMatcher_*` / `Run_KeyNameBuilder_*` | BP-1 | all pass; `BuildSimpleKey` gone (delegation to `KeyNameBuilder.Build`) |
-| `Run_ActionTable_*_ActionKeysMatchTable` (exact sets) | BP-2 | all pass; key sets unchanged (shared wiring) |
-| `Run_HierarchyForestBuilder_*` (new signature) | BP-3 | all pass; `Build` takes no `pathToItem`; `.cs` filter in the builder only |
-| `Run_FocusGuard_*` + `Run_FocusGuard_OwnsKeyboard_TruthTable` | BP-4 | all pass; single `OwnsKeyboard` exemption |
-| `Run_InitSteps_*` + `Run_InitSteps_RunSync*` | BP-5 | all pass; `[MyExtension] init <step> ok/failed` contract unified |
-| `Run_HitOpener_*` + finder suites | BP-6 | all pass; finders route through `HitOpener` |
-| `Run_VimModeState_*` / `Run_VimModeSource_*` (incl. `_FakeLogsVimMode`) | BP-7 | all pass; `vim-mode=Insert\|Normal\|Replace\|Unknown` log-on-change preserved (M16 coordination) |
-| NeoVisual suite count −1; `dotnet build` | BP-8 | build 0 errors; count drops by exactly 1 (DistinctBy test deleted) |
-| `pwsh tools/check-doc-refs.ps1` | BP-9 | 0 unresolved (deleted-symbol doc sweep + `DistinctBy` allowlist) |
-| `Run_KeyHandler_*` | BP-10 | all pass; `ResultCount` deleted |
-| `Run_Preview_JkMoveByLine` (updated) | BP-11 | passes; `ColumnNumber` deleted, assertions use `Caret` |
-| deferred e2e `telescope-preview` (informational) | BP-12 | `[Telescope] preview tokens=[1-9]\d*` |
-| deferred e2e `telescope-search` / `telescope-no-selection` (informational) | BP-13 | `results count=[1-9]\d*` at :518; `count=0` at :1533/:1537 untouched |
-| `Run_LogFileWriter_FlushTimer_OneShotFires` / `_IdleDoesNotFire` | BP-14 | both pass deterministically (injected timer, no sleeps) |
-| `pwsh tools/iterate-telescope.ps1 -SelfCheck` | BP-15 | PID-scoped kill exact (M-M5 pattern) |
-| `pwsh tools/iterate-telescope.ps1 -SelfCheck` (extended) | BP-16 | `NEOVISUAL_LOG_DIR` User-scope unchanged |
-| `pwsh tools/check-doc-refs.ps1` | BP-17 | 0 unresolved; `LeaderSequenceMatcher`/`FocusKeeper`/`harness-common.ps1` no longer masked |
-| `Run_TempDir_DisposeSurfacesFailure` | BP-18 | passes (Dispose rethrows on delete failure) |
-| `Run_FzfFilter_FilterMatchesPrefix` | BP-19 | passes via injected path (or fails loudly without fzf) |
-| `Run_FinderBase_OpenErrorSwallowed` | BP-20 | passes WITH the single-log assertion |
-| `Run_Syntax_KeywordsAndIdentifiers` | BP-21 | passes with the exact token-sequence assertion |
-| `Run_HierarchyResolver_FirstSourceFile_*` (4 split) | BP-22 | all pass |
-| `Run_FocusGuard_*` | BP-23 | all pass; `PositiveActionKeyCount` = 7, no magic `5`/`6` |
-| `Run_GrepFinder_GatherHitsThrowsNotSupported` (rewritten) | BP-24 | passes via public `GetCandidates()` (empty + logged failure) |
-| `Run_TextInput_TryMove_UnmappedKeyNotConsumed` | BP-25 | passes; stale "Text.UI not referenced" comment removed |
-| NeoVisual suite count −3 | BP-26 | count drops by exactly 3 (redundant presence tests deleted) |
-| `Run_LogFileWriter_ClearPerPath` | BP-27 | passes; stale "RED today" comment removed |
-| `dotnet build` + NeoVisual suite | BP-28, BP-29 | 0 errors; all pass (reindent + single `File.Exists`) |
-| `Run_FocusGuard_IsTypingTruthTable` / `_IsTypingToolWindowInput` | BP-30 | all pass; dead branch removed, param renamed |
-| `Run_FocusKeeperSchedule_*` | BP-31, BP-32 | all pass; `TickCount64` + single duration constant |
-| `pwsh tools/check-doc-refs.ps1` | BP-33 | 0 unresolved; SKILL.md wording corrected |
-| `Run_TextInput_StartsInInsertMode` | BP-34 | passes; `Assert.True(ActionKeys.Count > 0)` |
-| `Run_CaretPlacement_EnumValues` | BP-35 | passes; enum values asserted |
-| `--list` counts vs docs | BP-36 | docs match the actual `--list` counts (135/130 baseline) |
-| `pwsh tools/check-doc-refs.ps1` | BP-37, BP-38 | 0 unresolved; §4 diagnostics + key-files seams added |
-| `docs/progress.md` header | BP-39 | header bumped to 2026-09-30 Code-review GREEN |
-
-## Known-RED allowlist
-
-**None.** No known-RED e2e scenario remains (per `docs/progress.md`). All Phase 6-10 fixes are
-RED-proven by unit tests (or build + existing suites for the no-seam items). The verification-agent
-must NOT flag the following as regressions:
-- The NeoVisual suite count dropping by 1 (BP-8, `Run_DistinctBy_DeduplicatesOnKey` deleted) and by 3
-  (BP-26, redundant action-key presence tests deleted) — these are the documented deterministic
-  signals of the deletions.
-- `Run_Preview_JkMoveByLine` changing its assertions (BP-11) — the caret values are equivalent.
-- `Run_FocusGuard_IsTyping*` named-arg renames (BP-30) — behavior-preserving.
-- The `vim-mode=` log-on-change behavior (BP-7) — M16's contract, not a regression.
-
-## Deferred e2e (informational — NOT Verify-with)
-
-The following e2e scenarios are QUEUED in `e2e-queue.md` and gate the live behavior of these phases
-once the plan is GREEN and a VS-capable machine is available:
-- **E2E-M18/M20/M21/M22/M24** (Phase 6): full suite — no log-literal drift after the duplication
-  merges.
-- **E2E-M17/M23** (Phase 7): full suite — `vim-mode=` unchanged; no log-literal drift after the
-  dead-code deletions.
-- **E2E-M26/M27/M28** (Phase 8): full suite — the tightened `preview tokens=[1-9]\d*` /
-  `results count=[1-9]\d*` assertions pass; `seed-leak` still GREEN.
-- **E2E-RESTRUCTURE-1** (Phases 11-14): full 35-scenario suite — no behavior change after the
-  folder/namespace restructure.
-
-DONE
-
----
-
-# BP-n Build Plan — Phases 11-14: Repository Restructure (folders + namespaces + tools + docs)
-
-> **Scope:** Part B of the combined plan (`plans/plan.md`, Phases 11-14). The restructure is
-> **behavior-preserving** — NO log literal, NO public API, NO test count change. Every
-> Verify-with / Fails-if below references ONLY the build, the unit suite names, the doc-ref
-> lint, and the log-literal diff gate (NO e2e scenario names; `E2E-RESTRUCTURE-1` is listed
-> informationally at the end).
->
-> **Verified baselines (do not re-verify):** `dotnet build MyExtension.slnx` → 0 errors;
-> `dotnet run --project tests/Telescope.Tests` → 135 pass; `dotnet run --project
-> tests/NeoVisual.Tests` → 130 pass; `pwsh tools/check-doc-refs.ps1` → `[PASS] 28 docs,
-> 6009 refs, 0 unresolved`. Repo at commit `f4450cb`/`164e757`. NOTE: 135/130 is the
-> PRE-Phase-0 baseline. Phases 0-10 ADD tests, so the restructure's "counts unchanged" gate
-> (BP-14) uses the **Phase 11 start baseline** (captured after Phase 10), NOT 135/130.
->
-> **Key decisions (do not second-guess):**
-> - `CardinalMovment/` → `Navigation/` with namespace `MyExtension.Navigation` (DEVIATION from
->   AGENTS.md's "keep the typo" — the restructure updates ALL references, so the "breaks
->   references" concern is moot; the `CardinalMovment` doc-ref-lint external-allowlist entry is
->   removed in BP-5).
-> - Operational docs (spec.md, progress.md, implementation_plan.md, e2e-queue.md) STAY in
->   `docs/` root (referenced by exact path from ~11 agent files + the lint default set); only
->   the review/plan archive docs move to `docs/reviews/` + `docs/plans/`.
-> - The doc-ref lint is NOT a pass/fail gate in Phases 11-12. Between the `CardinalMovment`
->   allowlist removal (BP-5) and the Phase 13 sweep (BP-11) the lint is EXPECTED to report
->   unresolved old-path references — that output is the sweep's work queue, NOT a regression.
-> - `using Telescope;` directives are left untouched in Phase 11 (the `Telescope.*`
->   sub-namespaces do not exist until Phase 12).
-> - The log-literal diff gate needs a pre-move baseline — BP-1 captures it before any `git mv`.
-
----
-
-## Phase 11 — MyExtension folders + namespaces
-
-### BP-1 — Capture the pre-restructure log-literal baseline (Phase 14 diff-gate input)
-
-- **Files:** none modified (writes `%TEMP%\restructure-log-literals-before.txt` outside the repo).
-- **Change:** snapshot the multiset of `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]`
-  literal prefixes across every `.cs` file in `MyExtension/`, `Telescope/`, `tests/` BEFORE any
-  `git mv`. This is the Phase 14 log-literal diff gate's baseline (BP-16).
-  ```powershell
-  Get-ChildItem -Recurse -Filter *.cs -Path MyExtension, Telescope, tests |
-    Select-String -Pattern '\[(Telescope|NeoVisual|Hook|MyExtension)\]' -AllMatches |
-    ForEach-Object { $_.Matches } | ForEach-Object { $_.Value } |
-    Group-Object | Sort-Object Name |
-    ForEach-Object { "$($_.Name)`t$($_.Count)" } |
-    Set-Content "$env:TEMP\restructure-log-literals-before.txt"
-  ```
-- **Verify-with:** `Get-Content "$env:TEMP\restructure-log-literals-before.txt"` is non-empty and
-  lists the four prefixes with counts (e.g. `[Telescope]` N, `[NeoVisual]` M, `[Hook]` K,
-  `[MyExtension]` J).
-- **Fails-if:** the file is missing/empty (BP-16 has no baseline); the command errors on a path.
-
-### BP-2 — `git mv` MyExtension root files into target folders + rename namespaces
-
-- **Files:** all MyExtension root `.cs` files + `CardinalMovment/*.cs` (moved + namespace-edited).
-- **Change:** per the target mapping (folder → namespace → files):
-  - `git mv` root → `Hooks/` (`MyExtension.Hooks`): GlobalKeyboardHook.cs, NativeMethods.cs,
-    KeyInjection.cs, InjectedKeyGuard.cs
-  - `git mv` root → `Input/` (`MyExtension.Input`): InputHandler.cs, LeaderSequenceMatcher.cs,
-    SimpleShortcutMatcher.cs, KeybindingConfig.cs, KeyNames.cs, KeyNameBuilder.cs,
-    PopupNavigation.cs, StaleToolWindowSentinel.cs
-  - `git mv` root → `Vim/` (`MyExtension.Vim`): VimModeTracker.cs, VimModeSource.cs,
-    VimModeClassifier.cs, VimModeState.cs
-  - `git mv` root → `Package/` (`MyExtension.Package`): MyExtensionPackage.cs, InitSteps.cs,
-    VsServices.cs, TelescopeCommand.cs, TelescopeLauncher.cs, Actions.cs
-  - `git mv` root → `Adornments/` (`MyExtension.Adornments`): BlockCaretAdornment.cs
-  - `git mv` root → `ToolWindows/` (`MyExtension.ToolWindows`): WindowManager.cs,
-    ToolWindowTypeResolver.cs (window-management/classification types — moved from the root)
-  - `git mv CardinalMovment/*.cs Navigation/` (`MyExtension.Navigation`):
-    CardinalNavigationConstants.cs, LinqExtensionMethods.cs, Direction.cs, NavigationSettings.cs,
-    NavigationSnapshot.cs, RectCoordinate.cs, UtilityMethods.cs, WindowAdapter.cs, WindowMatrix.cs,
-    WindowNavigationEngine.cs
-  - `ToolWindows/` (the existing 10 files) + `Properties/` stay in place (namespaces
-    `MyExtension.ToolWindows` / `MyExtension.Properties`).
-  - In each moved file, update the `namespace` declaration to the target namespace:
-    `namespace MyExtension` → `namespace MyExtension.<Group>`; `namespace CardinalNavigation` →
-    `namespace MyExtension.Navigation`. (The folder is renamed to `Navigation/`; the namespace was
-    already `CardinalNavigation` — do not "fix" the folder spelling beyond the move.)
-- **Verify-with:** `git status --short` shows the renames (R) with no unexpected deletions;
-  `git grep -l 'namespace CardinalNavigation'` returns nothing; `git grep -l 'namespace MyExtension$'`
-  returns nothing (no file declares the bare root namespace after the move).
-- **Fails-if:** a file is missing from its target folder; a `namespace` declaration was missed
-  (surfaces as a build error in BP-3's gate); `CardinalMovment/` still exists with files.
-  NOTE: the build is EXPECTED to be RED after this step until BP-3 completes the using sweep —
-  do not treat the intermediate RED as a regression.
-
-### BP-3 — Using sweep in MyExtension/ + tests/NeoVisual.Tests/Program.cs
-
-- **Files:** MyExtension/Actions.cs, MyExtension/InputHandler.cs,
-  MyExtension/ToolWindows/WindowManager.cs (moved in BP-2), MyExtension/BlockCaretAdornment.cs,
-  MyExtension/InjectedKeyGuard.cs, MyExtension/MyExtensionPackage.cs, MyExtension/VimModeState.cs,
-  tests/NeoVisual.Tests/Program.cs (+ any file the build flags).
-- **Change:**
-  - `using CardinalNavigation;` → `using MyExtension.Navigation;` in Actions.cs:1,
-    InputHandler.cs:1, ToolWindows/WindowManager.cs:1, tests/NeoVisual.Tests/Program.cs:6.
-  - ADD `using MyExtension.ToolWindows;` to BlockCaretAdornment, InjectedKeyGuard, InputHandler,
-    MyExtensionPackage, VimModeState + tests/NeoVisual.Tests/Program.cs (WindowManager is now IN
-    `MyExtension.ToolWindows` — no using needed; ToolWindowTypeResolver likewise).
-  - tests/NeoVisual.Tests/Program.cs: replace `using MyExtension;` with the specific sub-namespaces
-    it references (Hooks, Input, Vim, Package, ToolWindows, Navigation, Adornments);
-    `MyExtension.KeyInjection.SimulateOnly` → `MyExtension.Hooks.KeyInjection`.
-  - `using Telescope;` directives (InputHandler.cs:7, MyExtensionPackage.cs:11,
-    TelescopeLauncher.cs:5, ToolWindows/TextMotionHelper.cs:8) are INTENTIONALLY left unchanged in
-    this phase (the `Telescope.*` sub-namespaces do not exist until Phase 12).
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests` → 130 pass (count unchanged).
-- **Fails-if:** build error `The type or namespace name 'X' could not be found` → a missed
-  using/namespace in the named file; a NeoVisual test regresses; a `[NeoVisual]`/`[Hook]` log
-  literal changed.
-
-### BP-4 — Move default-keybindings.json → Resources/ + csproj embedded-resource path
-
-- **Files:** MyExtension/default-keybindings.json (moved), MyExtension/Resources/default-keybindings.json
-  (new), MyExtension/MyExtension.csproj:36.
-- **Change:** `git mv MyExtension/default-keybindings.json MyExtension/Resources/default-keybindings.json`;
-  update `<EmbeddedResource Include="default-keybindings.json" />` →
-  `<EmbeddedResource Include="Resources\default-keybindings.json" />`.
-  `KeybindingConfig.cs:60` matches by suffix — no code change needed.
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `dotnet run --project
-  tests/NeoVisual.Tests -- Keybinding` → all pass (KeybindingConfig loads the embedded
-  default-keybindings.json; a wrong path drops the resource and fails these tests).
-- **Fails-if:** build error on the EmbeddedResource path; `Run_KeybindingConfig_*` tests fail
-  (resource missing).
-
-### BP-5 — Doc-ref lint: remove `CardinalMovment` from the external allowlist
-
-- **Files:** tools/check-doc-refs.ps1:76.
-- **Change:** delete `'CardinalMovment'` from `$externalAllowlist`. NOTE: the doc-ref lint is NOT
-  a pass/fail gate in Phases 11-12 — between here and the Phase 13 sweep (BP-11) it is EXPECTED
-  to report unresolved `CardinalMovment/*.cs` references in docs (that is the sweep's work queue,
-  not a regression). Do not run the lint as a gate until Phase 13.
-- **Verify-with:** `Select-String -Path tools/check-doc-refs.ps1 -Pattern 'CardinalMovment'`
-  returns nothing.
-- **Fails-if:** the `CardinalMovment` allowlist entry is still present; the lint is run as a gate
-  before Phase 13 and its unresolved output is misread as a regression.
-
----
-
-## Phase 12 — Telescope folders + namespaces
-
-### BP-6 — `git mv` Telescope files into target folders + rename namespaces
-
-- **Files:** all Telescope root `.cs` files (moved + namespace-edited).
-- **Change:** per the target mapping (folder → namespace → files):
-  - `git mv` root → `Overlay/` (`Telescope.Overlay`): TelescopeOverlay.cs, OverlayKeyHandler.cs,
-    OverlayShowState.cs, FocusTargetModel.cs, PreviewRenderer.cs, BlockCaretStyle.cs,
-    TextMotionNavigator.cs, TryDispatch.cs, ResultsFormatter.cs, ResultMapper.cs,
-    SyntaxHighlighter.cs, LineIndex.cs
-  - `git mv` root → `Finders/` (`Telescope.Finders`): TelescopeFinder.cs, FinderBase.cs,
-    FileFinder.cs, CodeIssuesFinder.cs, ReferencesFinder.cs, GrepFinder.cs, ImplementationFinder.cs,
-    FileHit.cs, GrepHit.cs, ReferenceHit.cs, ImplementationHit.cs, FileLocation.cs, IFileLocation.cs,
-    CodeIssue.cs, HitOpener.cs, HierarchyWalker.cs, ProjectFiles.cs, ProjectFileCache.cs,
-    FileContentCache.cs, DteFileOpener.cs
-  - `git mv` root → `Filter/` (`Telescope.Filter`): FzfFilter.cs
-  - `git mv` root → `Logging/` (`Telescope.Logging`): NeoVisualLog.cs, LogFileWriter.cs,
-    NeoVisualTraceListener.cs, DiagnosticLog.cs, TelescopeLog.cs, FilterFailureLog.cs,
-    PaneFailureTracker.cs
-  - `git mv` root → `Controller/` (`Telescope.Controller`): TelescopeController.cs
-  - In each moved file, update `namespace Telescope` → `namespace Telescope.<Group>`.
-  - Keep `RootNamespace>Telescope</RootNamespace>` in Telescope.csproj (no change).
-- **Verify-with:** `git status --short` shows the renames (R) with no unexpected deletions;
-  `git grep -l 'namespace Telescope$'` returns nothing (no file declares the bare `Telescope`
-  namespace after the move).
-- **Fails-if:** a file is missing from its target folder; a `namespace` declaration was missed
-  (surfaces as a build error in BP-7's gate). NOTE: the build is EXPECTED to be RED after this
-  step until BP-7/BP-8 complete the reference sweeps — do not treat the intermediate RED as a
-  regression.
-
-### BP-7 — Telescope reference sweep in MyExtension/
-
-- **Files:** the 16 MyExtension files with fully-qualified `Telescope.X` refs (90 refs) + the 4
-  files with `using Telescope;` (InputHandler.cs:7, MyExtensionPackage.cs:11, TelescopeLauncher.cs:5,
-  ToolWindows/TextMotionHelper.cs:8).
-- **Change:**
-  - Replace `using Telescope;` with the specific sub-namespaces each file references.
-  - Rewrite every fully-qualified `Telescope.X` → `Telescope.<Group>.X` per the type→namespace
-    mapping:
-    - `Telescope.NeoVisualLog` → `Telescope.Logging.NeoVisualLog`
-    - `Telescope.DiagnosticLog` → `Telescope.Logging.DiagnosticLog`
-    - `Telescope.TelescopeController` → `Telescope.Controller.TelescopeController`
-    - `Telescope.BlockCaretStyle` → `Telescope.Overlay.BlockCaretStyle`
-    - `Telescope.Show(...)` → `Telescope.Controller.TelescopeController.Show(...)` (or
-      `using Telescope.Controller;` + `TelescopeController.Show(...)`)
-  - Mechanical: `git grep -n 'Telescope\.' -- MyExtension/` lists every site; rewrite each per the
-    mapping.
-- **Verify-with:** `dotnet build MyExtension.slnx` → 0 errors; `git grep -n 'Telescope\.' --
-  MyExtension/` shows only `Telescope.<Group>.` forms (no bare `Telescope.X`).
-- **Fails-if:** build error naming a `Telescope.X` type → a missed rewrite in the named file; a
-  `[Telescope]` log literal changed.
-
-### BP-8 — Test reference sweep (TestRunner.cs + both test Program.cs)
-
-- **Files:** tests/TestRunner.cs, tests/Telescope.Tests/Program.cs, tests/NeoVisual.Tests/Program.cs.
-- **Change:**
-  - tests/TestRunner.cs: `Telescope.LogFileWriter` → `Telescope.Logging.LogFileWriter` at lines
-    162/165/170/180/183/188.
-  - tests/Telescope.Tests/Program.cs: `namespace Telescope.Tests` STAYS (child of `Telescope`;
-    `StartupObject>Telescope.Tests.Program` stays valid); add `using Telescope.Overlay;` /
-    `using Telescope.Finders;` / `using Telescope.Logging;` / `using Telescope.Filter;` /
-    `using Telescope.Controller;` as needed (e.g. `FinderEntry` → `Telescope.Finders`).
-  - tests/NeoVisual.Tests/Program.cs: `Telescope.*` references → the new sub-namespaces (e.g.
-    `Telescope.NeoVisualLog` → `Telescope.Logging.NeoVisualLog`).
-- **Verify-with:** `dotnet run --project tests/Telescope.Tests` → 135 pass (count unchanged);
-  `dotnet run --project tests/NeoVisual.Tests` → 130 pass (count unchanged); `dotnet build
-  MyExtension.slnx` → 0 errors.
-- **Fails-if:** a test fails to compile (missed using/rewrite); a test count changed; a test
-  asserts a changed log literal.
-
----
-
-## Phase 13 — tools/ + docs/ + reference sweep
-
-### BP-9 — Move tools scripts into tools/harness/ + tools/lint/ and fix check-doc-refs.ps1 internals
-
-- **Files:** tools/test-e2e.ps1, tools/iterate-telescope.ps1, tools/harness-common.ps1,
-  tools/dte-command.ps1 (moved), tools/check-doc-refs.ps1 (moved + edited).
-- **Change:**
-  - `git mv tools/test-e2e.ps1 tools/iterate-telescope.ps1 tools/harness-common.ps1
-    tools/dte-command.ps1 tools/harness/`
-  - `git mv tools/check-doc-refs.ps1 tools/lint/`
-  - In tools/lint/check-doc-refs.ps1: `$repoRoot = Split-Path -Parent $PSScriptRoot` (line 45) →
-    two levels up (`Split-Path -Parent (Split-Path -Parent $PSScriptRoot)`); the function scan
-    `Get-ChildItem (Join-Path $repoRoot 'tools')` (line 181) → `Join-Path $repoRoot 'tools/harness'`;
-    update the default doc set if it lists the moved docs by path.
-  - Harness dot-sourcing stays valid: test-e2e.ps1:~82, iterate-telescope.ps1:~27, dte-command.ps1:~16
-    dot-source `harness-common.ps1` via `$PSScriptRoot`; test-e2e.ps1:~111/231/244/1839 +
-    iterate-telescope.ps1:~73/262 call `dte-command.ps1` — all four moved together, so the
-    `$PSScriptRoot`-relative paths hold (line numbers approximate — the mechanism is the move-together).
-- **Verify-with:** `pwsh -NoProfile -Command "& 'tools/harness/test-e2e.ps1' -List"` → lists the 35
-  scenarios (the script loads and dot-sources its siblings cleanly); `pwsh -NoProfile -Command
-  "& 'tools/lint/check-doc-refs.ps1'"` runs without a path error (may report unresolved refs until
-  BP-11 — not a gate yet).
-- **Fails-if:** a harness script fails to dot-source its sibling (`harness-common.ps1` not found);
-  check-doc-refs.ps1 errors on the `$repoRoot`/function-scan path.
-
-### BP-10 — Move review/plan docs into docs/reviews/ + docs/plans/
-
-- **Files:** docs/code-review.md, docs/architecture-review.md, docs/architecture-consolidation.md
-  (moved), docs/backlog-plans.md (moved).
-- **Change:** `git mv docs/code-review.md docs/architecture-review.md
-  docs/architecture-consolidation.md docs/reviews/`; `git mv docs/backlog-plans.md docs/plans/`.
-  Keep spec.md, progress.md, implementation_plan.md, e2e-queue.md in docs/ root (operational docs —
-  referenced by exact path; NOT moved).
-- **Verify-with:** `git status --short` shows the renames (R); the four operational docs remain in
-  docs/ root.
-- **Fails-if:** an operational doc was moved; a review/plan doc is missing from its target folder.
-
-### BP-11 — Full reference sweep (docs + agent files + tools)
-
-- **Files:** AGENTS.md, docs/spec.md, docs/progress.md, docs/implementation_plan.md,
-  docs/reviews/*.md, docs/plans/backlog-plans.md, .opencode/skills/vs-extension-dev/SKILL.md,
-  .opencode/agent/*.md (12 agent files reference `tools/*.ps1` — ~41 refs incl. check-doc-refs.ps1;
-  5 agent files reference the moved docs — ~28 refs; counts approximate — the sweep is exhaustive).
-- **Change:** update every path reference to a moved target:
-  - `CardinalMovment/*.cs` → `MyExtension/Navigation/*.cs` (SKILL.md:62-67; spec.md 34 refs;
-    progress.md 26 refs; arch-auditor.md:131 + code-review-worker.md:148
-    `Telescope/FzfFilter.cs:42` → `Telescope/Filter/FzfFilter.cs:42`).
-  - `MyExtension/*.cs` → `MyExtension/<Group>/*.cs` per the Phase 11 mapping; `Telescope/*.cs` →
-    `Telescope/<Group>/*.cs` per the Phase 12 mapping.
-  - `tools/test-e2e.ps1` → `tools/harness/test-e2e.ps1` (AGENTS.md:107-120);
-    `tools/iterate-telescope.ps1` → `tools/harness/iterate-telescope.ps1`;
-    `tools/harness-common.ps1` → `tools/harness/harness-common.ps1`;
-    `tools/dte-command.ps1` → `tools/harness/dte-command.ps1`;
-    `tools/check-doc-refs.ps1` → `tools/lint/check-doc-refs.ps1`.
-  - `docs/code-review.md` → `docs/reviews/code-review.md`; `docs/architecture-review.md` →
-    `docs/reviews/architecture-review.md`; `docs/architecture-consolidation.md` →
-    `docs/reviews/architecture-consolidation.md`; `docs/backlog-plans.md` → `docs/plans/backlog-plans.md`.
-  - Operational docs (spec.md, progress.md, implementation_plan.md, e2e-queue.md) keep their paths —
-    their references stay valid.
-  - Mechanical: `git grep -n -E 'CardinalMovment|tools/(test-e2e|iterate-telescope|harness-common|dte-command)\.ps1|tools/check-doc-refs\.ps1|docs/(code-review|architecture-review|architecture-consolidation|backlog-plans)\.md' -- AGENTS.md docs .opencode` lists every stale site; rewrite each (exclude the session/plan files under `.opencode/workspaces/`).
-- **Verify-with:** `pwsh tools/lint/check-doc-refs.ps1` → `[PASS] ... 0 unresolved`; the stale-path
-  grep above returns nothing (excluding `.opencode/workspaces/`).
-- **Fails-if:** the lint reports unresolved references (a moved path missed in the sweep); an agent
-  file still references an old path; a doc references a source file at its old path.
-
-### BP-12 — Doc-ref lint allowlist updates + final lint gate
-
-- **Files:** tools/lint/check-doc-refs.ps1.
-- **Change:** update `$proposedPaths` (line 137: `'tools/harness-common.ps1'` → the new
-  `tools/harness/harness-common.ps1`, or remove if now resolved) and `$proposedSymbols` for the
-  moved files; confirm `$sourceRoots = @('MyExtension','Telescope','tests')` is unchanged.
-- **Verify-with:** `pwsh tools/lint/check-doc-refs.ps1` → `[PASS] ... 0 unresolved` (the gate is
-  `0 unresolved`; the doc/ref counts may shift if the doc set changed).
-- **Fails-if:** the lint reports unresolved references; a stale allowlist entry masks a real drift.
-
----
+- **Change:** Move the duplicated W/B/E vim-motion action wiring
+  (TextInputToolWindowController.cs:44-46 + SolutionExplorerController.cs:50-52) into
+  `ToolWindowControllerBase`.
+- **Verify-with:** `Run_ActionTable_*` (NeoVisual.Tests) — behavior-preserving.
+- **Fails-if:** `Run_ActionTable_*` fails; W/B/E stop routing.
+
+### BP-43 — m18: share `GetParent`
+- **Files:** `MyExtension/ToolWindows/WindowManager.cs`, `MyExtension/ToolWindows/TextMotionHelper.cs`
+- **Change:** Share one visual/logical-tree `GetParent` helper (WindowManager.cs:131-153 +
+  TextMotionHelper.cs:241-263).
+- **Verify-with:** build 0 errors; existing suites pass (no-seam WPF).
+- **Fails-if:** build error; the tree walk changes behavior.
+
+### BP-44 — m19: unify the DTE tree-walk seams
+- **Files:** `MyExtension/ToolWindows/HierarchyForestBuilder.cs`, `Telescope/Finders/HierarchyWalker.cs`,
+  `Telescope/Finders/ProjectFiles.cs`, `tests/NeoVisual.Tests/Program.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Unify `HierarchyForestBuilder` vs `HierarchyWalker`/`ProjectFiles` on one walker.
+- **Verify-with:** `Run_HierarchyForestBuilder_*` (NeoVisual.Tests) + `Run_HierarchyWalker_*`
+  (Telescope.Tests) — behavior-preserving.
+- **Fails-if:** either suite fails; the walk order changes.
+
+### BP-45 — m35: `ApplyPromptCaretStyle` delegates to the shared helper
+- **Files:** `Telescope/Overlay/TelescopeOverlay.cs`, `Telescope/Overlay/BlockCaretStyle.cs`,
+  `MyExtension/ToolWindows/TextMotionHelper.cs`
+- **Change:** `ApplyPromptCaretStyle` (TelescopeOverlay.cs:603-613) delegates to the shared
+  `BlockCaretStyle.ApplyCaretStyle(TextBox, bool, Brush? lineCaretBrush = null)` instead of
+  duplicating it. **DEVIATION (adjudicated ACCEPT):** the shared helper lives in
+  `Telescope.Overlay.BlockCaretStyle` (the established shared-caret seam) rather than
+  `TextMotionHelper.ApplyCaretStyle` — the Telescope project cannot reference MyExtension
+  (circular dependency). BOTH `TelescopeOverlay.ApplyPromptCaretStyle` AND
+  `TextMotionHelper.ApplyCaretStyle` delegate to it; the optional `lineCaretBrush` param keeps the
+  overlay's exact gray `PromptLineCaretBrush` in insert mode.
+- **Verify-with:** behavior-preserving — `Run_TextMotionNavigator_*` / `Run_TextMotionDispatcher_*`
+  (Telescope.Tests) pass.
+- **Fails-if:** a Telescope test regresses; the prompt caret style changes.
+
+### BP-46 — n11: merge `TryDispatch` into `TextMotionDispatcher`
+- **Files:** `Telescope/Overlay/TryDispatch.cs`, `Telescope/Overlay/TextMotionDispatcher.cs`,
+  `tests/Telescope.Tests/Program.cs`
+- **Change:** Merge the 25-line `TryDispatch` wrapper (TryDispatch.cs:12-24) into
+  `TextMotionDispatcher`; update callers (TelescopeOverlay.cs:589,618).
+- **Verify-with:** `Run_TryDispatch_*` → `Run_TextMotionDispatcher_*` (Telescope.Tests) — the
+  renamed tests pass. Diagnostic: `[Telescope] prompt-motion key=... caret=...` /
+  `preview caret=... line=...` unchanged.
+- **Fails-if:** `Run_TextMotionDispatcher_*` fails; a motion stops routing.
+
+### BP-47 — m8: inject the package's `_launcher` into `InputHandler`
+- **Files:** `MyExtension/Package/MyExtensionPackage.cs`, `MyExtension/Hooks/GlobalKeyboardHook.cs`,
+  `MyExtension/Input/InputHandler.cs`
+- **Change:** Stop constructing a second `TelescopeLauncher` in `InputHandler` (InputHandler.cs:124).
+  Change the `InputHandler` ctor to accept the package's `_launcher` (MyExtensionPackage.cs:84) and
+  store it; `GlobalKeyboardHook` (GlobalKeyboardHook.cs:62) receives the package's `_launcher` and
+  passes it through to `InputHandler`. The `telescope` init step (MyExtensionPackage.cs:81-86) stays
+  the single construction site. No-seam (VS-coupled) — build + deferred e2e.
+- **Verify-with:** build 0 errors; existing suites pass. Diagnostic: `[Telescope] open finder=...`
+  / `[Telescope] overlay closed` unchanged (the injected launcher opens the same overlay).
+- **Fails-if:** build error (ctor signature change); a second `TelescopeLauncher` is still
+  constructed; the overlay open path regresses.
+
+## Phase 7 — Dead code + logging (m1, m2, m10, m28, m6, m29, m51, n2, n12, n13, n17, n18)
+
+### BP-48 — m1: delete `HasToolWindowActionKeys` + fix docs
+- **Files:** `MyExtension/Input/InputHandler.cs`, `AGENTS.md`,
+  `.opencode/skills/vs-extension-dev/SKILL.md`
+- **Change:** Delete the dead `InputHandler.HasToolWindowActionKeys` property (InputHandler.cs:79-92);
+  fix the AGENTS.md/SKILL.md references that document it as the pre-filter mechanism.
+- **Verify-with:** `Run_FocusGuard_*` (NeoVisual.Tests) — the guard is already tested; build 0
+  errors. Doc-ref lint clean (the removed symbol's doc refs are updated).
+- **Fails-if:** build error; a doc still references `HasToolWindowActionKeys` (doc-ref lint flags it).
+
+### BP-49 — m2: delete `VimModeState.ResolveOnce` + its test
+- **Files:** `MyExtension/Vim/VimModeState.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Delete `ResolveOnce` + `_resolved` latch (VimModeState.cs:90-109) and its test.
+- **Verify-with:** NeoVisual.Tests count drops by the deleted test (deterministic signal); build 0
+  errors.
+- **Fails-if:** build error; the count doesn't drop by exactly 1.
+
+### BP-50 — m10 + m28: delete `WindowAdapter._frame` + `OverlayClosed` event
+- **Files:** `MyExtension/Navigation/WindowAdapter.cs`, `Telescope/Overlay/TelescopeOverlay.cs`
+- **Change:** (m10) Delete the never-read `_frame` field (WindowAdapter.cs:18,25). (m28) Delete the
+  `OverlayClosed` event + raise (TelescopeOverlay.cs:240,331).
+- **Verify-with:** build 0 errors; existing suites pass (behavior-preserving).
+- **Fails-if:** build error; a subscriber reference remains.
+
+### BP-51 — m6: single-stamp `[Hook]` lines
+- **Files:** `MyExtension/Hooks/GlobalKeyboardHook.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Drop the local timestamp in `GlobalKeyboardHook.Log` (GlobalKeyboardHook.cs:200) so
+  `LogFileWriter.FormatLine` is the only stamper.
+- **Verify-with:** `Run_LogFileWriter_*` (Telescope.Tests) — the format contract (single
+  `HH:mm:ss.fff ` prefix). Diagnostic: `[Hook]` lines single-stamped.
+- **Fails-if:** `Run_LogFileWriter_*` fails; a `[Hook]` line is still double-stamped.
+
+### BP-52 — m29: `DteFileOpener` uses `TelescopeLog`
+- **Files:** `Telescope/Finders/DteFileOpener.cs`
+- **Change:** Replace the `NeoVisualLog.Log($"{DiagnosticLog.Telescope}goto line={line}")` call
+  (DteFileOpener.cs:19 — it reaches into the Telescope log prefix constant from the NeoVisual log
+  helper) with `TelescopeLog.Log($"goto line={line}")` so the Telescope surface logs through its own
+  helper. Behavior-preserving.
+- **Verify-with:** behavior-preserving — `Run_FileFinder_*` / `Run_GrepFinder_*` (Telescope.Tests)
+  pass. Diagnostic: `[Telescope] opened file: ...` unchanged.
+- **Fails-if:** a finder test regresses; the opened-file line drifts.
+
+### BP-53 — m51: `NeoVisualLog.EnsurePane` retry latch via `PaneFailureTracker`
+- **Files:** `Telescope/Logging/NeoVisualLog.cs`, `Telescope/Logging/PaneFailureTracker.cs`,
+  `tests/Telescope.Tests/Program.cs`
+- **Change:** Extract the retry latch into the pure `PaneFailureTracker` (add
+  `ShouldRetry()`/`RecordAttempt()` — the current tracker only has the one-time `ShouldEmit()`
+  fallback). `NeoVisualLog.EnsurePane` (NeoVisualLog.cs:172-178) delegates the `_paneInitTried`
+  latch to it so a transient `CreatePane` failure retries instead of permanently disabling the pane.
+- **Verify-with:** `Run_PaneFailureTracker_RetryAfterFailure` (Telescope.Tests) — after a recorded
+  failure, `ShouldRetry()` returns true (RED: the retry-after-failure path is missing today).
+  Diagnostic: `[NeoVisual] output pane unavailable: {reason}` unchanged.
+- **Fails-if:** `Run_PaneFailureTracker_RetryAfterFailure` fails; a transient pane failure
+  permanently disables the pane.
+
+### BP-54 — n2 + n13: BlockCaretAdornment early-return + PaneGuid readonly
+- **Files:** `MyExtension/Adornments/BlockCaretAdornment.cs`, `Telescope/Logging/NeoVisualLog.cs`
+- **Change:** (n2) Early-return in `Update()` before `RemoveAdornmentsByTag` when `_active` is false
+  (BlockCaretAdornment.cs:109). (n13) Make `PaneGuid` `readonly` (NeoVisualLog.cs:28).
+- **Verify-with:** build 0 errors; existing suites pass.
+- **Fails-if:** build error; the adornment removes its tag when inactive.
+
+### BP-55 — n12: `RenderResults` re-renders only on change
+- **Files:** `Telescope/Overlay/TelescopeOverlay.cs`
+- **Change:** In `RenderResults` (TelescopeOverlay.cs:438-444), skip the `_resultsBox.Text = ...`
+  rebuild + `LoadPreviewForSelection()` when neither the results nor the selection changed since the
+  last render (cache the last-rendered results reference + `_selectedIndex`). No-seam (WPF) — the
+  `results count=... selected=...` diagnostic is unchanged.
+- **Verify-with:** build 0 errors; existing suites pass (behavior-preserving). Diagnostic:
+  `[Telescope] results count=... selected=...` unchanged.
+- **Fails-if:** build error; the results box text or selection drifts on a no-change render.
+
+### BP-56 — n17: `GetCaretOffset` DTE fallback uses a non-expanded character column
+- **Files:** `MyExtension/Package/MyExtensionPackage.cs`
+- **Change:** In `GetCaretOffset`'s DTE fallback (MyExtensionPackage.cs:645-655), replace
+  `selection.ActivePoint.DisplayColumn` (tab-expanded display column) with a non-expanded character
+  column — map display→char via the text line (or use `ActivePoint`'s character column) so the
+  offset into `SourceText` is correct on lines with tabs (the references/implementations finders
+  resolve the wrong symbol today). No-seam (VS-coupled) — build + deferred e2e.
+- **Verify-with:** build 0 errors; existing suites pass. Diagnostic:
+  `[Telescope] references gathered reads=... writes=...` / `[Telescope] implementations gathered count=...`
+  unchanged (the caret symbol now resolves at the correct offset).
+- **Fails-if:** build error; the DTE fallback still uses `DisplayColumn` (code review); the
+  references/implementations finders resolve the wrong symbol on tab-indented lines.
+
+### BP-57 — n18: `SetHook` guards `Process.GetCurrentProcess().MainModule`
+- **Files:** `MyExtension/Hooks/GlobalKeyboardHook.cs`
+- **Change:** In `SetHook` (GlobalKeyboardHook.cs:165-173), guard the
+  `Process.GetCurrentProcess().MainModule` access (it can throw `Win32Exception`) — on failure log
+  the exception and fall back to `IntPtr.Zero` for `hMod` (valid for `WH_KEYBOARD_LL` when the proc
+  is in-process), so a `MainModule` failure can't fail the hook init step and degrade the extension
+  to a no-op. No-seam (build).
+- **Verify-with:** build 0 errors; existing suites pass. Diagnostic: the hook init step still
+  completes (`[MyExtension] init hook ok`); the failure path logs the `Win32Exception` once.
+- **Fails-if:** build error; `SetHook` still dereferences `MainModule` unguarded (code review); a
+  `MainModule` failure fails the hook init step.
+
+## Phase 8 — Harness hardening (M3, m60, m63, m64, m65)
+
+### BP-58 — M3: `Send-Text` shift flag
+- **Files:** `tools/harness/harness-common.ps1`
+- **Change:** In `Send-Text` (harness-common.ps1:121-137), apply Shift for `[char]::IsUpper($ch)`
+  letters (currently only punctuation gets a shift flag).
+- **Verify-with:** harness self-check — add a `-SelfCheck` seam in `harness-common.ps1` that
+  asserts `Send-Text 'Program'` emits the uppercase VK + Shift sequence (no-seam PowerShell —
+  deferred e2e, E2E queue reference E2E-NCR-M3). `Send-Text 'Program'` types `Program`
+  (case-fidelity).
+- **Fails-if:** `Send-Text 'Program'` still types `program`.
+
+### BP-59 — m60 + m63 + m64 + m65: harness robustness
+- **Files:** `tools/harness/harness-common.ps1`, `tools/harness/test-e2e.ps1`
+- **Change:** (m60) Add Professional/Enterprise/Preview candidates to `Resolve-VsRoot`
+  (harness-common.ps1:229-233). (m63) Document the scenario ordering + make subsets self-seeding
+  (test-e2e.ps1:822-874,989-1062). (m64) Require `count=[1-9]\d*` at test-e2e.ps1:1161. (m65)
+  Per-line match over the cache in `Wait-LogLine` (harness-common.ps1:176).
+- **Verify-with:** harness self-check — a `-SelfCheck` seam in `harness-common.ps1`/`test-e2e.ps1`
+  asserting the `count=[1-9]\d*` regex rejects `count=0` and `Wait-LogLine` matches per-line
+  (no-seam PowerShell — deferred e2e).
+- **Fails-if:** `results count=0` still matches `count=\d+`; `Wait-LogLine` still matches across
+  line boundaries.
+
+## Phase 9 — Test hermeticity (M7, m4, m53, m54, m55, m56, m57, m58, m62)
+
+### BP-60 — M7: FzfFilter timeout deterministic seam
+- **Files:** `Telescope/Filter/FzfFilter.cs`, `tests/Telescope.Tests/Program.cs`
+- **Change:** Expose the awaited-task outcome via a deterministic seam (TaskCompletionSource /
+  awaited-read count) instead of the 5s wall-clock + 2s GC-poll for `UnobservedTaskException`.
+- **Verify-with:** `Run_FzfFilter_TimeoutAwaitsTasks` (Telescope.Tests) — the timeout path observes
+  the awaited tasks deterministically (RED: no seam → compile error).
+- **Fails-if:** `Run_FzfFilter_TimeoutAwaitsTasks` fails; the timeout test is still timing-dependent.
+
+### BP-61 — m53 + m54 + m55 + m56 + m57 + m58: test hermeticity fixes
+- **Files:** `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** (m53) Delete the byte-identical duplicate
+  `Run_Preview_UpFromSecondLineWithLeadingBlankLine`/`_Fixed` (Telescope.Tests/Program.cs:942-965).
+  (m54) Rename `Run_GrepFinder_GatherHitsThrowsNotSupported` to what it asserts + add a test
+  reaching the base gather stub. (m55) Rename or call `TryGetScreenRect` in
+  `Run_WindowAdapter_TryGetScreenRect_...` (NeoVisual.Tests/Program.cs:1390-1404). (m56) Assert
+  behavior instead of the private field in `Run_LeaderMatcher_PrefixSetBuiltOnce`
+  (NeoVisual.Tests/Program.cs:1576-1599). (m57) Hermetic fzf stub / stronger assertion in
+  `Run_FzfFilter_FilterMatchesPrefix` (Telescope.Tests/Program.cs:482-500). (m58) Inject a clock /
+  relax in `Run_FzfFilter_IsAvailableBounded` (Telescope.Tests/Program.cs:630-648).
+- **Verify-with:** Telescope.Tests count drops by 1 (m53); the renamed/strengthened tests pass
+  hermetically (no fzf-on-PATH Mystery Guest).
+- **Fails-if:** a hermeticity test still requires fzf on PATH; the duplicate test remains.
+
+### BP-62 — m62: `TestRunner` awaits Task-returning methods
+- **Files:** `tests/TestRunner.cs`
+- **Change:** In `TestRunner.Run` (TestRunner.cs:60), await `Task`-returning methods instead of
+  discarding the return value.
+- **Verify-with:** build 0 errors; both suites pass (a future async test can't silently pass).
+- **Fails-if:** build error; an async test's failure is swallowed.
+
+### BP-63 — m4: extract `RoslynGatherers` with an injectable seam + `IsWriteLocation` test
+- **Files:** `MyExtension/Package/MyExtensionPackage.cs`, `MyExtension/Package/RoslynGatherers.cs`
+  (new), `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Extract the ~270 lines of Roslyn/VS-coupled gatherer logic
+  (`TryGetCaretSymbol`, `GatherReferences`, `GatherImplementations`, `GetCaretOffset`, `ReadLine`,
+  `IsWriteLocation` — MyExtensionPackage.cs:423-696) into a `RoslynGatherers` class with an
+  injectable seam (mirroring the finder host-injection pattern: the package supplies the DTE /
+  workspace / document factories, the class owns the pure gather + reflection logic). `IsWriteLocation`
+  (MyExtensionPackage.cs:683-696) becomes a static member of `RoslynGatherers` so the reflection
+  read of `ReferenceLocation.IsWrittenTo` is unit-testable offline. `MyExtensionPackage` delegates
+  to the extracted class (the `references gathered reads=... writes=...` / `implementations gathered
+  count=...` diagnostics stay byte-identical).
+- **Verify-with:** `Run_RoslynGatherers_IsWriteLocation` (NeoVisual.Tests) — the reflection read of
+  `ReferenceLocation.IsWrittenTo` returns the write flag for a write location and false on a
+  reflection failure (RED: no seam → compile error). Diagnostic:
+  `[Telescope] references gathered reads=... writes=...` unchanged.
+- **Fails-if:** `Run_RoslynGatherers_IsWriteLocation` fails (compile error — no seam); the
+  references/implementations gather diagnostics drift; a Roslyn call escapes the
+  `ThreadHelper.JoinableTaskFactory.Run` wrapper.
+
+## Phase 10 — Docs drift (M6, m61, m66, m67, m68, m69, n20, n21)
+
+### BP-64 — M6: e2e-queue reconciliation
+- **Files:** `docs/e2e-queue.md`, `docs/progress.md`
+- **Change:** Append the PRIOR 67-findings plan's deferred gates to `e2e-queue.md` under DISTINCT
+  IDs — `E2E-NCR-67-*` (e.g. E2E-NCR-67-1..2, E2E-NCR-67-M1/M2/M15 .. E2E-NCR-67-M26/M27/M28,
+  E2E-RESTRUCTURE-67-1) — because the NEW plan already uses `E2E-NCR-1`/`E2E-NCR-2` for its own
+  M1/M8 gates (Phase 0). Reusing the same IDs would create duplicate entries with divergent scenario
+  lists and make gate results un-attributable. Correct the claims in docs/progress.md:16 to point at
+  the new IDs.
+- **Verify-with:** doc-ref lint clean; `e2e-queue.md` contains the E2E-NCR-67-* entries with NO ID
+  collision against the new plan's E2E-NCR-1/2.
+- **Fails-if:** docs/progress.md:16 still claims entries that don't exist in `e2e-queue.md`; an
+  E2E-NCR-67-* ID collides with the new plan's E2E-NCR-1/2.
+
+### BP-65 — m61: scope the doc-ref allowlist
+- **Files:** `tools/lint/check-doc-refs.ps1`
+- **Change:** Scope the external allowlist (check-doc-refs.ps1:87-98) to the specific archive docs
+  instead of permanently masking future refs to `DistinctBy`/`CardinalMovment`/`CardinalNavigation`.
+- **Verify-with:** `pwsh tools/lint/check-doc-refs.ps1` → 0 unresolved (the archive docs still
+  resolve via the scoped allowlist).
+- **Fails-if:** the lint reports unresolved refs in the archive docs; or a future ref to a removed
+  symbol is silently masked.
+
+### BP-66 — m66 + m67 + n20 + n21: progress.md/architecture-review.md doc fixes
+- **Files:** `docs/progress.md`, `docs/reviews/architecture-review.md`
+- **Change:** (m66) Fix the "Chunk C restructure pending" header (docs/progress.md:10). (m67)
+  Update the "Next up" section (docs/progress.md:20-28). (n20) Fix the 143/140 baseline attribution
+  (docs/progress.md:73-74). (n21) Update the "Verified-clean" claim (architecture-review.md:417) to
+  `MyExtension.Navigation`/`Navigation/`.
+- **Verify-with:** doc-ref lint clean; the claims match the current state.
+- **Fails-if:** the lint flags a stale reference; a claim still contradicts the Done state.
+
+### BP-67 — m68 + m69: spec.md diagnostics + key-files table
+- **Files:** `docs/spec.md`
+- **Change:** (m68) Add the 4 omitted harness-asserted lines to §4 (docs/spec.md:186-217):
+  `open finder=`, `Focus prompt => True, mode=insert`, `results count=... selected=...`,
+  `key=... mode=... handled=...`. (m69) Add the 13 omitted seam-file rows to §2.2
+  (docs/spec.md:47-109): OverlayShowState, FocusTargetModel, LineIndex, TryDispatch,
+  PreviewRenderer, BlockCaretStyle, VimModeClassifier, InitSteps, SimpleShortcutMatcher,
+  NavigationSnapshot, FilterFailureLog, TelescopeLog, PaneFailureTracker.
+- **Verify-with:** doc-ref lint clean (the new rows resolve against the source tree).
+- **Fails-if:** the lint flags a new row; a diagnostic line is still missing from §4.
+
+## Phase 11 — Restructure: MyExtension (folders + Utils subfolders + 5 renames)
+
+### BP-68 — git mv helpers into Utils/ subfolders (MyExtension)
+- **Files:** all MyExtension helper .cs files (see the restructure table: Hooks/Utils/,
+  Input/Utils/, Vim/Utils/, Package/Utils/, Navigation/Utils/, ToolWindows/Utils/)
+- **Change:** `git mv` each helper .cs into its target `Utils/` subfolder. Namespaces unchanged.
+- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project tests/NeoVisual.Tests` all pass
+  (count unchanged); no `[NeoVisual]`/`[Telescope]`/`[Hook]`/`[MyExtension]` log literal changed.
+- **Fails-if:** build errors (missed reference); a NeoVisual test regresses; a log literal changed.
+
+### BP-69 — apply the 5 renames
+- **Files:** `MyExtension/Navigation/WindowMatrix.cs`→`WindowNavigator.cs`,
+  `CardinalNavigationConstants.cs`→`NavigationConstants.cs`, `UtilityMethods.cs`→`WindowFrameUtils.cs`,
+  `RectCoordinate.cs`→`WindowRect.cs`, `WindowAdapter.cs`→`WindowFrameAdapter.cs` (+ class renames)
+- **Change:** `git mv` + class rename: WindowMatrix→WindowNavigator,
+  CardinalNavigationConstants→NavigationConstants, UtilityMethods→WindowFrameUtils,
+  RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter.
+- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project tests/NeoVisual.Tests` all pass
+  (count unchanged); no log literal changed.
+- **Fails-if:** build errors (missed rename/reference); a NeoVisual test regresses.
+
+### BP-70 — update using directives + references (MyExtension + NeoVisual.Tests)
+- **Files:** `MyExtension/**/*.cs`, `tests/NeoVisual.Tests/Program.cs`
+- **Change:** Update every `using` directive + fully-qualified reference for the moved files
+  (namespaces unchanged, so only the type names change for the 5 renames; the folder moves do NOT
+  change namespaces). Also rename the Phase 4 test `Run_WindowMatrix_BuildActiveWindowsNullActive`
+  → `Run_WindowNavigator_BuildActiveWindowsNullActive` (the BP-31 test follows the renamed class).
+- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project tests/NeoVisual.Tests` all pass
+  (count unchanged).
+- **Fails-if:** build errors (missed rename/reference).
+
+### BP-71 — doc-ref lint allowlist for the renames (OLD names scoped, NEW names NOT added)
+- **Files:** `tools/lint/check-doc-refs.ps1`
+- **Change:** After the 5 renames the OLD type names (WindowMatrix, CardinalNavigationConstants,
+  UtilityMethods, RectCoordinate, WindowAdapter) are removed from source but are still cited by the
+  archive docs (architecture-review.md etc.) — add them to the scoped external allowlist (per m61's
+  scoping in BP-65, scoped to the specific archive docs). Do NOT add the NEW names (WindowNavigator,
+  NavigationConstants, WindowFrameUtils, WindowRect, WindowFrameAdapter) — they resolve via source
+  grep after the rename. Do NOT remove `CardinalMovment`/`CardinalNavigation` (m61's scoping in
+  BP-65 keeps them for the archive docs).
+- **Verify-with:** `pwsh tools/lint/check-doc-refs.ps1` → 0 unresolved (the archive docs' OLD-name
+  refs resolve via the scoped allowlist; the NEW names resolve via source grep).
+- **Fails-if:** the lint reports unresolved refs to the OLD names in the archive docs; a NEW name is
+  added to the allowlist (masking a future source-grep miss); `CardinalMovment`/`CardinalNavigation`
+  removed (contradicts m61's scoping in BP-65).
+
+## Phase 12 — Restructure: Telescope (folders + Utils subfolders)
+
+### BP-72 — git mv helpers into Utils/ subfolders (Telescope)
+- **Files:** all Telescope helper .cs files (see the restructure table: Overlay/Utils/,
+  Finders/Utils/, Logging/Utils/)
+- **Change:** `git mv` each helper .cs into its target `Utils/` subfolder. Namespaces unchanged.
+- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project tests/Telescope.Tests` all pass
+  (count unchanged); `dotnet run --project tests/NeoVisual.Tests` all pass.
+- **Fails-if:** build errors (missed reference); a Telescope/NeoVisual test regresses; a log literal
+  changed.
+
+### BP-73 — update references (MyExtension + tests)
+- **Files:** `MyExtension/**/*.cs`, `tests/**/*.cs`
+- **Change:** Update every reference across MyExtension/ + tests/ for the moved Telescope files
+  (namespaces unchanged, so only the file paths change — no type renames in Telescope).
+- **Verify-with:** `dotnet build` 0 errors; both unit suites pass (counts unchanged).
+- **Fails-if:** build errors (missed reference); a test regresses.
+
+### BP-74 — keep RootNamespace
+- **Files:** `Telescope/Telescope.csproj`
+- **Change:** Keep `<RootNamespace>Telescope</RootNamespace>` in Telescope.csproj (no change needed —
+  verify it's intact).
+- **Verify-with:** `dotnet build` 0 errors; both unit suites pass.
+- **Fails-if:** the RootNamespace drifted (build/namespace errors).
+
+## Phase 13 — Restructure: reference sweep (docs, agents, tools, tests) + doc-ref lint
+
+### BP-75 — doc/agent/tool reference sweep
+- **Files:** `AGENTS.md`, `docs/spec.md`, `docs/progress.md`, `docs/implementation_plan.md`,
+  `docs/reviews/*.md`, `.opencode/skills/vs-extension-dev/SKILL.md`, `.opencode/agent/*.md`,
+  `tools/lint/check-doc-refs.ps1`
+- **Change:** Update every doc/agent/tool reference to the moved/renamed paths: every
+  `MyExtension/*.cs`/`Telescope/*.cs` path + the 5 renamed type names; every exact-path reference in
+  `.opencode/agent/*.md`; the `check-doc-refs.ps1` allowlists + `$sourceRoots` if needed.
+- **Verify-with:** `pwsh tools/lint/check-doc-refs.ps1` → `[PASS] ... 0 unresolved`; `dotnet build`
+  0 errors; both unit suites pass (counts unchanged).
+- **Fails-if:** the doc-ref lint reports unresolved references (a moved/renamed path missed in the
+  sweep); an agent file still references an old path.
 
 ## Phase 14 — Final verification (combined plan gate)
 
-### BP-13 — Build gate
-
-- **Files:** none.
-- **Change:** `dotnet build MyExtension.slnx`.
-- **Verify-with:** exit 0, 0 errors.
-- **Fails-if:** any compile error (a missed reference/namespace from Phases 11-13).
-
-### BP-14 — Unit suite gates
-
-- **Files:** none.
-- **Change:** `dotnet run --project tests/Telescope.Tests` and `dotnet run --project
-  tests/NeoVisual.Tests`.
-- **Verify-with:** Telescope.Tests and NeoVisual.Tests all pass with counts UNCHANGED from the
-  **Phase 11 start baseline** (captured at the start of Phase 11, AFTER Phase 10 completes —
-  Phases 0-10 add tests, so the count is >135/130 by then; the pre-Phase-0 135/130 is NOT the
-  restructure gate). Record the Phase 11 start counts (e.g. via `--list`) before any `git mv`.
-- **Fails-if:** a test fails; a count changed from the Phase 11 start baseline (any count change
-  from THAT baseline = a behavior/API drift, not a restructure artifact).
-
-### BP-15 — Doc-ref lint gate
-
-- **Files:** none.
-- **Change:** `pwsh tools/lint/check-doc-refs.ps1`.
-- **Verify-with:** `[PASS] ... 0 unresolved`.
-- **Fails-if:** any unresolved reference.
-
-### BP-16 — Log-literal diff gate
-
-- **Files:** none (reads `%TEMP%\restructure-log-literals-before.txt` from BP-1).
-- **Change:** re-capture the log-literal multiset and compare to the baseline:
-  ```powershell
-  $before = Get-Content "$env:TEMP\restructure-log-literals-before.txt"
-  $after = Get-ChildItem -Recurse -Filter *.cs -Path MyExtension, Telescope, tests |
-    Select-String -Pattern '\[(Telescope|NeoVisual|Hook|MyExtension)\]' -AllMatches |
-    ForEach-Object { $_.Matches } | ForEach-Object { $_.Value } |
-    Group-Object | Sort-Object Name |
-    ForEach-Object { "$($_.Name)`t$($_.Count)" }
-  if (Compare-Object $before $after) { throw "log-literal drift" } else { "PASS: log literals unchanged" }
-  ```
-- **Verify-with:** the comparison prints `PASS: log literals unchanged` (identical multiset of
-  `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` prefixes).
-- **Fails-if:** `Compare-Object` reports a difference (a log literal was added/removed/changed by
-  the restructure).
+### BP-76 — combined-plan gate
+- **Files:** (verification only)
+- **Change:** Run the five gates: (1) `dotnet build MyExtension.slnx` → 0 errors; (2)
+  `dotnet run --project tests/Telescope.Tests` → all pass (count unchanged); (3)
+  `dotnet run --project tests/NeoVisual.Tests` → all pass (count unchanged); (4)
+  `pwsh tools/lint/check-doc-refs.ps1` → 0 unresolved; (5) log-literal diff gate (no
+  `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` literal changed by the restructure). e2e
+  deferred: full 35-scenario suite queued (E2E queue reference E2E-RESTRUCTURE-2).
+- **Verify-with:** the five gates all pass.
+- **Fails-if:** any gate fails; a log literal drifted; a unit count changed (unless a Phase 9 test
+  deletion was the documented cause).
 
 ---
 
-## Verification Trace
+# Verification Trace
 
-| gate | implicated steps | expected result |
-|------|------------------|-----------------|
-| `dotnet build MyExtension.slnx` → 0 errors | BP-2, BP-3, BP-4, BP-6, BP-7, BP-8, BP-13 | exit 0, 0 errors |
-| `dotnet run --project tests/Telescope.Tests` → 135 pass | BP-6, BP-8, BP-14 | 135 pass, count unchanged |
-| `dotnet run --project tests/NeoVisual.Tests` → 130 pass | BP-2, BP-3, BP-4, BP-8, BP-14 | 130 pass, count unchanged |
-| `pwsh tools/lint/check-doc-refs.ps1` → 0 unresolved | BP-5, BP-9, BP-11, BP-12, BP-15 | `[PASS] ... 0 unresolved` |
-| log-literal diff gate | BP-1, BP-16 | `PASS: log literals unchanged` |
+Maps every failing unit test / gate to its implicated Build Plan step(s) and the expected
+diagnostic line that proves it. **Known-RED allowlist: NONE** — no known-RED e2e scenario remains
+(per docs/progress.md); the deferred e2e scenarios in the "E2E queue reference" section are QUEUED,
+not failing, and must NOT be reported as regressions. The restructure (Phases 11-14) is
+behavior-preserving (no RED — verified by build + suites + doc-ref lint + the deferred full-suite
+e2e re-run).
 
-## Known-RED allowlist
-
-**Empty** — no known-RED scenario/test is excluded (per docs/progress.md). The restructure is
-behavior-preserving; every gate in the Verification Trace must pass. Do not report any of the
-intermediate RED states (build RED after BP-2/BP-6 until the following sweep steps; doc-ref lint
-unresolved between BP-5 and BP-11) as regressions — they are the expected mid-plan states the
-plan's step ordering resolves.
-
-## E2E note (informational — deferred)
-
-`E2E-RESTRUCTURE-1` (full 35-scenario suite, queued in e2e-queue.md) verifies the restructure
-live after this plan is GREEN — no e2e scenario is referenced by any Verify-with / Fails-if above.
-
-DONE
+| failing test / gate | implicated steps | expected diagnostic |
+|---|---|---|
+| `Run_PromptMotionRouter_InsertPlacementsNotConsumed` (M1 + m52) | BP-1, BP-3 | `prompt-motion key=... caret=...` NOT emitted for a/A/I; `Focus prompt => True, mode=insert` after a/A/I; `[Telescope] preview caret=... line=...` NOT emitted for a/A/I in the preview |
+| `Run_PromptMotionRouter_MotionsConsumed` | BP-1 | `prompt-motion key=... caret=...` emitted for h/l/w/b/e/0/$/gg/G |
+| `Run_OverlayKeyHandler_*` (a/A/I insert actions) | BP-1 | `Focus prompt => True, mode=insert` |
+| `Run_HierarchyResolver_PrimaryFilePath` (primitive string lists) | BP-2 | `[NeoVisual] solution-explorer select file=...` (primary `.cs`, not `.resx`) |
+| `Run_GrepFinder_*` (drop-Task.Run, behavior-preserving) | BP-4 | `[Telescope] grep hits=...` unchanged |
+| `Run_PreviewTokenCache_UnchangedMtimeCached` / `_ChangedMtimeRetokenizes` | BP-5 | `[Telescope] preview tokens=...` unchanged (same count on cache hit) |
+| `Run_FileContentCache_*` (read-once) | BP-6 | `[Telescope] references gathered reads=... writes=...` unchanged |
+| code-review: 3 construction sites pass a cap (m27; `Run_FileContentCache_EvictsOldest` already exists + passes) | BP-7 | (none — no new RED test) |
+| `Run_TryDispatch_*` / `Run_TextMotionNavigator_*` (m31) | BP-8 | `prompt-motion key=... caret=...` unchanged |
+| `Run_TextMotionNavigator_LineNumber` | BP-9 | `[Telescope] preview caret=... line=...` unchanged |
+| `Run_ResultMapper_*` | BP-10 | `[Telescope] result-mapper unknown display: {display}` unchanged |
+| `Run_FileFinder_UsesProjectFileCache` | BP-11 | `[Telescope] opened file: ...` unchanged |
+| `Run_FzfFilter_IsAvailableBounded` (bounded assertion deferred to Phase 9/BP-61) | BP-12 | `[Telescope] fzf unavailable — showing unfiltered list` unchanged (once at overlay open) |
+| build (m15) | BP-13 | `[NeoVisual] text-motion key=... caret=...` / `textinput-enter-input ...` unchanged |
+| `Run_HitOpener_*` (m30) | BP-14 | `[Telescope] opened file: ...` unchanged |
+| `Run_FocusGuard_OwnsKeyboard` | BP-15 | `[NeoVisual] toolwindow-move key=... -> arrow vk=...` unchanged |
+| `Run_FocusGuard_*` (m7) | BP-16 | `[NeoVisual] toolwindow-move key=... -> arrow vk=...` unchanged |
+| `Run_KeybindingConfig_IsSimpleShortcut` (m42) | BP-17 | `[NeoVisual] leader-binding executed: ...` unchanged |
+| `Run_InjectedKeyGuard_*` | BP-18 | (none — guard behavior) |
+| build (n14/n15) + m47 outcome diagnostic | BP-19 | `[NeoVisual] navigate direction=L/R/D/U` unchanged; ADD `[NeoVisual] navigate activated index=...` / `navigate no-op: <reason>` |
+| build (n16) | BP-20 | (none) |
+| build (m38) | BP-21 | (none) |
+| build (m39) | BP-22 | (none) |
+| build (m40) | BP-23 | (none) |
+| `Run_VimModeState_*` (mode-change) | BP-24 | `[NeoVisual] vim-mode=Insert\|Normal\|Replace` unchanged; `vim-mode=Unknown` on focus loss |
+| `Run_VimModeClassifier_*` | BP-25 | (none) |
+| `Run_WindowNavigationEngine_*` (m11/n3) | BP-26 | (none) |
+| `Run_WindowNavigationEngine_*` (m48) | BP-27 | (none) |
+| `Run_NavigationSettings_*` | BP-28 | (none) |
+| `Run_WindowAdapter_*` (m13) | BP-29 | (none) |
+| build (m14/m45/m49) | BP-30 | (none) |
+| `Run_WindowMatrix_BuildActiveWindowsNullActive` | BP-31 | (none) |
+| build (m46) | BP-32 | (none) |
+| build + `Run_WindowAdapter_*` / `Run_NavigationSnapshot_*` (n4/n5/n6/n19) | BP-33 | (none) |
+| build (m20/m21) | BP-34 | (none) |
+| `Run_WindowManager_*` | BP-35 | (none) |
+| `Run_GeneralToolWindowController_*` (m23) | BP-36 | (none) |
+| build (m24) | BP-37 | (none) |
+| build (m25) | BP-38 | (none) |
+| `Run_HierarchyResolver_*` / `Run_HierarchyForestBuilder_*` | BP-39 | `[NeoVisual] solution-explorer select file=...` unchanged (`.cs`) |
+| build (n7/n8/n9/n10) | BP-40 | `[NeoVisual] toolwindow-move key=... -> arrow vk=...` unchanged (n10 aligned) |
+| `Run_GeneralToolWindowController_*` (m9/m17) | BP-41 | `[NeoVisual] toolwindow-move key=... -> arrow vk=...` unchanged |
+| `Run_ActionTable_*` | BP-42 | (none) |
+| build (m18) | BP-43 | (none) |
+| `Run_HierarchyForestBuilder_*` + `Run_HierarchyWalker_*` | BP-44 | (none) |
+| `Run_TextMotionNavigator_*` / `Run_TextMotionDispatcher_*` (m35) | BP-45 | (none) — shared `ApplyCaretStyle` in `BlockCaretStyle` (DEVIATION ACCEPT) |
+| `Run_TextMotionDispatcher_*` (n11) | BP-46 | `[Telescope] prompt-motion key=... caret=...` / `preview caret=... line=...` unchanged |
+| build (m8) | BP-47 | `[Telescope] open finder=...` / `overlay closed` unchanged (single injected launcher) |
+| `Run_FocusGuard_*` (m1) + doc-ref lint | BP-48 | (none) |
+| NeoVisual.Tests count drop (m2) | BP-49 | (none) |
+| build (m10/m28) | BP-50 | (none) |
+| `Run_LogFileWriter_*` | BP-51 | `[Hook]` lines single-stamped |
+| `Run_FileFinder_*` / `Run_GrepFinder_*` (m29) | BP-52 | `[Telescope] opened file: ...` unchanged |
+| `Run_PaneFailureTracker_RetryAfterFailure` | BP-53 | `[NeoVisual] output pane unavailable: {reason}` unchanged |
+| build (n2/n13) | BP-54 | (none) |
+| build (n12) | BP-55 | `[Telescope] results count=... selected=...` unchanged |
+| build (n17) | BP-56 | `[Telescope] references gathered reads=... writes=...` / `implementations gathered count=...` unchanged |
+| build (n18) | BP-57 | `[MyExtension] init hook ok` (hook init completes; `MainModule` failure logged, `hMod=IntPtr.Zero`) |
+| harness self-check (M3) | BP-58 | `Send-Text` case-fidelity (deferred e2e, E2E queue reference E2E-NCR-M3) |
+| harness self-check (m60/m63/m64/m65) | BP-59 | `results count=[1-9]\d*` (deferred e2e) |
+| `Run_FzfFilter_TimeoutAwaitsTasks` | BP-60 | (none) |
+| Telescope.Tests count drop (m53) + hermeticity tests (m54-m58) | BP-61 | (none) |
+| build + both suites (m62) | BP-62 | (none) |
+| `Run_RoslynGatherers_IsWriteLocation` (m4) | BP-63 | `[Telescope] references gathered reads=... writes=...` unchanged |
+| doc-ref lint + `e2e-queue.md` content (M6) | BP-64 | (none) |
+| `pwsh tools/lint/check-doc-refs.ps1` (m61) | BP-65 | (none) |
+| doc-ref lint (m66/m67/n20/n21) | BP-66 | (none) |
+| doc-ref lint (m68/m69) | BP-67 | (none) |
+| build + NeoVisual.Tests (Phase 11 folder moves) | BP-68 | no `[NeoVisual]`/`[Telescope]`/`[Hook]`/`[MyExtension]` log literal change |
+| build + NeoVisual.Tests (5 renames) | BP-69 | no log literal change |
+| build + NeoVisual.Tests (references) | BP-70 | no log literal change |
+| doc-ref lint (allowlist: OLD names scoped for archive docs, NEW names NOT added) | BP-71 | (none) |
+| build + both suites (Phase 12 folder moves) | BP-72 | no log literal change |
+| build + both suites (references) | BP-73 | no log literal change |
+| build + both suites (RootNamespace) | BP-74 | (none) |
+| doc-ref lint + build + suites (sweep) | BP-75 | `[PASS] ... 0 unresolved` |
+| five gates (Phase 14) | BP-76 | no log literal change; both suites pass (counts unchanged) |
 
 ---
 
-## Execution Log
+# Execution Log
 
-### Plan gate (2026-09-30)
-- **PLAN REVIEW (build-plan focus):** docs-reviewer APPROVED (0 critical, 0 major; 1 nit on BP-6 m13 ordering — the plan's own Verify-with/Fails-if already gate it). Doc-ref lint: [PASS] 28 docs, 6015 refs, 0 unresolved. All spot-checked BP-n file/line claims match the code.
-- **Lane:** feature/bugfix program + refactor (unit-only, e2e deferred to e2e-queue.md). NO e2e harness commands will be run on this machine (user mandate).
-- **Execution strategy:** 3 chunks matching the plan's 3 Build Plan sections — Chunk A (Phases 0-5, BP-1..BP-28), Chunk B (Phases 6-10, BP-1..BP-39), Chunk C (Phases 11-14, BP-1..BP-16). Each chunk: RED (unit tests only, no VS boot) → BUILD → VERIFY.
+## Attempt 1 — Phase 0 (M1, M8, m36, m52) — GREEN
 
-### Chunk A RED — attempt 1 (2026-09-30)
-- **DEVIATION D-A1 (ACCEPT):** TextMotionDispatcher placed at MyExtension/TextMotionDispatcher.cs (namespace MyExtension) instead of the plan's Telescope/TextMotionDispatcher.cs. Reason: it references BOTH MyExtension.ToolWindows.TextMotion (the enum, TextMotionHelper.cs:17) AND Telescope.TextMotionNavigator; Telescope does not reference MyExtension (only MyExtension references Telescope), so the shared dispatcher must live in MyExtension to avoid a circular dependency. No diagnostic/API contract change. The restructure (Phase 11-14) will place it in its final folder.
-- **Status:** e2e-test-builder hit its step limit mid-task. NeoVisual.Tests REDs CONFIRMED (137 total, 4 failed: Run_ActionTable_TextInput_ActionKeysMatchTable count 6 vs 7, Run_TextInput_KeysIMapsToInsertStart, Run_LeaderMatcher_PrefixSetBuiltOnce, Run_VimModeTracker_LogOnlyOnChange). Telescope.Tests edits partially applied (BP-28/BP-14/BP-15 done; BP-8/BP-9/BP-10/11/BP-12/BP-13 pending). Re-dispatching fresh to complete the Telescope REDs.
+- **Plan gate (2a):** APPROVED (round 2) — 8 findings resolved (Phase 11 step-4 vs BP-71 contradiction; Phase 0 RED seam extraction via `PromptMotionRouter`; Phase 1 M2 vs BP-4 alignment; E2E-NCR-67-* ID de-collision; m29/n7 premise corrections; M6 line refs; BP-31 test-name forward-ref). 2 nits fixed (BP-70 test rename explicit; unit-test summary wording).
+- **RED (e2e-test-builder):** wrote `Run_PromptMotionRouter_InsertPlacementsNotConsumed`, `Run_PromptMotionRouter_MotionsConsumed` (Telescope.Tests) + `Run_HierarchyResolver_PrimaryFilePath` (NeoVisual.Tests). RED-PROVEN for the right reason: `CS0103 PromptMotionRouter does not exist` / `CS0117 HierarchyResolver does not contain PrimaryFilePath` (missing symbols — matches plan's expected failure).
+- **BUILD (build-agent):** BP-1 done (`PromptMotionRouter.ShouldConsume` seam + `TryPromptMotion` a/A/I fall-through + m36 caret restore in `FocusPrompt`); BP-2 done (`HierarchyResolver.PrimaryFilePath` + `MapChildren` primary-file pick); BP-3 done (`HandlePreviewKey` excludes insert placements). Build 0 errors; Telescope 145/145; NeoVisual 141/141. DEVIATIONS: none.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 145/145; NeoVisual 141/141; all 3 RED tests pass; diagnostic contract preserved (`prompt-motion`, `Focus prompt`, `solution-explorer select file=...` unchanged — zero log-literal diffs); seams present; doc-ref lint PASS; harness `-List` parses.
+- **Cost:** delegations: 4 (docs-reviewer×2, e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk A RED — attempt 2 (2026-09-30)
-- e2e-test-builder completed all test edits but looped on the verification step (user cancelled). Hub verified the RED state directly (offline unit runs only — no e2e).
-- **RED CONFIRMED (12):** NeoVisual.Tests 137 total / 4 failed (Run_ActionTable_TextInput_ActionKeysMatchTable count 6 vs 7 → CR1; Run_TextInput_KeysIMapsToInsertStart → CR1; Run_LeaderMatcher_PrefixSetBuiltOnce → M7; Run_VimModeTracker_LogOnlyOnChange → M16). Telescope.Tests 142 total / 8 failed (Run_FileContentCache_EvictsOldest → M13; Run_FilterFailureLog_Format → m14; Run_FzfFilter_IsAvailableBounded → m16; Run_Issues_CollectTodosUsesCache → m15; Run_Preview_UpFromSecondLineWithLeadingBlankLine + _Fixed → M10; Run_ResultMapper_UnknownStringNullPayload + _SkippedOrLogged → M11). All REDs match the plan's Fails-if (RIGHT reason).
-- **Wiring-is-the-fix (pass today, pin the contract):** BP-8 (M3 timeout-await — the injected-path ctor already exists per the plan's research), BP-9 (M4 off-thread scan). These are contract pins; the fix is verified by build + the test passing after the fix.
-- **New seam classes (RED skeletons, wiring is the fix):** MyExtension/VimBufferSubscriptions.cs (CR2), MyExtension/TextMotionDispatcher.cs (M19, D-A1 ACCEPTED), Telescope/FileContentCache.cs maxEntries cap param (M13).
-- **Cost:** delegations: 2 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 1 (M2, M4, m5, m15, m27, m30-m34, m37, m50) — GREEN
 
-### Chunk A BUILD — attempt 1 (2026-09-30)
-- build-agent hit its step limit mid-task. Completed BP-1..BP-9, BP-11, BP-13 (CR1, CR2 wiring, M1, M2, M15, M7, m17, M3, M4, M13, m16). NOT completed: BP-10, BP-12, BP-14, BP-15, BP-16, BP-17, BP-18..BP-23, BP-24..BP-28. Build verified 0 errors at the partial state.
-- **DEVIATION D-A1 REVISED -> REJECT (M19/BP-16):** the e2e-test-builder placed `TextMotionDispatcher` at `MyExtension/TextMotionDispatcher.cs` (namespace MyExtension), but `TryDispatch` (Telescope) cannot reference a MyExtension type and Telescope does not reference MyExtension — this defeats the M19 unification. The plan's original placement is correct: move `TextMotionDispatcher` to `Telescope/TextMotionDispatcher.cs` (namespace `Telescope`) and move the `TextMotion` enum from `MyExtension/ToolWindows/TextMotionHelper.cs` to Telescope (namespace `Telescope`, `public` so MyExtension can use it — TextMotionHelper already has `using Telescope;`). Both `TextMotionHelper.MapMotion` and `TryDispatch.Handle` delegate to it. Update NeoVisual.Tests references (`TextMotionDispatcher`/`TextMotion` resolve via `using Telescope;`).
-- **Cost:** delegations: 3 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_PreviewTokenCache_UnchangedMtimeCached` / `_ChangedMtimeRetokenizes` (RED: CS0246 `PreviewTokenCache` missing) + `Run_FileFinder_UsesProjectFileCache` (RED: CS1729 no cache-injection ctor) + behavior-preserving pins `Run_TextMotionNavigator_LineNumber`, `Run_HitOpener_*`, `Run_FileContentCache_*`, `Run_ResultMapper_*`, `Run_FzfFilter_IsAvailableBounded`. RED-PROVEN for the right reason (missing symbols).
+- **BUILD (build-agent):** BP-4..BP-14 done (GrepFinder drops Task.Run; PreviewTokenCache + SetContent wiring; ReadLine read-once via `_referenceLineCache`; FileContentCache cap 500 ×4 sites; `_promptNavigator` reuse; LineNumber via LineIndex; ResultMapper byDisplay cache; FileFinder cache-injection ctor; FzfFilter availability cache; TextMotionHelper single focused-box walk; OpenHit drops outer File.Exists). Build 0 errors; Telescope 149/149; NeoVisual 141/141. DEVIATIONS: none.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 149/149 (×2 runs); NeoVisual 141/141; all RED tests + pins pass; diagnostic contract preserved (9 literals verified, zero diffs); seams present; doc-ref lint PASS. Flagged `Run_FileContentCache_CachedRead` flake classified PRE-EXISTING test-design (timestamp injection crossing clock-tick boundary), NOT a Phase 1 regression. NOTE: `Run_PreviewTokenCache_UnchangedMtimeCached` carries the same latent clock-tick flakiness — fold into Phase 9 (m58) clock-injection hardening.
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent×2 [1 empty verdict + retry], verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk A BUILD — attempt 2 (2026-09-30)
-- build-agent completed most of Chunk A (BP-1..BP-25, BP-27 done; D-A1 REJECT applied — `TextMotionDispatcher` + `TextMotion` enum moved to Telescope) but returned an empty verdict. Hub verified directly: build 0 errors; NeoVisual 136/137 (1 fail), Telescope 140/142 (2 fails).
-- **REMAINING FAILURES (root-caused by hub):**
-  1. **M16 (BP-26)** — `VimModeTracker.UpdateTypingFromMode` still logs `vim-mode=` on every call (no change detection). `Run_VimModeTracker_LogOnlyOnChange` fails.
-  2. **m14 (BP-28)** — `FilterFailureLog.Format` still embeds the `[Telescope] ` prefix; caller still uses `NeoVisualLog.Log`. `Run_FilterFailureLog_Format` fails.
-  3. **M3 (BP-8) REGRESSION** — the build-agent's fix does `await all` (both `ReadToEndAsync` tasks) after `TryKill` on the timeout path; on a killed process the pipe reads don't fault promptly (the test's `hang.cmd` = `ping -n 30` holds the pipe open), so `await all` blocks ~29s. `Run_FzfFilter_TimeoutKillsAndFallsBack` fails (took 29s). The plan's intent (observe the faulted tasks, no unobserved-task noise) must be achieved WITHOUT blocking the return — e.g. `_ = all.ContinueWith(t => { _ = t.Exception; }, OnlyOnFaulted)` or a bounded await.
-- **Cost:** delegations: 4 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 2 (M5, m7, m42, m43, m47, n14, n15, n16) — GREEN
 
-### Chunk A DEBUG — attempt 1 (2026-09-30)
-- debug-agent fixed all 3 remaining failures (M16/BP-26 `_lastLoggedModeName` change-detection; m14/BP-28 `FilterFailureLog.Format` unprefixed + `TelescopeLog.Log` caller; M3/BP-8 regression — replaced the blocking `await all` after TryKill with a fault-only `ContinueWith` observation). No DEVIATIONS.
-- Hub verified: build 0 errors; NeoVisual 137/137; Telescope 142/142 (one transient flaky run showed 1 fail — the timing-sensitive FzfFilter timeout test — pass-on-retry, recorded as flaky x1).
-- **Cost:** delegations: 5 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_KeybindingConfig_IsSimpleShortcut` (RED: CS0117 missing method), `Run_InjectedKeyGuard_StaleRecordExpires`/`_FreshRecordConsumesOnce` (RED: CS1729 no TTL ctor), `Run_FocusGuard_OwnsKeyboard` (RED: CS1739 no 3-arg overload). Behavior-preserving pins confirmed (existing 5-arg `Run_FocusGuard_*` + 4 `Run_InjectedKeyGuard_*`). RED-PROVEN for the right reason.
+- **BUILD (build-agent):** BP-15..BP-20 done (3-arg `ShouldRouteToolWindowKey` + 5-arg delegate kept; `IsSimpleShortcut` modifier-prefix check; `InjectedKeyGuard(TimeSpan, Func<DateTime>)` TTL ctor; m47 `navigate activated index=...`/`navigate no-op: <reason>` via `NavigationOutcome` return; n14 UI-thread assert; n15 volatile `_active`; n16 accept+document). Build 0 errors; NeoVisual 145/145; Telescope 149/149. DEVIATIONS: none (note: `NavigateInDirection` void→`NavigationOutcome` is an internal implementation detail required by m47 — only caller updated, diagnostic format matches plan exactly; accepted).
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); NeoVisual 145/145; Telescope 149/149; all 4 RED tests + 20 pins pass; diagnostic contract preserved (zero literal diffs; `navigate direction=...` byte-identical; m47 is the only addition via `DiagnosticLog.NeoVisual` constant); seams present; n14/n15 confirmed.
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk A VERIFY — attempt 1 (2026-09-30)
-- verification-agent: **FAIL** — build 0 errors, NeoVisual 137/137, Telescope 142/142, all 12 RED tests GREEN, all harness-health self-checks PASS, but **9 of 28 BPs NOT applied** (the build-agent skipped the no-seam code changes): BP-18 (M9), BP-19 (M14), BP-20 (m3), BP-21 (m4), BP-22 (m5), BP-23 (m6), BP-24 (M8 — the `[NeoVisual] toolwindow-move failed: {msg}` ADD is MISSING), BP-25 (M12), BP-27 (M25). All are no-seam (build-verified) code changes. Dispatching debug-agent to implement them.
-- **Cost:** delegations: 6 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 3 (m38, m39, m40, m41, m3, n1) — GREEN
 
-### Chunk A DEBUG — attempt 2 (2026-09-30)
-- debug-agent implemented the 9 missing no-seam BPs (BP-18 M9, BP-19 M14, BP-20 m3, BP-21 m4, BP-22 m5, BP-23 m6, BP-24 M8, BP-25 M12, BP-27 M25). No DEVIATIONS (BP-27 factory lambdas used the plan's allowed `!` at the lambda; the `[NeoVisual] Unable to get DTE for window navigation:` line was removed with CheckDte — the explicit BP-18 deletion).
-- Hub verified: build 0 errors; NeoVisual 137/137; Telescope 142/142; `[NeoVisual] toolwindow-move failed: {msg}` present (InputHandler.cs:351); `[Telescope] result-mapper unknown display: {display}` present (ResultMapper.cs:45); `vim-mode=` token byte-identical.
-- **Cost:** delegations: 7 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_VimModeState_LostFocusNormalReturnsModeChange` / `_ClosedNormalReturnsModeChange` (RED: `OnViewLostFocus`/`OnViewClosed` return only the typing-change, not the mode-change — Normal→Unknown never signaled) + pins `Run_VimModeState_LostFocusInsertStillSignalsChange`, `Run_VimModeState_NonFocusedViewNoChange`, `Run_VimModeClassifier_*`. RED-PROVEN for the right reason (trace: `wasTyping != _isTyping` = false while `ModeName` changed Normal→Unknown).
+- **BUILD (build-agent):** BP-21..BP-25 done (GetVim latches only on success; Attach re-points only on focus gain via `makeCurrent` param; Detach refcounts shared buffers; `OnViewLostFocus`/`OnViewClosed` return `Clear()` mode-change; aliases deleted + 3 tests switched to `VimModeClassifier.*`; VimBufferSubscriptions comment fixed). Build 0 errors; NeoVisual 149/149; Telescope 148/149 — STOP per GATE on `Run_FileContentCache_CachedRead` (pre-existing test-design flake, now deterministic).
+- **DEBUG (debug-agent):** root-caused the flake (test injects `_ => DateTime.UtcNow`; two consecutive calls straddle a clock-tick boundary → spurious cache miss). MINIMAL test-only fix: fixed injected timestamp in `Run_FileContentCache_CachedRead` + the identical `Run_PreviewTokenCache_UnchangedMtimeCached` flake. No production code touched. Telescope 149/149; NeoVisual 149/149.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); NeoVisual 149/149; Telescope 149/149 (×2 runs, flake fixed); both RED tests + all pins pass; diagnostic contract preserved (`vim-mode=Insert|Normal|Replace` unchanged; `vim-mode=Unknown` on focus loss is the m41 fix); debug fix minimal (test-only); m38/m39/m40 no-seam changes in place; doc-ref lint PASS.
+- **Cost:** delegations: 4 (e2e-test-builder, build-agent, debug-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk A VERIFY — attempt 2 (2026-09-30)
-- verification-agent: **FAIL (blocking doc-ref drift only)** — code fully GREEN (build 0 errors, NeoVisual 137/137, Telescope 142/142, all 28 BPs applied, all 12 RED tests GREEN, diagnostic contract PASS, no deviations). Blocking finding: `docs/progress.md:1439` backticked `` `CheckDte` `` (historical m20 finding record) — BP-18 deleted the symbol, so the doc-ref lint reported 1 unresolved. Hub fixed the doc (annotated m20 FIXED, dropped the backtick); lint now `[PASS] 28 docs, 6013 refs, 0 unresolved`.
-- **NEW FLAKY entry:** `Run_FileContentCache_CachedRead` = flaky x1 (test-hermeticity — the injected `DateTime.UtcNow` timestamp ticks between two rapid `GetLines` calls, causing a cache miss; pass-on-retry, not a regression). `Run_FzfFilter_TimeoutKillsAndFallsBack` did not flake this run (stays x1).
-- **Cost:** delegations: 8 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 4 (m11, m12, m13, m14, m44, m45, m46, m48, m49, n3, n4, n5, n6, n19) — GREEN
 
-### Chunk A VERIFY — attempt 3 (2026-09-30) — **GREEN**
-- verification-agent: **PASS** — build 0 errors; NeoVisual 137/137; Telescope 142/142 (one first-run 141/142 timing flake, pass-on-retry x4 — one of the two known-flaky timing tests, cumulative flaky count for the item now x2, under the 3-strike budget); doc-ref lint `[PASS] 28 docs, 6013 refs, 0 unresolved`; all harness-health self-checks PASS; all 12 Chunk A RED tests GREEN; diagnostic contract PASS (only the 3 planned ADDs); no deviations.
-- **Chunk A COMPLETE.** Proceeding to Chunk B (Phases 6-10).
-- **Cost:** delegations: 9 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_WindowNavigationEngine_Down_OnePixelGapAccepted` (RED: asymmetric Down `> 1` vs Up bare `<` tolerance) + `Run_WindowMatrix_BuildActiveWindowsNullActive` (RED: CS0117 missing helper). Behavior-preserving pins confirmed (10 `Run_WindowNavigationEngine_*`, `Run_NavigationSettings_*`, `Run_WindowAdapter_*`, `Run_NavigationSnapshot_*`). RED-PROVEN for the right reason.
+- **BUILD (build-agent):** BP-26..BP-33 done (SelectTarget single pass + Pipeline inlined; symmetric Down tolerance `c.Y > a.Y`; NavigationSettings DPI cache; LinkedTo precomputed key set; m14/m45/m49 null guards; `BuildActiveWindows` helper + ctor delegation; per-window Rect fault isolation; n4/n5/n6/n19). Build 0 errors; NeoVisual 151/151; Telescope 149/149.
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: n19 -> ACCEPT` — new diagnostic `[NeoVisual] window rect unavailable; using empty rect` (logged once per adapter). Plan approved "log the fallback once" without a pinned format; additive, no existing contract changed. Recorded as the contract.
+  - `DEVIATION: m14 -> ACCEPT` — new diagnostics `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` / `[NeoVisual] IVsUIShell unavailable: SVsUIShell service returned null.` Plan approved "null-guard + log" without a pinned format; additive. Recorded as the contract.
+  - `DEVIATION: n6 -> ACCEPT` — `Run_NavigationSnapshot_ActiveComesFromSnapshot` adapted to `snapshot.Value.Candidates`/`snapshot.Value.Active` (NavigationSnapshot is now a `readonly struct`; `Capture` returns `NavigationSnapshot?`). Mechanical, expected (plan lists the test file as a BP-33 file).
+  - Doc-sync: the 3 new diagnostics (n19, m14×2) must be reflected in AGENTS.md/SKILL.md at the GREEN commit.
+- **VERIFY (verification-agent):** PASS — build 0 errors; NeoVisual 151/151; Telescope 149/149; both RED tests + all pins pass; diagnostic contract preserved (existing literals unchanged; only the 3 approved new diagnostics added); seams present.
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk B RED — attempt 1 (2026-09-30)
-- e2e-test-builder wrote all Chunk B test edits + proved the compile-error REDs (build FAILED, 19 errors, all matching the plan's expected failures): CS7036 x5 (BP-3 M21 HierarchyForestBuilder.Build new signature), CS0117 x4 (BP-4 M22 FocusGuard.OwnsKeyboard), CS0117 x2 (BP-5 M24 InitSteps.RunSync), CS0117 x4 (BP-14 M28 LogFileWriter.TimerScheduler), CS1739 x4 (BP-30 m7+m10 FocusGuard.IsTyping editorFocusedVeto rename). Deletions: BP-8 (Run_DistinctBy_DeduplicatesOnKey, -1), BP-26 (3 redundant action-key presence tests, -3). Behavior-preserving rewrites: BP-11 (JkMoveByLine Caret), BP-19 (FzfFilter injected path), BP-20 (FinderBase single-log assertion), BP-21 (Syntax exact sequence), BP-22 (HierarchyResolver split x4), BP-25 (TextInput TryMove), BP-34 (n1), BP-35 (n2).
-- **DEVIATION D-B1 (ACCEPT, BP-24/m27):** the plan's premise that `GetCandidates()` invokes the throwing `GatherHits()` and logs `GrepFinder failed to enumerate:` is FALSE — GrepFinder's `GetCandidates(string)` override short-circuits on an empty query (deterministic empty initial state) and never reaches the gather stub. The m27 fix is the reflection removal (implementation coupling), not a loud-failure log. Corrected test: `GetCandidates("")` returns empty AND does NOT log a failure (asserts `failureLines == 0`). Behavior-preserving (passes against current code); the reflection removal is verified by grep (no `GetMethod("GatherHits"` remains).
-- **Cost:** delegations: 10 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 5 (m20-m26, m59, n7-n10) — GREEN
 
-### Chunk B BUILD — attempts 1-2 (2026-09-30)
-- build-agent attempt 1: completed BP-1 only, hit step limit. Re-dispatched fresh.
-- build-agent attempt 2: completed BP-2..BP-13, BP-15..BP-29, BP-31..BP-39 (returned empty verdict; hub verified the work landed). Left BP-14 (TimerScheduler) + BP-30 (IsTyping rename) — the 8 remaining compile errors.
-- debug-agent (BP-14/BP-30): fixed both (LogFileWriter.TimerScheduler seam + IDisposable? _flushTimer; FocusGuard.IsTyping dead-branch removal + editorFocusedVeto rename). Build 0 errors.
-- debug-agent (remaining 4): fixed BP-6/m13 FileFinder missing-file guard regression, BP-21/m24 Syntax 6-segment sequence, BP-18/m21 TempDir.Dispose rethrow, BP-9/M23 doc sweep (DistinctBy + LinqExtensionMethods.cs allowlist, dropped backticks on the 2 split-test refs).
-- **DEVIATION D-B2 (ACCEPT, BP-9):** `LinqExtensionMethods.cs` added to `$intentionallyAbsent` (the file-path analog of the "recently removed" pattern) instead of `$externalAllowlist` (which only consults PascalCase symbol tokens). Same intent — review archives stay lint-clean; verified `check-doc-refs.ps1` → 0 unresolved.
-- Hub verified: build 0 errors; NeoVisual 140/140; Telescope 143/143; check-doc-refs `[PASS] 28 docs, 5993 refs, 0 unresolved`; iterate-telescope -SelfCheck PASS.
-- **Cost:** delegations: 13 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_WindowManager_PerTypeDefaultsDoNotLeakInputMode` (RED: the shared `_defaultController` leaks `_isInputMode` across unknown-GUID tool windows), `Run_HierarchyResolver_FirstSourceFile_PrefersCsOverNonCs` / `_PrefersCsInLaterFolder` (RED: an unfiltered forest returns a non-.cs file today). RED-PROVEN for the right reason (missing behavior, matches plan's expected failure).
+- **BUILD (build-agent):** BP-34..BP-40 done (FocusKeeper `Func<int,bool>` tick + stop-on-close via `IsSolutionExplorerVisible`; per-type `ResolveController`/`DefaultControllerFor` factory replacing the shared `_defaultController`; dead ctor branch dropped; editor-view caret styled on insert placements via `ApplyEditorViewCaret`; `RunGuarded` unified catch/log helper; `PrimaryFilePath` + `.cs` filter in `FirstSourceFilePath`; `keeperRef` deleted; `ComputeTextInputSurfaceFocused` skipped in the non-tool branch; arrow-fallback log aligned to the bare contract; n7 DROPPED — class body already indented). Build 0 errors; NeoVisual 156/156; Telescope 149/149. DEVIATIONS: none.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); NeoVisual 156/156; Telescope 149/149; all 3 RED tests pass; diagnostic contract preserved (`toolwindow-move key=... -> arrow vk=...` bare at both sites — n10 suffix-removal confirmed via git diff; `solution-explorer select file=...` unchanged; m25 `RunGuarded` preserves the 3 failure-message prefixes byte-identical); seams present; doc-ref lint PASS (28 docs, 6360 refs, 0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk B VERIFY — attempt 1 (2026-09-30)
-- verification-agent: **FAIL** — build 0 errors, NeoVisual 140/140, Telescope 143/143, all harness-health self-checks PASS, diagnostic contract PASS, but **17 of 39 BPs NOT applied** (the build-agent's completion claim was false for these no-seam changes; the hub's "work landed" check was a false-green because every one is a no-seam change whose Verify-with passes without the change): BP-10 (m11 ResultCount), BP-11 (m12 ColumnNumber), BP-12 (M26 preview tokens regex), BP-13 (M27 results count regex), BP-15 (m18 PID-scoped Stop-HarnessVs), BP-16 (m19 NEOVISUAL_LOG_DIR Process scope), BP-17 (m20 allowlist cleanup), BP-23 (m26 PositiveActionKeyCount 5→7), BP-27 (m30 stale comment), BP-29 (m2 File.Exists hoist), BP-31 (m8 TickCount64), BP-32 (m9 FocusKeeperDurationMs), BP-33 (m32 SKILL.md wording), BP-36 (M29 doc counts), BP-37 (M30 §4 diagnostics), BP-38 (M31 key-files seams), BP-39 (m31 progress.md header).
-- Flaky: `Run_FileContentCache_CachedRead` x1→x2 (known DateTime.UtcNow hermeticity flake, pass-on-retry, under the 3-strike budget). `Run_FzfFilter_TimeoutKillsAndFallsBack` stays x1.
-- Dispatching debug-agent to implement the 17 missing BPs.
-- **Cost:** delegations: 14 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 6 (m8, m9, m16-m19, m35, n11) — GREEN
 
-### Chunk B DEBUG — attempt 2 (2026-09-30)
-- debug-agent implemented 8 of 17 missing BPs (BP-10, 11, 12, 13, 23, 27, 29, 31, 32 done; BP-15 partial — test-e2e.ps1 PID-scoped done, iterate-telescope.ps1 copy + Add-SpawnedVs sites + line-251 Stop-HarnessVs removal pending), hit step limit.
-- **DEVIATION D-B3 (ACCEPT, BP-31/m8):** net472 has NO `Environment.TickCount64` (it is .NET Core 3.0+; the plan's claim "net472 has it" is false). The debug-agent used a monotonic `Stopwatch` instead — the plan's own stated fallback ("or a monotonic clock"). Intent preserved (no int wrap-around every ~24.9 days). Not a contract deviation.
-- Remaining: finish BP-15 (iterate-telescope.ps1), BP-16, BP-17, BP-33, BP-36, BP-37, BP-38, BP-39.
-- **Cost:** delegations: 15 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** renamed the 4 `Run_TryDispatch_*` tests to `Run_TextMotionDispatcher_*` (16 call sites → `TextMotionDispatcher.Handle`) — RED: `CS0117 'TextMotionDispatcher' does not contain a definition for 'Handle'` (right reason: `TryDispatch` not yet merged). Added pins `Run_GeneralToolWindowController_KeyToArrowVk` (m9) + `Run_ActionTable_SolutionExplorer_HlArrowVk` (m17) — pass today (NeoVisual 158/158).
+- **BUILD (build-agent):** BP-41..BP-47 done (KeyToArrowVk single-sourced; W/B/E wiring to `ToolWindowControllerBase`; shared `GetParent`; `HierarchyNode : IHierarchyNode` walker unification; `BlockCaretStyle` shared `ApplyCaretStyle`; `TryDispatch` merged into `TextMotionDispatcher.Handle`; package `_launcher` injected into `InputHandler`). Build 0 errors; Telescope 149/149; NeoVisual 158/158. DEVIATIONS: 3 (adjudicated ACCEPT — below).
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-45 (m35) -> ACCEPT` — shared `ApplyCaretStyle` lives in `Telescope.Overlay.BlockCaretStyle` (Telescope cannot reference MyExtension — circular dependency); both `TelescopeOverlay.ApplyPromptCaretStyle` + `TextMotionHelper.ApplyCaretStyle` delegate to it; optional `lineCaretBrush` keeps the overlay's gray prompt brush. Plan BP-45 + Verification Trace updated to the new contract. Doc-sync: `TryDispatch` prose refs in AGENTS.md/SKILL.md/spec.md/progress.md are stale (n11 merge) — fold into the GREEN sync pass.
+  - `DEVIATION: BP-46 (n11) -> ACCEPT` — `TryDispatch.cs` left as comment-only stub (file deletion denied by policy); class merged into `TextMotionDispatcher.Handle`.
+  - `DEVIATION: BP-44 (m19) -> ACCEPT` — "unify on one walker" via `HierarchyNode : IHierarchyNode`; behavior-preserving.
+  - Note: `TextMotionHelper.BlockCaretBrush` now unused (BP-45) — fold into Phase 7 dead-code removal.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 149/149; NeoVisual 158/158; all 4 renamed RED tests + 2 new pins pass; diagnostic contract preserved (5 literals byte-identical; `Run_LogPrefixes_Pinned` PASS); 3 DEVIATIONS re-confirmed as adjudicated; doc-ref lint PASS (28 docs, 6360 refs, 0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk B DEBUG — attempt 3 (2026-09-30)
-- debug-agent completed the remaining 8 BPs (BP-15 finish — iterate-telescope.ps1 PID-scoped Stop-HarnessVs + Add-SpawnedVs sites + removed the line-250 Stop-HarnessVs call; BP-16 NEOVISUAL_LOG_DIR Process scope + SelfCheck assertion; BP-17 allowlist cleanup; BP-33 SKILL.md wording; BP-36 counts → 143/140; BP-37 §4 diagnostics; BP-38 19 seams; BP-39 progress.md header). No DEVIATIONS.
-- Hub verified: build 0 errors; NeoVisual 140/140; Telescope 143/143; check-doc-refs `[PASS] 28 docs, 6076 refs, 0 unresolved`; iterate-telescope -SelfCheck PASS (incl. the new NEOVISUAL_LOG_DIR User-scope assertion).
-- **Cost:** delegations: 16 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 7 (m1, m2, m10, m28, m6, m29, m51, n2, n12, n13, n17, n18) — GREEN
 
-### Chunk B VERIFY — attempt 2 (2026-09-30)
-- verification-agent: **FAIL (2 small misses)** — build 0 errors, NeoVisual 140/140, Telescope 143/143, all harness-health self-checks PASS, diagnostic contract PASS, 37/39 BPs fully applied. Remaining: BP-36 PARTIAL (docs/progress.md:72-73 still "77 passed / 74 passed" — spec.md + SKILL.md updated to 143/140, progress.md missed) and BP-28 NOT APPLIED (WindowManager.cs class body still at column 0 inside the namespace — reindent never done). Dispatching debug-agent for the 2.
-- **Cost:** delegations: 17 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_PaneFailureTracker_RetryAfterFailure` (Telescope.Tests) — RED: `CS1061 'PaneFailureTracker' does not contain a definition for 'RecordAttempt'/'ShouldRetry'` (right reason: the retry-latch surface is missing today). Confirmed pins `Run_LogFileWriter_*` (11/11, m6 single-stamp contract) + `Run_FocusGuard_*` (m1). Identified the m2 count-drop test `Run_VimModeState_ResolutionRetriesAfterFailure` (NeoVisual.Tests/Program.cs:1114).
+- **BUILD (build-agent):** BP-48..BP-57 done (`HasToolWindowActionKeys` deleted + AGENTS.md/SKILL.md pre-filter docs fixed; `ResolveOnce` + its test deleted; `WindowAdapter._frame` + `OverlayClosed` event deleted; `GlobalKeyboardHook.Log` single-stamp; `DteFileOpener` → `TelescopeLog`; `PaneFailureTracker.ShouldRetry/RecordAttempt` + `EnsurePane` latch delegation; `BlockCaretAdornment` early-return + `PaneGuid` readonly; `RenderResults` change-guard; `GetCaretOffset` `LineCharOffset`; `SetHook` `MainModule` guard). Build 0 errors; Telescope 150/150; NeoVisual 157/157. DEVIATIONS: 2 (adjudicated ACCEPT — below).
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-54 (n13) -> ACCEPT` — `readonly PaneGuid` can't be passed by `ref`; `EnsurePane` copies it to a local before the `CreatePane`/`GetPane` calls. Mechanical, intent preserved.
+  - `DEVIATION: count baselines -> ACCEPT` — plan's expected counts (143→144/140→139) stale (suites grew in prior phases); actual deltas ±1 satisfied (Telescope +1, NeoVisual −1).
+  - Note: spec.md/progress.md/implementation_plan.md still mention `HasToolWindowActionKeys` (semantically stale — pre-filter is now `IsKeyOfInterest`/`ShouldRouteToolWindowKey`); lint passes via the live `FocusGuard.HasToolWindowActionKeys`. Record for the GREEN doc-sync pass.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 150/150; NeoVisual 157/157; m51 RED test passes; m2 count-drop confirmed (test gone); diagnostic contract preserved (all 6 literals verified; `Run_LogPrefixes_Pinned` PASS; `[Hook]` single-stamped per m6); 2 DEVIATIONS re-confirmed as adjudicated; doc-ref lint PASS (28 docs, 6359 refs, 0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk B DEBUG — attempt 4 (2026-09-30)
-- debug-agent completed the 2 remaining BPs (BP-28 WindowManager reindent — cosmetic-only, verified via before/after reads; BP-36 progress.md:72-73 counts → 143/140). No DEVIATIONS.
-- Hub verified: build 0 errors; NeoVisual 140/140; Telescope 143/143; check-doc-refs `[PASS] 28 docs, 6076 refs, 0 unresolved`; iterate-telescope -SelfCheck PASS.
-- **Cost:** delegations: 18 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 8 (M3, m60, m63, m64, m65) — GREEN (harness-only lane)
 
-### Chunk B VERIFY — attempt 3 (2026-09-30) — **GREEN (pending 2 adjudications)**
-- verification-agent: **PASS** — build 0 errors; NeoVisual 140/140; Telescope 143/143; all harness-health self-checks PASS; diagnostic contract PASS; all 39 BPs applied. No flakes observed (counts stay x1/x2).
-- **DEVIATION D-B3 (BP-31/m8) — RE-CONFIRMED ACCEPT:** the verification-agent claimed `Environment.TickCount64` exists since .NET 4.5; the hub verified with csc against the v4.7.2 reference assembly — CS0117, net472 does NOT have it. The monotonic `Stopwatch` implementation is correct (the plan's own stated fallback). The comment in FocusKeeper.cs is accurate.
-- **DEVIATION D-B4 (BP-38/M31) — PARTIAL, dispatch fix:** spec.md §2.2 has all 62 seams; SKILL.md key-files table is missing 14 (FocusGuard, LeaderSequenceMatcher, SimpleShortcutMatcher, VimModeClassifier, InitSteps, NavigationSnapshot, ToolWindowTypeResolver, PopupNavigation, FinderBase, PaneFailureTracker, FocusTargetModel, LineIndex, TryDispatch, VimModeTracker). The plan explicitly says "add the missing seams to the key-files tables in docs/spec.md:47 §2.2 and SKILL.md:50,68" — both tables. Dispatching debug-agent to complete the SKILL.md table.
-- **Cost:** delegations: 19 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** extended the existing `-SelfCheck` seam in `tools/harness/test-e2e.ps1` with 5 checks (6-10) asserting the FIXED behavior: M3 (`Send-Text` carries the `[char]::IsUpper` uppercase-shift rule), m64 (the `results count=[1-9]\d* selected=0` regex rejects `count=0`), m65 (`Wait-LogLine` matches per-line — no cross-line-boundary match), m60 (`Resolve-VsRoot` includes Professional/Enterprise/Preview), m63 (header documents ordering/self-seeding). RED-PROVEN: all 5 fail against the current code for the right reason (the buggy behavior); the 5 pre-existing checks pass (harness healthy). No VS boot (no-VS reason: machine cannot boot the VS Experimental Instance).
+- **BUILD (build-agent):** BP-58..BP-59 done (`Send-Text` Shift for `[char]::IsUpper`; `Wait-LogLine` per-line match over the cache; `Resolve-VsRoot` Professional/Enterprise/Preview candidates; `results count=[1-9]\d* selected=0` at test-e2e.ps1:1174; header ordering/self-seeding doc). All 10 `-SelfCheck` checks pass; `-List` parses (35 scenarios); build 0 errors. DEVIATIONS: none.
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-58 (M3) -> ACCEPT` — the M3 self-check inspects the `Send-Text` function body for `IsUpper` (source-text check inside test-e2e.ps1's `-SelfCheck` block) rather than literally invoking `Send-Text 'Program'` (Send-Text is coupled to real key injection `[KbInject]::TapVk` and cannot run hermetically). Intent-preserving; the verifier independently confirmed it is a genuine RED→GREEN gate (buggy `\d+` matches count=0, fixed `[1-9]\d*` rejects it).
+- **VERIFY (verification-agent):** PASS — all 10 `-SelfCheck` checks pass; `-List` parses (35 scenarios); doc-ref lint PASS (28 docs, 6359 refs, 0 unresolved); build 0 errors (0 warnings); diagnostic contract preserved (tools/ diff touches no product literals); the 1 DEVIATION re-confirmed as adjudicated.
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk B DEBUG — attempt 5 (2026-09-30)
-- debug-agent completed the SKILL.md key-files table (14 seams added, all resolving; NavigationSnapshot at its actual `CardinalMovment/` path; SimpleShortcutMatcher row reflects the BP-1 delegation). check-doc-refs `[PASS] 28 docs, 6124 refs, 0 unresolved`.
-- **Cost:** delegations: 20 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 9 (M7, m4, m53-m58, m62) — GREEN
 
-### Chunk B VERIFY — attempt 4 (2026-09-30) — **GREEN**
-- verification-agent: **PASS** — build 0 errors; NeoVisual 140/140; Telescope 143/143; all 4 harness-health self-checks PASS; doc-ref lint `[PASS] 28 docs, 6126 refs, 0 unresolved`; diagnostic contract byte-identical; all 39 BPs applied. One non-blocking docs finding: `InjectedKeyGuard` missing from both key-files tables (BP-38 partial) — hub added it to spec.md §2.2 + SKILL.md key-files table; lint re-verified 0 unresolved.
-- **Chunk B COMPLETE.** Proceeding to Chunk C (Phases 11-14 restructure).
-- **Cost:** delegations: 21 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `Run_FzfFilter_TimeoutAwaitsTasks` (Telescope.Tests) — RED: `CS1061 'FzfFilter' does not contain a definition for 'AwaitedReadCount'` (right reason: no deterministic awaited-task seam) + `Run_RoslynGatherers_IsWriteLocation` (NeoVisual.Tests) — RED: `CS0103 'RoslynGatherers' does not exist` (right reason: no seam). Applied the m53-m58 test-side hermeticity fixes (duplicate deleted, renamed tests, hermetic fzf stub, clock relaxed) — pass against current production code. Flagged the runtime-Roslyn heads-up for the m4 test.
+- **BUILD (build-agent):** BP-60..BP-62 done (`FzfFilter.AwaitedReadCount` deterministic seam; m53-m58 verified; `TestRunner` awaits Task-returning methods). BP-63 done (extracted `RoslynGatherers` with injectable factories + static `IsWriteLocation`; `MyExtensionPackage` delegates; added `Microsoft.CodeAnalysis.Workspaces.Common` 4.14.0 runtime ref to NeoVisual.Tests.csproj) — but `Run_RoslynGatherers_IsWriteLocation` FAILED at runtime: the test helper `MakeReferenceLocation` passed `default(SymbolUsageInfo)` + set the `isImplicit` ctor arg, so the constructed "write" location always reported `IsWrittenTo=false`. Production `IsWriteLocation` verified correct. Build 0 errors; Telescope 151/151; NeoVisual 157/158.
+- **DEBUG (debug-agent):** root-caused the test-helper bug (confirmed via IL: `ReferenceLocation.IsWrittenTo` derives from `SymbolUsageInfo.IsWrittenTo()`). MINIMAL test-only fix: `MakeReferenceLocation` passes `false` for `isImplicit` + builds `SymbolUsageInfo` via a `MakeSymbolUsageInfo(bool)` helper that reflection-invokes the internal `SymbolUsageInfo.Create(ValueUsageInfo)` with `ValueUsageInfo.Write`/`Read`. Production `RoslynGatherers` untouched. Build 0 errors; NeoVisual 158/158; Telescope 151/151.
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-63 (m4 test) -> ACCEPT` — the test invokes the internal `SymbolUsageInfo.Create(ValueUsageInfo)` via reflection (Roslyn 4.14 makes it internal) instead of a direct call — the repo's established interop pattern; same API shape, same semantics. No production change.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 151/151; NeoVisual 158/158; both RED tests pass; m53-m58 fixes confirmed in place; diagnostic contract preserved (`references gathered reads=... writes=...`, `implementations gathered count=...`, `fzf filter failed: timeout after {ms}ms` unchanged; `[NeoVisual] GetCaretOffset failed: {msg}` relocated byte-identical to RoslynGatherers.cs — method move, not a format change); 1 DEVIATION re-confirmed as adjudicated; doc-ref lint PASS (28 docs, 6359 refs, 0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 4 (e2e-test-builder, build-agent, debug-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk C BUILD — attempt 1 (2026-09-30)
-- build-agent completed Phase 11 (MyExtension restructure — all git mv moves, namespaces updated, using sweep, build 0 errors, NeoVisual 140/140, default-keybindings.json → Resources/, CardinalMovment removed from allowlist) and started Phase 12 (moved 12 files to Overlay/), hit step limit. TextMotionDispatcher.cs (untracked, Chunk A) still at Telescope/ root; Finders/Filter/Logging/Controller moves + namespace updates + reference sweeps + Phases 13-14 pending. Minor adaptations: VimBufferSubscriptions.cs → Vim/ (MyExtension.Vim), TextMotionDispatcher.cs → Overlay/ (Telescope.Overlay). No log literal/API/test-count changes so far.
-- **Cost:** delegations: 22 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 10 (M6, m61, m66-m69, n20, n21) — GREEN (docs-only lane)
 
-### Chunk C BUILD — attempt 2 (2026-09-30)
-- build-agent completed Phase 12 (Telescope restructure — all 30 files moved via git mv + TextMotionDispatcher.cs via Move-Item, 42 namespaces updated, full reference sweep across MyExtension/ + tests/, build 0 errors, NeoVisual 140/140, Telescope 143/143) and started Phase 13 (created tools/harness/, tools/lint/, docs/reviews/, docs/plans/ dirs), hit step limit. Phase 13 moves + reference sweep + Phase 14 pending. No log literal/API/test-count changes.
-- **Cost:** delegations: 23 | VS boots: 0 | iterations: 0.
+- **RED (e2e-test-builder):** wrote `tools/lint/check-doc-content.ps1` (new, standalone, no-VS) with 12 assertions (11 RED targets + 1 no-collision guard) asserting the FIXED doc state: BP-64 (e2e-queue.md has `E2E-NCR-67-*` entries, progress.md:16 points at them), BP-65 (DistinctBy/CardinalMovment/CardinalNavigation NOT in the global allowlist), BP-66 (progress.md:10/20-28/73-74 + architecture-review.md:417 fixed), BP-67 (spec.md §4 has the 4 diagnostics + §2.2 has the 13 seam rows). RED-PROVEN: 11/11 fail against the current docs (exit 1); verified not a false RED by simulating the fixed state in `%TEMP%\opencode\doccontent_fixed` (check passes there). No VS boot (no-VS reason: docs-only, no unit surface).
+- **BUILD (build-agent):** BP-64..BP-67 done (E2E-NCR-67-* entries appended to e2e-queue.md under distinct IDs; progress.md:10/16/20-28/73-74 corrected; architecture-review.md:417 updated; spec.md §4 + §2.2 rows added; check-doc-refs.ps1 allowlist scoped via `$docScopedAllowlist`). All 12 `check-doc-content.ps1` assertions pass; `check-doc-refs.ps1` PASS (28 docs, 6399 refs, 0 unresolved); build 0 errors. DEVIATIONS: none.
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: check-doc-content.ps1 (new file) -> ACCEPT` — additive verification seam for the docs-only lane (docs have no unit surface; RED is proven by asserting the FIXED content). Analogous to the Phase 8 `-SelfCheck` seams; weakens no Verify-with gate; touches no product code.
+  - Note: the E2E-NCR-67 headers use comma-separated IDs (format-only, required by the check's contiguous-substring assertion); a pre-existing stale claim at progress.md:222 (historical "FIRST ITEM" entry) is out of BP-64's line-16 scope — fold into the GREEN doc-sync pass.
+- **VERIFY (verification-agent):** PASS — all 12 `check-doc-content.ps1` assertions pass; `check-doc-refs.ps1` PASS (0 unresolved); harness `-List` parses (35 scenarios); build 0 errors (0 warnings); product code unchanged (Phase 10 diff is docs + check-doc-refs.ps1 only; spec.md §4 additions accurately document existing product diagnostics); 1 DEVIATION re-confirmed as adjudicated.
+- **Cost:** delegations: 3 (e2e-test-builder, build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### Chunk C BUILD — attempts 2-3 (2026-09-30)
-- build-agent attempt 2: completed Phase 12 (Telescope restructure — 30 files moved, 42 namespaces, full reference sweep, build 0 errors, NeoVisual 140/140, Telescope 143/143), started Phase 13 (created tools/harness/, tools/lint/, docs/reviews/, docs/plans/ dirs), hit step limit.
-- build-agent attempt 3: completed Phase 13 (git mv of 5 tools scripts → tools/harness/ + tools/lint/, 4 docs → docs/reviews/ + docs/plans/, harness $root fixes, check-doc-refs $repoRoot/function-scan/default-doc-set fixes, 437-path reference sweep across 26 files, allowlist updates) + Phase 14 partial (doc-ref lint PASS, grep gate PASS on prefix constants), hit step limit before the final build/suites.
-- **DEVIATION D-C1 (ACCEPT, Phase 13 allowlist):** the plan said "remove `CardinalMovment` from the external allowlist" but it was never in the allowlist (it resolved via source grep before the move). The build-agent ADDED `CardinalMovment`/`CardinalNavigation` to `$externalAllowlist` as historical names (review archives + agent instructions still cite the old folder/namespace) — consistent with the "recently removed" pattern.
-- **DEVIATION D-C2 (ACCEPT, Phase 13 reference sweep):** `docs/implementation_plan.md` was NOT swept — it is excluded from the doc-ref lint by design, is hub-owned, and mechanically replacing its `CardinalMovment/`/`tools/*.ps1` references would corrupt the plan's meaning (the Part B section describes the moves using the old paths). All other docs/agent/tool references were swept.
-- Hub verified: build 0 errors; NeoVisual 140/140; Telescope 143/143; `pwsh tools/lint/check-doc-refs.ps1` `[PASS] 28 docs, 6126 refs, 0 unresolved`; grep gate clean (prefix constants byte-identical; the em-dash concern was a regex-extraction artifact — the source at TelescopeOverlay.cs:267 preserves the em-dash).
-- **Cost:** delegations: 24 | VS boots: 0 | iterations: 0.
+## Attempt 1 — Phase 11 (restructure: MyExtension folders + Utils subfolders + 5 renames) — GREEN
 
-### Chunk C VERIFY — attempt 1 (2026-09-30) — **GREEN**
-- verification-agent: **PASS** — build 0 errors; NeoVisual 140/140; Telescope 143/143 (counts UNCHANGED from the pre-restructure baseline); all 4 harness-health self-checks PASS (incl. the NEW tools/harness/ + tools/lint/ paths); doc-ref lint `[PASS] 28 docs, 6130 refs, 0 unresolved`; log-literal diff gate PASS (prefix multiset identical, DiagnosticLog.cs constants byte-identical, em-dash preserved — the prior agent's flag was a regex-extraction false positive); restructure spot-checks all PASS (folders/namespaces match the mapping, CardinalMovment/ gone). D-C1 + D-C2 confirmed as adjudicated.
-- **Doc-sync (hub, post-GREEN):** fixed the stale references the verifier flagged — AGENTS.md:396-398 (the "keep the CardinalMovment typo folder" instruction → the 2026-09-30 restructure note), docs/e2e-queue.md (tools/test-e2e.ps1 → tools/harness/test-e2e.ps1 x2), .opencode/command/review.md (docs/architecture-review.md → docs/reviews/), 3 skill files (tools/test-e2e.ps1 → tools/harness/test-e2e.ps1), Telescope/Logging/DiagnosticLog.cs comment. AGENT-FAILURES.md entries left as historical verbatim records. Lint re-verified 0 unresolved.
-- **Chunk C COMPLETE — the combined item (Code review findings (67) + Repository restructure) is GREEN.**
-- **Cost:** delegations: 25 | VS boots: 0 | iterations: 0.
+- **RED:** none — behavior-preserving restructure (documented in the plan's known-RED allowlist: no RED, verified by build + suites + doc-ref lint + the deferred full-suite e2e re-run).
+- **BUILD (build-agent):** BP-68..BP-71 done (33 helper .cs files `git mv` into Hooks/Input/Vim/Package/Navigation/ToolWindows `Utils/` subfolders; 5 renames WindowMatrix→WindowNavigator, CardinalNavigationConstants→NavigationConstants, UtilityMethods→WindowFrameUtils, RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter; using/reference updates + `Run_WindowNavigator_BuildActiveWindowsNullActive` test rename; check-doc-refs.ps1 OLD-name scoped allowlist). Build 0 errors; NeoVisual 158/158 (count unchanged); doc-ref lint PASS (28 docs, 6399 refs, 0 unresolved). DEVIATIONS: 2 (adjudicated ACCEPT — below).
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-71 -> ACCEPT` — extended the file-path branch of check-doc-refs.ps1 to resolve OLD `.cs` file names (WindowMatrix.cs etc.) via the same doc-scoped allowlist (the scoped allowlist only handled PascalCase symbol tokens; file-form refs also needed scoping). NEW names NOT in the allowlist; CardinalMovment/CardinalNavigation kept.
+  - `DEVIATION: BP-70 -> ACCEPT` — the build-agent's mechanical sweep initially over-renamed 6 test methods (`Run_RectCoordinate_*` ×5, `Run_WindowAdapter_TryGetScreenRect_NullFrameReturnsNull`); reverted to match the plan (only `Run_WindowNavigator_BuildActiveWindowsNullActive` renamed).
+  - Note: `RoslynGatherers.cs` (Phase 9, untracked) not in the restructure table — left in `Package/`; `GetWindowAdapters` method name preserved (substring-collision fix); NeoVisualTraceListener.cs:9 comment updated for consistency.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); NeoVisual 158/158; Telescope 151/151 (counts unchanged); staged renames are PURE MOVES (33 files, 0 insertions, 0 deletions); zero log-literal drift (all moved/renamed file literals verified); 5 renames + Utils/ moves + single test rename confirmed; 2 DEVIATIONS re-confirmed as adjudicated; doc-ref lint PASS (0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 2 (build-agent, verification-agent) | VS boots: 0 | iterations: 0
 
-### POST-RUN FAILURE-LOG SWEEP (2026-09-30, final gate)
-- failure-log sweep: 6 entries read, 0 fixed (all already FIXED-annotated), 0 queued, 0 annotated. No subagent reported an unintended command failure this session (the build-agent empty verdicts were delegation failures handled by re-dispatch, not command failures).
+## Attempt 1 — Phase 12 (restructure: Telescope folders + Utils subfolders) — GREEN
+
+- **RED:** none — behavior-preserving restructure (documented in the plan's known-RED allowlist).
+- **BUILD (build-agent):** BP-72..BP-74 done (12 Overlay/Utils/ + 13 Finders/Utils/ + 6 Logging/Utils/ helper .cs files `git mv`; no code edits needed — namespaces unchanged, SDK-style globbing; `<RootNamespace>Telescope</RootNamespace>` intact). Build 0 errors; Telescope 151/151; NeoVisual 158/158 (counts unchanged); doc-ref lint PASS (0 unresolved). DEVIATIONS: 1 (adjudicated ACCEPT — below).
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-72 -> ACCEPT` — also moved the two untracked helper files `PreviewTokenCache.cs` + `PromptMotionRouter.cs` (created by earlier BP-1/BP-5 phases) to Overlay/Utils/ — consistent with the plan's "helpers go in Utils/" intent; namespaces unchanged.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 151/151; NeoVisual 158/158 (counts unchanged); pure moves (R, 0 content change); zero log-literal drift (`Run_LogPrefixes_Pinned` green; all Telescope literals byte-identical); restructure in place (Overlay/Utils/ 14 files incl. the 2 DEVIATION helpers, Finders/Utils/ 13, Logging/Utils/ 6; RootNamespace intact; no type renames); 1 DEVIATION re-confirmed as adjudicated; doc-ref lint PASS (0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 2 (build-agent, verification-agent) | VS boots: 0 | iterations: 0
+
+## Attempt 1 — Phase 13 (restructure: reference sweep + doc-ref lint) — GREEN
+
+- **RED:** none — behavior-preserving reference sweep (documented in the plan's known-RED allowlist).
+- **BUILD (build-agent):** BP-75 done (AGENTS.md/SKILL.md/spec.md/agent files updated to the moved `Utils/` paths + 5 renamed types; check-doc-refs.ps1 allowlists trimmed/consistent; `$sourceRoots` unchanged). Doc-ref lint PASS (28 docs, 6393 refs, 0 unresolved); build 0 errors; Telescope 151/151; NeoVisual 158/158 (counts unchanged). DEVIATIONS: 1 (adjudicated ACCEPT — below).
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: BP-75 scope -> ACCEPT` — the plan's Phase 0-10 steps correctly reference pre-restructure paths (they execute before the restructure); progress.md/review archives are historical records with allowlisted old names. Left unchanged.
+  - Note: spec.md's `HasToolWindowActionKeys` reference left untouched (lint-resolvable via the live `FocusGuard.HasToolWindowActionKeys`) — already recorded for the GREEN doc-sync pass.
+- **VERIFY (verification-agent):** PASS — build 0 errors (0 warnings); Telescope 151/151; NeoVisual 158/158 (counts unchanged); reference sweep in place (AGENTS.md/SKILL.md/spec.md 24 refs + agent files 32 refs to Utils/ paths + renamed types); check-doc-refs.ps1 allowlist consistent (OLD names scoped per-doc, NEW names resolve via source grep, CardinalMovment/CardinalNavigation kept); diagnostic contract intact (`Run_LogPrefixes_Pinned` green; sweep touched no product code); 1 DEVIATION re-confirmed as adjudicated; doc-ref lint PASS (0 unresolved); harness `-List` parses (35 scenarios).
+- **Cost:** delegations: 2 (build-agent, verification-agent) | VS boots: 0 | iterations: 0
+
+## Attempt 1 — Phase 14 (final verification / combined plan gate) — GREEN
+
+- **RED:** none — final gate (verification only).
+- **VERIFY (verification-agent):** PASS — all five gates: build 0 errors (0 warnings); Telescope 151/151; NeoVisual 158/158; doc-ref lint PASS (28 docs, 6393 refs, 0 unresolved); check-doc-content PASS (12 assertions); harness `-List` parses (35 scenarios); log-literal diff gate PASS (`Run_LogPrefixes_Pinned` green; the 5 approved additions m47×2/n19/m14×2 present; no unplanned drift). Counts match the documented deltas (Telescope 143→151, NeoVisual 140→158).
+- **DEVIATIONS (adjudicated — hub):**
+  - `DEVIATION: m6 (BP-51) -> ACCEPT` — `[Hook]` line format changed from double-stamped to single-stamped (the m6 fix, Phase 7). Documented plan change, not drift.
+  - `DEVIATION: n18 (BP-57) -> ACCEPT` — NEW `[Hook]` diagnostic `SetHook MainModule failed: {ex.Message}` (MainModule guard, Phase 7). Documented in BP-57's Verify-with.
+  - `DEVIATION: n10 (BP-40) -> ACCEPT` — `[NeoVisual] toolwindow-move` arrow-fallback suffix removed, aligned to the bare contract (Phase 5). Documented in BP-40.
+- **failure-log sweep:** 6 entries read, 6 fixed (all carry FIXED annotations), 0 queued, 0 annotated.
+- **Cost:** delegations: 1 (verification-agent) | VS boots: 0 | iterations: 0
+
+---
+
+## Item summary (combined plan: Code-Review Fixes (98 findings) + Functional Restructure)
+
+- **Lane:** bugfix (code-review fixes) + behavior-preserving restructure. **Unit-only** (machine cannot boot the VS Experimental Instance; all e2e gates deferred to `docs/e2e-queue.md`).
+- **Phases 0-14 all GREEN**, 0 iterations (no real regressions). Total delegations: 34 | VS boots: 0 | iterations: 0.
+- **Counts:** Telescope.Tests 143→151; NeoVisual.Tests 140→158. Build 0 errors throughout.
+- **Key new seams:** `PromptMotionRouter` (M1/m52), `HierarchyResolver.PrimaryFilePath` (M8), `PreviewTokenCache` (M4), `RoslynGatherers` (m4), `BlockCaretStyle` shared `ApplyCaretStyle` (m35), `PaneFailureTracker.ShouldRetry/RecordAttempt` (m51), `FzfFilter.AwaitedReadCount` (M7).
+- **New diagnostics (approved):** `[NeoVisual] navigate activated index=...` / `navigate no-op: <reason>` (m47); `[NeoVisual] window rect unavailable; using empty rect` (n19); `[NeoVisual] IVsUIShell unavailable: ...` ×2 (m14); `[Hook] SetHook MainModule failed: {ex.Message}` (n18). `[Hook]` lines single-stamped (m6); `toolwindow-move` arrow-fallback aligned to the bare contract (n10).
+- **Restructure:** MyExtension + Telescope helpers moved into `Utils/` subfolders; 5 renames (WindowMatrix→WindowNavigator, CardinalNavigationConstants→NavigationConstants, UtilityMethods→WindowFrameUtils, RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter); `TryDispatch` merged into `TextMotionDispatcher` (n11). Behavior-preserving (counts unchanged, zero log-literal drift).
+- **Deferred e2e (queued in `docs/e2e-queue.md`):** E2E-NCR-1/2, E2E-NCR-M2/M4/M5/M3/M7/m47, E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, E2E-NCR-67-*.

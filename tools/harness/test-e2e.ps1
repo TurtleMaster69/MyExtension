@@ -41,6 +41,18 @@
 #   seed-reset    filesystem-only: scratch seeding always resets (stale edits removed) + uniform EOL
 #   seed-leak     filesystem-only: NO seeded file was written into during the run (write-leak guard)
 #
+# Scenario ordering + self-seeding (m63): scenarios run in REGISTRATION ORDER (the order they are
+# defined below), and the suite is deliberately order-dependent:
+#   - seed-leak is registered LAST and must stay last — it byte-compares the whole seed tree to the
+#     bootstrap expected-result copy, so it only passes after every other scenario has run.
+#   - neovisual-editor-insert (which intentionally writes Beta.cs) must run BEFORE seed-leak so its
+#     expected-result refresh is in place before the final leak check.
+#   - neovisual-explorer-move-editor-focus opens Gamma.cs (reserved for it) and must not run after
+#     another scenario that opens it.
+# SUBSETS ARE SELF-SEEDING: every run (full suite or a -Tests subset) reseeds the scratch solution
+# from the canonical map and re-snapshots the expected-result tree during bootstrap, so a subset
+# never depends on state left by a previous run. Only -NoBootstrap (explicit reuse) skips the reseed.
+#
 # Exit code: 0 = all selected scenarios passed, 1 = any failed.
 #
 # Usage:
@@ -50,6 +62,7 @@
 #   pwsh tools/harness/test-e2e.ps1 -Tests telescope-open -KeepVs
 #   pwsh tools/harness/test-e2e.ps1 -List                 # list available scenarios
 #   pwsh tools/harness/test-e2e.ps1 -Tests telescope-search -NoBootstrap   # reuse an already-booted instance
+#   pwsh tools/harness/test-e2e.ps1 -SelfCheck             # no-VS self-checks (parse + helper invariants; Phase 8 M3/m60/m63/m64/m65)
 #
 # -KeepVs      keep the spawned VS instances alive on exit (default: kill ONLY the spawned PIDs).
 # -NoBootstrap reuse an already-booted Experimental instance (no kill/reseed/main-VS/Debug.Start);
@@ -1158,7 +1171,7 @@ Register-Scenario 'telescope-issues' {
     # Filter to the seeded TODO marker.
     Send-Text 'fix this'
     Assert-NewLogLine $logPath "promptChanged query='fix this'" 'typed query reached prompt'
-    Assert-NewLogLine $logPath "$($script:PfxTel)results count=\d+ selected=0" 'TODO marker ranked first (count varies with Error List noise)'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=[1-9]\d* selected=0" 'TODO marker ranked first (count varies with Error List noise)'
     # The preview loads the issue file and jumps the caret to the TODO line (line 1).
     Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*TodoProbe\.cs" 'preview shows the issue file'
     Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=1" 'preview caret jumped to the issue line'
@@ -1708,6 +1721,91 @@ if ($SelfCheck) {
             Write-Pass 'SelfCheck: Get-LogCacheIndex tracks the cache (append +1, truncate -> 0)'
         } finally {
             if (Test-Path $tmpCacheLog) { Remove-Item $tmpCacheLog -Force -ErrorAction SilentlyContinue }
+        }
+
+        # ------------------------------------------------------------------
+        # Phase 8 — harness hardening self-checks (M3, m60, m63, m64, m65).
+        # No-VS: these assert the FIXED behavior of the harness helpers. They FAIL
+        # against the current (buggy) code and PASS after the build-agent applies
+        # BP-58/BP-59. Failures are collected so one run reports all of them.
+        # ------------------------------------------------------------------
+        $phase8Failures = [System.Collections.Generic.List[string]]::new()
+
+        # (6) M3 — Send-Text must apply Shift for uppercase letters (case-fidelity).
+        # No-seam: Send-Text is directly coupled to real key injection
+        # ([KbInject]::TapVk / [Win32.Kbd]::keybd_event), so the check asserts the
+        # real function body carries the uppercase-shift rule ([char]::IsUpper).
+        # Current bug: 'P' -> VK 0x50 with no Shift -> 'Program' types 'program'.
+        try {
+            $sendTextBody = [string]${function:Send-Text}
+            if ($sendTextBody -notmatch 'IsUpper') {
+                throw "Send-Text has no uppercase-shift rule ([char]::IsUpper) — 'Program' would type 'program'"
+            }
+            Write-Pass 'M3: Send-Text applies Shift for uppercase letters (case-fidelity)'
+        } catch { $phase8Failures.Add("M3: $($_.Exception.Message)") }
+
+        # (7) m64 — the results-count regex must require count>=1.
+        # Extract the ACTUAL regex from test-e2e.ps1 line 1161 and prove it rejects
+        # count=0 and accepts count=5. Current bug: `\d+` matches count=0.
+        try {
+            $e2eSrc = Get-Content (Join-Path $PSScriptRoot 'test-e2e.ps1') -Raw
+            $m64m = [regex]::Match($e2eSrc, 'results count=(\\d\+|\[1-9\]\\d\*) selected=0')
+            if (-not $m64m.Success) { throw 'could not locate the results count= regex (line 1161) in test-e2e.ps1' }
+            $countPattern = $m64m.Value
+            if ('[Telescope] results count=0 selected=0' -match $countPattern) {
+                throw "results-count regex '$countPattern' matched count=0 (must require count>=1)"
+            }
+            if (-not ('[Telescope] results count=5 selected=0' -match $countPattern)) {
+                throw "results-count regex '$countPattern' did not match count=5"
+            }
+            Write-Pass "m64: results-count regex '$countPattern' rejects count=0 and accepts count=5"
+        } catch { $phase8Failures.Add("m64: $($_.Exception.Message)") }
+
+        # (8) m65 — Wait-LogLine must match per-line, never across line boundaries.
+        # Current bug: the tail is joined with `\n` and -match'ed, so a pattern like
+        # 'foo\s+bar' matches when 'foo' and 'bar' are on DIFFERENT lines.
+        $tmpLog65 = Join-Path $env:TEMP ("selfcheck_m65_" + [guid]::NewGuid().ToString('N') + '.log')
+        try {
+            [System.IO.File]::WriteAllText($tmpLog65, "alpha foo`nbar omega`n")
+            $script:LogReadBytes = 0
+            $script:LogCache.Clear()
+            if (Wait-LogLine -LogPath $tmpLog65 -Pattern 'foo\s+bar' -FromIndex 0 -PollMs 1 -MaxMs 1000) {
+                throw "Wait-LogLine matched 'foo\s+bar' across two lines (must match per-line)"
+            }
+            if (-not (Wait-LogLine -LogPath $tmpLog65 -Pattern 'alpha foo' -FromIndex 0 -PollMs 1 -MaxMs 1000)) {
+                throw 'Wait-LogLine did not match a single-line pattern'
+            }
+            Write-Pass 'm65: Wait-LogLine matches per-line (no cross-line-boundary match)'
+        } catch { $phase8Failures.Add("m65: $($_.Exception.Message)") }
+        finally {
+            if (Test-Path $tmpLog65) { Remove-Item $tmpLog65 -Force -ErrorAction SilentlyContinue }
+        }
+
+        # (9) m60 — Resolve-VsRoot must consider Professional/Enterprise/Preview,
+        # not just Community. No-seam: the candidate list is a local variable, so the
+        # check asserts the real function body carries the non-Community editions.
+        try {
+            $vsRootBody = [string]${function:Resolve-VsRoot}
+            foreach ($edition in @('Professional', 'Enterprise', 'Preview')) {
+                if ($vsRootBody -notmatch $edition) {
+                    throw "Resolve-VsRoot candidate list lacks the '$edition' edition (Community-only)"
+                }
+            }
+            Write-Pass 'm60: Resolve-VsRoot candidate list includes Professional/Enterprise/Preview'
+        } catch { $phase8Failures.Add("m60: $($_.Exception.Message)") }
+
+        # (10) m63 — scenario ordering + self-seeding must be documented in the header.
+        try {
+            $header = (Get-Content (Join-Path $PSScriptRoot 'test-e2e.ps1') -TotalCount 60) -join "`n"
+            if ($header -notmatch 'self-seed' -and $header -notmatch 'ordering') {
+                throw 'scenario ordering/self-seeding is not documented in the header comment'
+            }
+            Write-Pass 'm63: scenario ordering + self-seeding documented in the header'
+        } catch { $phase8Failures.Add("m63: $($_.Exception.Message)") }
+
+        if ($phase8Failures.Count -gt 0) {
+            foreach ($f in $phase8Failures) { Write-Fail "Phase 8 SelfCheck: $f" }
+            throw "Phase 8 self-checks failed ($($phase8Failures.Count)): $($phase8Failures -join '; ')"
         }
 
         Write-Host 'SelfCheck: PASS' -ForegroundColor Green

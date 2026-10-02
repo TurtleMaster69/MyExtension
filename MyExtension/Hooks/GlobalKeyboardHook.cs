@@ -55,11 +55,11 @@ namespace MyExtension.Hooks
         // Our process id never changes; cached because the focus check runs for every key.
         private static readonly int CurrentProcessId = Process.GetCurrentProcess().Id;
 
-        public GlobalKeyboardHook(AsyncPackage package, Telescope.Controller.TelescopeController telescope, WindowManager windowManager)
+        public GlobalKeyboardHook(AsyncPackage package, Telescope.Controller.TelescopeController telescope, WindowManager windowManager, MyExtension.Package.TelescopeLauncher launcher)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
 
-            _inputHandler = new InputHandler(package, telescope, windowManager);
+            _inputHandler = new InputHandler(package, telescope, windowManager, launcher);
 
             // Prime the NeoVisual log pane eagerly (on the UI thread) so later any-thread writes
             // (OutputStringThreadSafe) work without a thread switch.
@@ -164,12 +164,23 @@ namespace MyExtension.Hooks
         /// </summary>
         private static IntPtr SetHook(NativeMethods.LowLevelKeyboardProc proc)
         {
-            using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule)
+            IntPtr hMod = IntPtr.Zero;
+            try
             {
-                return NativeMethods.SetWindowsHookEx(WH_KEYBOARD_LL, proc,
-                    NativeMethods.GetModuleHandle(curModule.ModuleName), 0);
+                using (Process curProcess = Process.GetCurrentProcess())
+                using (ProcessModule curModule = curProcess.MainModule)
+                {
+                    hMod = NativeMethods.GetModuleHandle(curModule.ModuleName);
+                }
             }
+            catch (Exception ex)
+            {
+                // n18: MainModule can throw Win32Exception (e.g. access denied). WH_KEYBOARD_LL
+                // accepts IntPtr.Zero for hMod when the callback is in-process, so fall back
+                // rather than fail the hook init step and degrade the extension to a no-op.
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.Hook}SetHook MainModule failed: {ex.Message}");
+            }
+            return NativeMethods.SetWindowsHookEx(WH_KEYBOARD_LL, proc, hMod, 0);
         }
 
         /// <summary>
@@ -197,7 +208,7 @@ namespace MyExtension.Hooks
         /// </summary>
         private void Log(string message)
         {
-            string fullMessage = $"{Telescope.Logging.DiagnosticLog.Hook}{DateTime.Now:HH:mm:ss.fff}  {message}";
+            string fullMessage = $"{Telescope.Logging.DiagnosticLog.Hook}{message}";
             Telescope.Logging.NeoVisualLog.Log(fullMessage);
         }
 

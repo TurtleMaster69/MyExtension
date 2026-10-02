@@ -105,12 +105,16 @@ namespace MyExtension.Adornments
                 return;
             }
 
-            // Remove only OUR adornment (never all — the native caret is on this layer too).
-            _layer.RemoveAdornmentsByTag(AdornmentTag);
+            // n2: when inactive (insert mode) there is no adornment of ours to remove — the
+            // deactivation path already removed it — so skip the RemoveAdornmentsByTag call on
+            // the caret/layout hot path entirely.
             if (!_active)
             {
                 return;
             }
+
+            // Remove only OUR adornment (never all — the native caret is on this layer too).
+            _layer.RemoveAdornmentsByTag(AdornmentTag);
 
             try
             {

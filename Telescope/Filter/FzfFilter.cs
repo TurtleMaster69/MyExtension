@@ -42,11 +42,22 @@ namespace Telescope.Filter
 
         private readonly string _fzfPath;
 
+        // m50: the availability probe (a bounded `fzf --version` subprocess) is cached once per
+        // session so it does not run on every overlay open.
+        private bool? _availability;
+
         /// <summary>
         /// Timeout for a single fzf <c>--filter</c> run; a hung subprocess is killed and the filter
         /// falls back to the full candidate list. Settable so the timeout test can shrink it.
         /// </summary>
         internal int FilterTimeoutMs { get; set; } = DefaultFilterTimeoutMs;
+
+        /// <summary>
+        /// M7 (BP-60): number of pipe-read tasks the timeout path has arranged to be observed
+        /// (fault-only continuation). The timeout test asserts on this instead of GC-polling for
+        /// <c>UnobservedTaskException</c> — a deterministic seam, no wall-clock + GC-poll.
+        /// </summary>
+        internal int AwaitedReadCount { get; private set; }
 
         /// <summary>
         /// Creates a filter that resolves <c>fzf</c> from the system PATH. If <paramref name="fzfPath"/>
@@ -62,6 +73,16 @@ namespace Telescope.Filter
         /// degrade gracefully (show the unfiltered list + a warning) when fzf is missing.
         /// </summary>
         public bool IsAvailable()
+        {
+            if (_availability.HasValue)
+            {
+                return _availability.Value;
+            }
+            _availability = ProbeIsAvailable();
+            return _availability.Value;
+        }
+
+        private bool ProbeIsAvailable()
         {
             try
             {
@@ -163,6 +184,9 @@ namespace Telescope.Filter
                         // exception — the faulted tasks are observed (no unobserved-task noise) and
                         // the filter returns immediately.
                         _ = all.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        // M7 (BP-60): record that both pipe-read tasks were arranged to be observed
+                        // (the deterministic seam the timeout test asserts on).
+                        AwaitedReadCount += 2;
                         return lines;
                     }
                     await all;

@@ -7,16 +7,18 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-09-30 · **Last item:** Code-review fixes (67 findings) GREEN (Chunk A + Chunk B done; Chunk C restructure pending)
+> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (67 findings) + restructure GREEN (2026-09-30); combined plan (98 findings + Functional restructure) in progress
 
 ## Current state
 
-- **In progress:** none — the **Code review findings (67) + Repository restructure**
-  combined plan reached GREEN 2026-09-30 (unit-only lane; the e2e gates are queued in
-  `e2e-queue.md`, E2E-NCR-*, E2E-RESTRUCTURE-1, status QUEUED). Also GREEN 2026-09-28:
-  the Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly bugfix, F22
-  (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache). No known-RED e2e
-  scenario remains.
+- **In progress:** none — the **Code review findings (98 findings) + Functional
+  restructure** combined plan reached GREEN 2026-10-02 (unit-only lane; the e2e gates
+  are queued in `e2e-queue.md`, E2E-NCR-1..2, E2E-NCR-M2/M4/M5/M3/M7/m47,
+  E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, E2E-NCR-67-*, status QUEUED). Also GREEN
+  2026-09-30: the Code review findings (67) + Repository restructure plan; also GREEN
+  2026-09-28: the Architecture consolidation (5 lanes), the KeyInjection.SimulateOnly
+  bugfix, F22 (LeaderSequenceMatcher), F12 (ResultMapper), F15 (ProjectFileCache). No
+  known-RED e2e scenario remains.
 - **Next up:** the still-open Architecture review backlog findings (F5, F8, F9, F13,
   F14, F43 — the ones NOT subsumed by the consolidation and not yet fixed) are the next
   candidates. **Blockers on this machine (no VS Experimental Instance boot):** F5/F14
@@ -25,7 +27,7 @@ reads at the start of every loop iteration.
   perf fix with no observable behavior change, F43 is not RED-provable (fzf present).
   Also pending: the Telescope `fzf` finder (DEFERRED, scope TBD) and the user-requested
   features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts it). See the
-  Pending queue + User-requested features + Architecture review backlog sections below.
+  Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
@@ -70,8 +72,9 @@ reads at the start of every loop iteration.
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **143 passed**; `tests/NeoVisual.Tests`
-  **140 passed** (after the Architecture consolidation, 2026-09-28).
+- Offline units: `tests/Telescope.Tests` **151 passed**; `tests/NeoVisual.Tests`
+  **158 passed** (after the Code review findings (98) + Functional restructure plan,
+  2026-10-02).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **35 scenarios** (incl. `seed-reset`,
   `seed-leak`, `neovisual-explorer-move-editor-focus`). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
@@ -193,6 +196,24 @@ were known-backlog assertion bugs, not regressions).
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
+
+> **FIRST ITEM (2026-10-01):** ~~the **Code review findings (98 findings) + Functional
+> restructure** combined plan~~ — **DONE** (GREEN 2026-10-02, unit-only lane; see the Done
+> section). Source:
+> `docs/reviews/code-review.md` (2026-10-01, 98 findings: 0 critical, 8 major, 69 minor, 21 nit)
+> + a user-requested functional restructure (main files separated from helpers/utils by
+> functionality — a `Utils/` subfolder per area — plus 5 renames: WindowMatrix→WindowNavigator,
+> CardinalNavigationConstants→NavigationConstants, UtilityMethods→WindowFrameUtils,
+> RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter; namespaces unchanged; user
+> decisions 2026-10-01). Plan in `docs/implementation_plan.md` (15 phases: 0-10 code-review
+> fixes, 11-14 restructure; 76 BP steps + Verification Trace).
+> **DEFER e2e tests (unit-only lane):** e2e scenarios are queued in `e2e-queue.md`
+> (E2E-NCR-1..2, E2E-NCR-M2/M4/M5/M3/M7/m47, E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, status
+> QUEUED) — run them on a VS-capable machine after this plan is GREEN. The plan does NOT
+> subsume the still-open Architecture backlog findings (F13/F14/F43 stay in the backlog —
+> no-seam/not-RED-provable). The plan's Phase 10 reconciles the prior 67-findings plan's
+> missing e2e gates (E2E-NCR-BACKLOG — the gates `docs/progress.md` claimed were queued in
+> `e2e-queue.md` but never materialized; now appended 2026-10-01).
 
 > **FIRST ITEM (2026-09-30):** ~~the **Code review findings (67 findings) + Repository
 > restructure** combined plan~~ — **DONE** (GREEN 2026-09-30, unit-only lane; see the Done
@@ -386,6 +407,47 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-02 — Code review findings (98 findings) + Functional restructure** (Lane:
+  `bugfix` + behavior-preserving restructure, unit-only, e2e deferred; 34 delegations, 0
+  VS boots, 0 iterations). All 98 findings (0 critical, 8 major, 69 minor, 21 nit) from
+  `docs/reviews/code-review.md` executed per-phase RED→GREEN (Phases 0-10) in the
+  unit-only lane, plus the user-requested functional restructure (Phases 11-14: helpers
+  into `Utils/` subfolders + 5 renames). Final suites: **Telescope.Tests 151,
+  NeoVisual.Tests 158** (both 0 failed); `dotnet build` 0 errors; all harness-health
+  self-checks PASS (check-doc-refs 0 unresolved, check-doc-content 12/12, harness
+  `-List` 35 scenarios); log-literal diff gate PASS (only the approved additions m47×2 /
+  n19 / m14×2 / n18 + the documented m6 single-stamp + n10 bare-contract changes). NO
+  e2e harness commands run (machine cannot boot the VS Experimental Instance). e2e gates
+  queued in `docs/e2e-queue.md` (E2E-NCR-1..2, E2E-NCR-M2/M4/M5/M3/M7/m47,
+  E2E-RESTRUCTURE-2, E2E-NCR-BACKLOG, E2E-NCR-67-*, status QUEUED). Commit: `<pending>`.
+  **Change summary:** Phases 0-10 (code-review fixes): M1/m52 `PromptMotionRouter`
+  routing seam (a/A/I fall through to insert); M8 `HierarchyResolver.PrimaryFilePath`;
+  M2/M4/m5/m27/m30-m34/m37/m50 finder-path amortization (GrepFinder drops Task.Run,
+  `PreviewTokenCache`, FileContentCache LRU, ResultMapper byDisplay cache, FzfFilter
+  availability cache); M5/m7/m42/m43/m47/n14-n16 FocusGuard + routing (3-arg
+  `ShouldRouteToolWindowKey`, `InjectedKeyGuard` TTL, `navigate activated/no-op`
+  diagnostics); m38-m41/m3/n1 Vim interop (mode-change on focus loss); m11-m14/m44-m49/
+  n3-n6/n19 navigation robustness (symmetric tolerance, `window rect unavailable`
+  diagnostic); m20-m26/m59/n7-n10 controller/state (per-type defaults, `RunGuarded`,
+  .cs filter, stop-on-close); m8/m9/m16-m19/m35/n11 duplication merges (single
+  `KeyToArrowVk`, W/B/E to base, `BlockCaretStyle` shared `ApplyCaretStyle`, `TryDispatch`
+  merged into `TextMotionDispatcher`); m1/m2/m10/m28/m6/m29/m51/n2/n12/n13/n17/n18 dead
+  code + logging (`[Hook]` single-stamp, `PaneFailureTracker` retry latch, `SetHook`
+  MainModule guard); M3/m60/m63/m64/m65 harness hardening (`Send-Text` case-fidelity,
+  per-line `Wait-LogLine`, `count=[1-9]\d*`); M7/m4/m53-m58/m62 test hermeticity
+  (`FzfFilter.AwaitedReadCount`, `RoslynGatherers` extraction); M6/m61/m66-m69/n20/n21
+  docs drift (E2E-NCR-67-* reconciliation, scoped doc-ref allowlist, spec.md §4/§2.2).
+  Phases 11-14 (restructure): helpers into `Utils/` subfolders (MyExtension + Telescope);
+  5 renames (WindowMatrix→WindowNavigator, CardinalNavigationConstants→NavigationConstants,
+  UtilityMethods→WindowFrameUtils, RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter);
+  reference sweep. New diagnostics: `[NeoVisual] navigate activated index=...` /
+  `navigate no-op: <reason>` (m47), `[NeoVisual] window rect unavailable; using empty
+  rect` (n19), `[NeoVisual] IVsUIShell unavailable: ...` ×2 (m14), `[Hook] SetHook
+  MainModule failed: {ex.Message}` (n18). **If this regresses, look first at the
+  `PromptMotionRouter` routing seam (Telescope/Overlay/Utils/PromptMotionRouter.cs) and
+  the `RoslynGatherers` extraction (MyExtension/Package/RoslynGatherers.cs) — the two
+  highest-risk changes.**
 
 - **2026-09-30 — Code review findings (67 findings) + Repository restructure** (Lane:
   `feature/bugfix program`, unit-only, e2e deferred; 25 delegations, 0 VS boots, 0

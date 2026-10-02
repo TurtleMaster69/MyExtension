@@ -414,7 +414,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 ## Verified-clean (checked this run, no action)
 
 - **net472 compliance:** no `IReadOnlySet<T>`, `HashCode`, `MaxBy`/`MinBy`, range operators, or other .NET 5+/BCL-only APIs anywhere in `MyExtension/` or `Telescope/` (the hand-rolled `DistinctBy` is correct first-wins/null-key-safe semantics — it's just unused in production, see F18).
-- **Namespace/folder hygiene:** `CardinalNavigation` namespace is confined to the intentional `CardinalMovment` folder; no typo spread.
+- **Namespace/folder hygiene:** the window-logic sources live in `MyExtension/Navigation/` (namespace `MyExtension.Navigation`); no typo spread.
 - **ExcludeAssets="runtime":** no load-time SDK dependency in package constructors beyond the existing pattern.
 - **Log system architecture:** the two-file per-run design (`*-exp.log` / `*-main.log`) and `NeoVisualLog.Log` fan-out are consistent; the divergence risk is in ad-hoc `Debug.WriteLine` bypasses (F29) and uncentralized prefixes (F45), not in the core path.
 

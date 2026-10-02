@@ -142,22 +142,23 @@ message.
 Slices (regenerate these file lists by enumerating each directory at dispatch time — do
 NOT trust a hand-maintained list; the last hand list had drifted and missed 12 files,
 including all three new finders and the `IFinder`/`IsQueryDriven` seams):
-- **A** `MyExtension/` core: `GlobalKeyboardHook.cs`, `InputHandler.cs`, `InjectedKeyGuard.cs`,
-  `KeybindingConfig.cs`, `VimModeTracker.cs`, `PopupNavigation.cs`, `WindowManager.cs`,
-  `BlockCaretAdornment.cs`, `KeyInjection.cs`, `MyExtensionPackage.cs`, `TelescopeCommand.cs`,
-  `ToolWindowTypeResolver.cs`
-- **B** `MyExtension/Navigation/`: `WindowMatrix.cs`, `WindowAdapter.cs`,
-  `UtilityMethods.cs`, `CardinalNavigationConstants.cs`,
-  `RectCoordinate.cs`, `LinqExtensionMethods.cs`
+- **A** `MyExtension/` core: `GlobalKeyboardHook.cs`, `InputHandler.cs`, `Hooks/Utils/InjectedKeyGuard.cs`,
+  `Input/Utils/KeybindingConfig.cs`, `VimModeTracker.cs`, `Input/Utils/PopupNavigation.cs`, `WindowManager.cs`,
+  `BlockCaretAdornment.cs`, `Hooks/Utils/KeyInjection.cs`, `MyExtensionPackage.cs`, `Package/Utils/TelescopeCommand.cs`,
+  `ToolWindows/Utils/ToolWindowTypeResolver.cs`
+- **B** `MyExtension/Navigation/`: `WindowNavigator.cs`, `Utils/WindowFrameAdapter.cs`,
+  `Utils/WindowFrameUtils.cs`, `Utils/NavigationConstants.cs`,
+  `Utils/WindowRect.cs`, `LinqExtensionMethods.cs`
 - **C** `MyExtension/ToolWindows/`: `IToolWindowController.cs`, `GeneralToolWindowController.cs`,
-  `TextInputToolWindowController.cs`, `SolutionExplorerController.cs`, `HierarchyResolver.cs`,
-  `TextMotionHelper.cs`
-- **D** `Telescope/` (enumerate the whole folder): `TelescopeController.cs`, `TelescopeOverlay.cs`,
-  `TelescopeFinder.cs`, `OverlayKeyHandler.cs`, `TextMotionNavigator.cs`,
-  `SyntaxHighlighter.cs`, `ResultsFormatter.cs`, `FzfFilter.cs`, `FileFinder.cs`,
-  `CodeIssuesFinder.cs`, `CodeIssue.cs`, `GrepFinder.cs`, `GrepHit.cs`, `ReferencesFinder.cs`,
-  `ReferenceHit.cs`, `ImplementationFinder.cs`, `ImplementationHit.cs`, `ProjectFiles.cs`,
-  `DiagnosticLog.cs`, `NeoVisualLog.cs`, `LogFileWriter.cs`, `NeoVisualTraceListener.cs`
+  `TextInputToolWindowController.cs`, `SolutionExplorerController.cs`, `Utils/HierarchyResolver.cs`,
+  `Utils/TextMotionHelper.cs`
+- **D** `Telescope/` (enumerate the whole folder): `Controller/TelescopeController.cs`, `Overlay/TelescopeOverlay.cs`,
+  `Finders/TelescopeFinder.cs`, `Overlay/Utils/OverlayKeyHandler.cs`, `Overlay/Utils/TextMotionNavigator.cs`,
+  `Overlay/Utils/SyntaxHighlighter.cs`, `Overlay/Utils/ResultsFormatter.cs`, `Filter/FzfFilter.cs`, `Finders/FileFinder.cs`,
+  `Finders/CodeIssuesFinder.cs`, `Finders/Utils/CodeIssue.cs`, `Finders/GrepFinder.cs`, `Finders/Utils/GrepHit.cs`,
+  `Finders/ReferencesFinder.cs`, `Finders/Utils/ReferenceHit.cs`, `Finders/ImplementationFinder.cs`,
+  `Finders/Utils/ImplementationHit.cs`, `Finders/Utils/ProjectFiles.cs`, `Logging/Utils/DiagnosticLog.cs`,
+  `Logging/NeoVisualLog.cs`, `Logging/Utils/LogFileWriter.cs`, `Logging/Utils/NeoVisualTraceListener.cs`
 - **E** `tests/` + `tools/`: `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs`,
   `tools/harness/test-e2e.ps1`, `tools/harness/iterate-telescope.ps1`, `tools/harness/dte-command.ps1`,
   `tools/lint/check-doc-refs.ps1`
@@ -206,7 +207,7 @@ contract) — do NOT re-encode their content — and this condensed checklist:
 - Log writers: `NeoVisualLog` vs `LogFileWriter` vs `NeoVisualTraceListener` plus
   `Debug.WriteLine`/"NeoVisual" output pane.
 - Display formatting: `ResultsFormatter` vs `SyntaxHighlighter`.
-- Window-API duality in `MyExtension/Navigation`: `WindowAdapter`, `UtilityMethods`.
+- Window-API duality in `MyExtension/Navigation`: `WindowFrameAdapter`, `WindowFrameUtils`.
 - Caret rendering in 3 places: `BlockCaretAdornment`, `ApplyPromptCaretStyle`,
   `TextMotionHelper`.
 - Key injection: C# `KeyInjection`/`keybd_event` vs PowerShell `Send-Tap`/`Send-Shift`
@@ -215,7 +216,7 @@ contract) — do NOT re-encode their content — and this condensed checklist:
 
 **Performance probes:** `FzfFilter` spawn-per-keystroke; `SyntaxHighlighter`
 re-tokenization per selection change; `ProjectFiles` re-enumeration per finder
-open; hook-path work bypassing the `IsInteresting` pre-filter; `WindowMatrix`
+open; hook-path work bypassing the `IsInteresting` pre-filter; `WindowNavigator`
 geometry re-reads.
 
 **Bites-later checks:** VsVim reflection workarounds centralized vs spread out;

@@ -15,14 +15,13 @@ namespace MyExtension.ToolWindows
     
         // Cached IVsUIShell frame enumeration, invalidated on focus-change events so navigation
         // reuses the enumeration across keystrokes instead of rebuilding it per Ctrl+H/J/K/L.
-        private List<WindowAdapter>? _cachedAdapters;
+        private List<WindowFrameAdapter>? _cachedAdapters;
         private bool _adaptersDirty = true;
     
         // The active tool window's controller. Specific controllers can be registered here; any
-        // unregistered type falls back to a shared GeneralToolWindowController, giving hjkl + an
-        // i/Esc normal-input mode to every tool window by default.
+        // unregistered type falls back to a PER-TYPE default instance (see ResolveController), so
+        // mode is remembered per window type and never leaks across windows (m22).
         private readonly Dictionary<ToolWindowType, IToolWindowController> _controllers = new();
-        private readonly GeneralToolWindowController _defaultController = new(ToolWindowType.Unknown);
     
         public IVsWindowFrame? CurrentWindow { get; private set; }
     
@@ -112,7 +111,7 @@ namespace MyExtension.ToolWindows
                     return false;
                 }
     
-                for (var current = focused; current != null; current = GetParent(current))
+                for (var current = focused; current != null; current = TextMotionHelper.GetParent(current))
                 {
                     if (ReferenceEquals(current, frameContent))
                     {
@@ -126,30 +125,6 @@ namespace MyExtension.ToolWindows
             }
     
             return false;
-        }
-    
-        private static System.Windows.DependencyObject? GetParent(System.Windows.DependencyObject child)
-        {
-            try
-            {
-                var visual = System.Windows.Media.VisualTreeHelper.GetParent(child);
-                if (visual != null)
-                {
-                    return visual;
-                }
-            }
-            catch
-            {
-                // not a visual — try the logical tree
-            }
-            try
-            {
-                return System.Windows.LogicalTreeHelper.GetParent(child);
-            }
-            catch
-            {
-                return null;
-            }
         }
     
         /// <summary>
@@ -183,10 +158,23 @@ namespace MyExtension.ToolWindows
             _controllers[controller.Type] = controller;
         }
     
-        private IToolWindowController GetController(ToolWindowType type)
+        /// <summary>
+        /// Resolves the controller for a tool-window type: the registered controller when present,
+        /// else a PER-TYPE default instance (never a shared one — m22). Pure static factory — no VS
+        /// API.
+        /// </summary>
+        public static IToolWindowController? ResolveController(
+            IReadOnlyDictionary<ToolWindowType, IToolWindowController> registered, ToolWindowType type)
+        {
+            return registered.TryGetValue(type, out var registeredController)
+                ? registeredController
+                : DefaultControllerFor(type);
+        }
+
+        private IToolWindowController? GetController(ToolWindowType type)
         {
             // Return a stable per-type controller so mode is remembered per window type.
-            return _controllers.TryGetValue(type, out var registered) ? registered : _defaultController;
+            return ResolveController(_controllers, type);
         }
     
         /// <summary>
@@ -208,14 +196,14 @@ namespace MyExtension.ToolWindows
         /// <summary>
         /// Returns the cached frame enumeration, re-enumerating only when it is dirty (a focus
         /// change) or not yet built. Rects are refreshed lazily per navigation via
-        /// <see cref="WindowAdapter.Rect"/>.
+        /// <see cref="WindowFrameAdapter.Rect"/>.
         /// </summary>
-        internal List<WindowAdapter> GetWindowAdapters(AsyncPackage package)
+        internal List<WindowFrameAdapter> GetWindowAdapters(AsyncPackage package)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_cachedAdapters == null || _adaptersDirty)
             {
-                _cachedAdapters = WindowAdapter.Enumerate(package);
+                _cachedAdapters = WindowFrameAdapter.Enumerate(package);
                 _adaptersDirty = false;
             }
             return _cachedAdapters;
@@ -237,8 +225,8 @@ namespace MyExtension.ToolWindows
             _adaptersDirty = true;
             RefreshCurrentWindow();
             if (CurrentWindow == null) { return; }
-            CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
-            if ((__WindowFrameTypeFlags)(int)value == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
+            int hr = CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
+            if (hr == VSConstants.S_OK && value != null && (__WindowFrameTypeFlags)(int)value == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
             {
                 _isToolWindow = true;
                 CurrentWindow.GetGuidProperty(
@@ -261,7 +249,9 @@ namespace MyExtension.ToolWindows
                 _isToolWindow = false;
                 _type = ToolWindowType.Unknown;
                 _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
-                _textInputSurfaceFocused = ComputeTextInputSurfaceFocused();
+                // n9: not a tool window — ComputeTextInputSurfaceFocused() would return false
+                // immediately (its first guard is !IsToolWindow), so skip the COM/visual-tree walk.
+                _textInputSurfaceFocused = false;
             }
         }
         public void Dispose()

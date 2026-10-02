@@ -37,7 +37,7 @@ namespace Telescope.Finders
 
         // m15: shared mtime-keyed content cache — CollectTodos reads through it so a second scan
         // over the same file is served from memory instead of re-reading from disk.
-        private readonly FileContentCache _contentCache = new FileContentCache();
+        private readonly FileContentCache _contentCache = new FileContentCache(500);
 
         public override string Name => "Issues";
 

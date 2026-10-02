@@ -85,17 +85,6 @@ $externalAllowlist = @(
     # and the net472-compliance check lists FORBIDDEN .NET 5+ APIs to prove their
     # absence (F46 verified-clean) — none of these are expected to exist in the source.
     'IsCompletionActive', 'IsEmpty', 'Intersects', 'HashCode', 'MaxBy', 'MinBy',
-    # M23 (BP-8/BP-9): `DistinctBy` was deleted with the dead-code cluster; the review
-    # archives (docs/architecture-review.md, .opencode/agent/code-review-worker.md) still
-    # cite the finding — same "recently removed" pattern as the entries above.
-    'DistinctBy',
-    # Phases 11-14 (restructure): the `CardinalMovment` folder was renamed to
-    # `Navigation/` and the `CardinalNavigation` namespace to `MyExtension.Navigation`.
-    # The review archives (docs/reviews/architecture-review.md) and the agent instructions
-    # still cite the OLD folder/namespace names — same "recently renamed" pattern as the
-    # entries above (the plan's "remove CardinalMovment from the allowlist" step was a
-    # no-op: it was never allowlisted, it resolved via source grep before the move).
-    'CardinalMovment', 'CardinalNavigation',
     # Trailmark graph-export docs (W23) cite the Python builtin exceptions raised by
     # the wrong to_json() usage — external runtime names, not C# symbols.
     'TypeError', 'KeyError',
@@ -103,6 +92,26 @@ $externalAllowlist = @(
     # docs (2026-09-29) in the P/Invoke review context — external runtime types.
     'SafeHandle'
 )
+
+# m61 (BP-65) + BP-71: the removed/renamed symbols below are NOT globally allowlisted — a future
+# doc that cites `DistinctBy` / `CardinalMovment` / `CardinalNavigation` / the 5 Phase-11 OLD
+# names (WindowMatrix, CardinalNavigationConstants, UtilityMethods, RectCoordinate,
+# WindowAdapter) as a NEW symbol must be flagged. They are scoped to the specific docs that
+# legitimately cite the OLD names: the review archives (which record the finding / the
+# pre-restructure state) and the live docs that explain the rename ("renamed from the old
+# `CardinalMovment/` folder ... not `CardinalNavigation`"; Phase 11 renamed WindowMatrix→
+# WindowNavigator, CardinalNavigationConstants→NavigationConstants, UtilityMethods→
+# WindowFrameUtils, RectCoordinate→WindowRect, WindowAdapter→WindowFrameAdapter). The NEW
+# names are NOT allowlisted — they resolve via source grep after the rename. Keyed by the
+# doc path as passed in $Docs.
+$docScopedAllowlist = @{
+    'AGENTS.md' = @('CardinalNavigation')
+    '.opencode/skills/vs-extension-dev/SKILL.md' = @('CardinalNavigation')
+    'docs/spec.md' = @('CardinalNavigation')
+    'docs/progress.md' = @('CardinalNavigationConstants', 'RectCoordinate', 'UtilityMethods', 'WindowAdapter', 'WindowMatrix')
+    'docs/reviews/architecture-review.md' = @('DistinctBy', 'CardinalMovment', 'CardinalNavigation', 'RectCoordinate', 'WindowAdapter', 'WindowMatrix')
+    '.opencode/agent/code-review-worker.md' = @('DistinctBy')
+}
 
 # File paths the docs mention that are intentionally absent (documented-absent).
 $intentionallyAbsent = @(
@@ -292,6 +301,15 @@ foreach ($docRel in $Docs) {
             # file-path reference: has a code extension, OR is a repo-root-relative
             # path; must be a bare token (no spaces / `=` / `...` — those are log
             # lines and command strings, e.g. `preview file=...TodoProbe.cs`)
+            # BP-71: the Phase-11 OLD file names (WindowMatrix.cs, WindowAdapter.cs,
+            # UtilityMethods.cs, CardinalNavigationConstants.cs, RectCoordinate.cs) are cited by
+            # the archive docs but no longer exist on disk (renamed). Resolve them via the same
+            # doc-scoped allowlist as the bare type names — scoped per doc, never global, so a
+            # future doc citing them as NEW files is still flagged.
+            $barePath = $token -replace ':[^/\\]*$', ''
+            $bareName = $barePath -replace '^.*[/\\]', ''
+            $bareNoExt = $bareName -replace '\.[^.]*$', ''
+            if ($docScopedAllowlist.ContainsKey($docRel) -and $docScopedAllowlist[$docRel] -contains $bareNoExt) { continue }
             if (-not (Test-PathRef $token)) {
                 $issues += "$docRel : ``$token`` — no such file (relative to repo root)"
             }
@@ -299,6 +317,7 @@ foreach ($docRel in $Docs) {
         elseif ($pascalRegex.IsMatch($token)) {
             if ($externalAllowlist -contains $token) { continue }
             if ($proposedSymbols -contains $token) { continue }
+            if ($docScopedAllowlist.ContainsKey($docRel) -and $docScopedAllowlist[$docRel] -contains $token) { continue }
             if ($token -match '^IVs') { continue }             # VS SDK interface prefix
             if (-not (Test-SymbolExists $token)) {
                 $issues += "$docRel : ``$token`` — no such symbol in $($sourceRoots -join ', ')"

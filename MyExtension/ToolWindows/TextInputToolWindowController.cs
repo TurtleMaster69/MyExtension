@@ -41,14 +41,12 @@ namespace MyExtension.ToolWindows
             _isInputMode = true;
             _actions = new Dictionary<Keys, Func<bool>>
             {
-                [Keys.W] = TextMotion(Keys.W),
-                [Keys.B] = TextMotion(Keys.B),
-                [Keys.E] = TextMotion(Keys.E),
                 [Keys.A] = TextMotion(Keys.A),
                 [Keys.H] = TextMotion(Keys.H),
                 [Keys.L] = TextMotion(Keys.L),
                 [Keys.I] = TextMotion(Keys.I),
             };
+            AddTextMotionKeys(_actions);
         }
 
         protected override void OnModeChanged() => TextMotionHelper.StyleFocusedSurface(_isInputMode);

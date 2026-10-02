@@ -120,6 +120,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Logging/Utils/TelescopeLog.cs` | One-line `[Telescope] `-prefixed log helper (prefix centralized in `DiagnosticLog.Telescope`). |
 | `Telescope/Logging/Utils/FilterFailureLog.cs` | Formats the `[Telescope] filter failed: {msg}` line (unprefixed — callers log via `TelescopeLog`). |
 | `Telescope/Logging/Utils/PaneFailureTracker.cs` | Pure one-time fallback for the NeoVisual Output pane (`[NeoVisual] output pane unavailable: {reason}`). |
+| `MyExtension/Package/RoslynGatherers.cs` | Host-injected Roslyn gatherer seam (`TryGetCaretSymbol`, `GatherReferences`, `GatherImplementations`, `GetCaretOffset`, `ReadLineFromCache`, static `IsWriteLocation`) — the package supplies the DTE/workspace/document factories; the class owns the pure gather + reflection logic. |
 
 **Note:** the window-logic sources live in `MyExtension/Navigation/` (renamed from
 the old `CardinalMovment/` folder by the 2026-09-30 restructure); the namespace is
@@ -232,6 +233,10 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] Focus prompt => True, mode=insert` (prompt focused in insert mode)
 - `[Telescope] results count=... selected=...` (filtered results rendered / selection moved)
 - `[Telescope] key=... mode=... handled=...` (overlay key handling)
+- `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>` (m47 — outcome diagnostic: the navigation fired vs was a no-op and why)
+- `[NeoVisual] window rect unavailable; using empty rect` (n19 — logged once per adapter when the window rect cannot be read)
+- `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` / `[NeoVisual] IVsUIShell unavailable: SVsUIShell service returned null.` (m14 — null-guard fallbacks)
+- `[Hook] SetHook MainModule failed: {ex.Message}` (n18 — `SetHook` guards `Process.GetCurrentProcess().MainModule` and falls back to `IntPtr.Zero` for `hMod`); `[Hook]` lines are single-stamped (m6 — `LogFileWriter.FormatLine` is the only stamper)
 
 ## 5. Testing
 
@@ -401,7 +406,7 @@ The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (143) and
-  `dotnet run --project tests/NeoVisual.Tests` (140).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (151) and
+  `dotnet run --project tests/NeoVisual.Tests` (158).
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

@@ -113,17 +113,15 @@ $queueText    = if (Test-Path -LiteralPath $queuePath)    { [System.IO.File]::Re
 $lintText     = if (Test-Path -LiteralPath $lintPath)     { [System.IO.File]::ReadAllText($lintPath) }     else { '' }
 
 # --- BP-64 (M6): e2e-queue reconciliation -------------------------------------
-$ncr67Ids = @('E2E-NCR-67-1','E2E-NCR-67-2',
-              'E2E-NCR-67-M1','E2E-NCR-67-M2','E2E-NCR-67-M15',
-              'E2E-NCR-67-M26','E2E-NCR-67-M27','E2E-NCR-67-M28',
-              'E2E-RESTRUCTURE-67-1')
-$missing67 = @($ncr67Ids | Where-Object { $queueText -notmatch [regex]::Escape($_) })
-Add-Check 'DOC-64-1' 'e2e-queue.md carries the prior 67-plan gates under DISTINCT E2E-NCR-67-* IDs (1..2, M1/M2/M15..M26/M27/M28, E2E-RESTRUCTURE-67-1)' `
-    ($missing67.Count -eq 0) ("missing: " + ($missing67 -join ', '))
+# 2026-10-02: the queue was EMPTIED — every previously-deferred gate's scenarios were
+# exercised GREEN by the 72-findings plan's full 35-scenario suite run. The assertions
+# now check the queue carries no QUEUED gate and records the GREEN run that satisfied them.
+$queuedGates = @([regex]::Matches($queueText, '(?m)^##\s+E2E-') | ForEach-Object { $_.Value })
+Add-Check 'DOC-64-1' 'e2e-queue.md carries no QUEUED gate (all previously-deferred gates ran GREEN 2026-10-02)' `
+    ($queuedGates.Count -eq 0) ("queued gates: " + ($queuedGates -join ', '))
 
-$missingNew = @('E2E-NCR-1','E2E-NCR-2' | Where-Object { $queueText -notmatch [regex]::Escape($_) })
-Add-Check 'DOC-64-2' 'e2e-queue.md still contains the NEW plan''s E2E-NCR-1/E2E-NCR-2 entries (no ID collision)' `
-    ($missingNew.Count -eq 0) ("missing: " + ($missingNew -join ', '))
+Add-Check 'DOC-64-2' 'e2e-queue.md records the 2026-10-02 GREEN full-suite run that satisfied the deferred gates' `
+    ($queueText -match '2026-10-02' -and $queueText -match 'GREEN') ("hasDate=$($queueText -match '2026-10-02') hasGreen=$($queueText -match 'GREEN')")
 
 $curState = Normalize-Text (Get-Section $progressPath '## Current state' '## Decisions')
 $curHasNewId = ($curState -match 'E2E-NCR-\*' -or $curState -match 'E2E-CR51-' -or $curState -match '72 findings' -or $curState -match 'GREEN')

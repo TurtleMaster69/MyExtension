@@ -13,11 +13,12 @@ reads at the start of every loop iteration.
 
 - **In progress:** (none — the **Code review fixes (72 findings)** plan reached GREEN
   2026-10-02; see the Done section).
-- **Next up:** the still-open Architecture backlog findings **F13** (no-seam dedup) and
-  **F43** (not RED-provable) — the only remaining backlog items. Also pending: the
-  Telescope `fzf` finder (SCOPE DECIDED 2026-09-28, PLANNED not executed) and the
-  user-requested features 6-9 (each needs the FEATURE-TRIAGE gate before the loop starts
-  it). See the Pending queue + User-requested features sections below.
+- **Next up:** the Telescope `fzf` finder (SCOPE DECIDED 2026-09-28; FEATURE-TRIAGE
+  2026-10-02: **BUILD both** — fuzzy content finder + fuzzy file finder — using the
+  terminal `fzf` subprocess, not a custom matcher), then the user-requested features 6-9
+  (all four selected; FEATURE-TRIAGE autonomy granted). The Architecture backlog is now
+  **CLOSED** — F13 and F43 were verified already-fixed and annotated FIXED (2026-10-02).
+  See the Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
@@ -1098,8 +1099,8 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 > **2026-10-02 — COVERED-BY the Code review fixes (51 findings) plan** (the FIRST
 > pending item + `docs/implementation_plan.md`): **F5→R3, F7→R4, F8/F9→R22/R42,
 > F10→R2, F14→R45** (documented/accepted n16) — do NOT double-execute these; the
-> 51-findings plan resolves them. **Still open (NOT subsumed):** F13 (no-seam dedup),
-> F43 (not RED-provable).
+> 51-findings plan resolves them. **F13/F43 — FIXED 2026-10-02** (verified already-fixed
+> and annotated; the Architecture backlog is now CLOSED).
 
 ### Critical
 
@@ -1156,6 +1157,8 @@ F17-F21, F23-F35, F45 — stayed report-only.)
 13. **F13 — FileFinder re-implements the shared DTE walker.** `FileFinder.cs:116-190` vs
     `ProjectFiles.cs:31-103` near-verbatim. Fix: `GetCandidates` maps
     `ProjectFiles.Enumerate(dte)`.
+    ✅ **FIXED 2026-10-02** — `FileFinder.GatherHits` now delegates to
+    `ProjectFiles.Enumerate` (no private walker remains).
 14. **F14 — Ctrl+N/P hijacked in every editor.** `PopupNavigation.cs:49` injects arrows
     with no popup-active check. Fix: re-add `ICompletionBroker.IsCompletionActive` gate.
 15. **F15 — CodeIssuesFinder per-open DTE re-enumeration + full-file scans.**
@@ -1195,6 +1198,10 @@ F17-F21, F23-F35, F45 — stayed report-only.)
     `Get-Process devenv | Stop-Process` kills removed.
 25. **F43 — fzf unit test silently passes when fzf absent.** `tests/Telescope.Tests/Program.cs:150`.
     Fix: fail the test or count it as SKIP.
+    ✅ **FIXED 2026-10-02** — the silent-pass test was replaced by explicit missing-fzf
+    tests (`Run_FzfFilter_IsAvailableFalseForMissingPath`,
+    `Run_FzfFilter_FilterAsyncSkipsSpawnWhenUnavailable`); the dead fzf-path resolver
+    helper was removed.
 26. **F44 — dte-command.ps1 hardcoded VS paths.** `tools/harness/dte-command.ps1:13`. Fix: vswhere
     fallback like the other two harness scripts.
 27. **F46 — Host depends on "library" for core infra.** `MyExtension/MyExtension.csproj:31`

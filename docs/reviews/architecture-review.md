@@ -278,7 +278,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 | F10 | major | `Telescope/Overlay/TelescopeOverlay.cs:402` | Preview file re-read + re-tokenized + caret reset on every selection/filter change |
 | F11 | major | `Telescope/Finders/TelescopeFinder.cs:14` | Finder seam doesn't scale: preview/line-jump hardcoded by payload type in overlay code-behind; sync `GetCandidates` on UI thread |
 | F12 | major | `Telescope/Overlay/TelescopeOverlay.cs:357` | Display-keyed payload lookup loses same-named duplicates → null-payload entries that silently do nothing |
-| F13 | major | `Telescope/Finders/FileFinder.cs:116` | FileFinder re-implements the shared `ProjectFiles` DTE traversal (second walker) |
+| F13 | major | `Telescope/Finders/FileFinder.cs:116` | FileFinder re-implements the shared `ProjectFiles` DTE traversal (second walker) — **FIXED** (2026-10-02; `FileFinder.GatherHits` now delegates to `ProjectFiles.Enumerate`; see `docs/progress.md`) |
 | F14 | major | `MyExtension/Input/PopupNavigation.cs:49` | Ctrl+N/P hijacked in every editor — arrow injected with no popup-active check; native VS shortcuts dead |
 | F15 | major | `Telescope/Finders/CodeIssuesFinder.cs:71` | Per-open DTE re-enumeration + `ReadAllLines` of every project file on UI thread; no cache |
 | F16 | major | `tools/harness/test-e2e.ps1:806` | 4 known-bug assertions still red (prompt-motions `e`, `key=Enter`→`Return`, issues `count=1`); no Enter-storm fail-fast guard — **FIXED** (2026-09-19; see `docs/progress.md`) |
@@ -308,7 +308,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 | F40 | minor | `tools/harness/test-e2e.ps1:1095` | Failure output has no log tail / step context |
 | F41 | minor | `tools/harness/test-e2e.ps1:92` | `Send-Text` char→VK mapping wrong for punctuation (`!` → VK_PRIOR/PageUp) |
 | F42 | minor | `tools/harness/test-e2e.ps1:1105` | On failure kills ALL `devenv` processes on the machine |
-| F43 | minor | `tests/Telescope.Tests/Program.cs:150` | fzf filter test silently PASSES when fzf is not on PATH |
+| F43 | minor | `tests/Telescope.Tests/Program.cs:150` | fzf filter test silently PASSES when fzf is not on PATH — **FIXED** (2026-10-02; the silent-pass test was replaced by explicit missing-fzf tests — `Run_FzfFilter_IsAvailableFalseForMissingPath`, `Run_FzfFilter_FilterAsyncSkipsSpawnWhenUnavailable`; the dead fzf-path resolver helper was removed; see `docs/progress.md`) |
 | F44 | minor | `tools/harness/dte-command.ps1:13` | Hardcoded VS PublicAssemblies paths, no vswhere fallback |
 | F45 | minor | `tests/Telescope.Tests/Program.cs:114` | LogFileWriter test order-dependent on static `_clearedThisProcess`; log-prefix constants not centralized — **FIXED** (see `docs/progress.md` F45 status) |
 | F46 | minor | `MyExtension/MyExtension.csproj:31` | Host depends on the "library" for core infra (`NeoVisualLog`, `TelescopeController`); split is not a clean pure/host boundary |
@@ -377,7 +377,7 @@ drift), which is dangerous because the hub treats it as the single source of tru
 - **Why it bites:** Two same-named files in different folders (App.xaml/MainWindow.xaml in multi-project solutions) both appear as candidates but only the first is selectable — the second silently does nothing. The em-dash UTF-8 fix is a band-aid over the same lossy display-keyed design.
 - **Fix:** Carry the payload through filtering (filter display lines, map matched lines back by stable ordinal/id, not display text).
 
-### F13 (major) — FileFinder re-implements the shared DTE walker
+### F13 (major) — FileFinder re-implements the shared DTE walker — **FIXED** (2026-10-02; see `docs/progress.md`)
 - **Where:** `Telescope/Finders/FileFinder.cs:116-190` vs `Telescope/Finders/ProjectFiles.cs:31-103` (same solution-folder GUID, same `FullPath` read, same `File.Exists`/seen dedup — near-verbatim).
 - **Why it bites:** AGENTS.md documents `ProjectFiles` as the shared enumeration "used by finders AND the issues finder", but only `CodeIssuesFinder` uses it. A bug fix or new project-kind handling in one copy silently drifts from the other.
 - **Fix:** `GetCandidates` maps `ProjectFiles.Enumerate(dte)` to `FinderEntry`; delete the private copies.

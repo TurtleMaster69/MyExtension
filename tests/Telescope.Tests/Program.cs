@@ -512,29 +512,6 @@ namespace Telescope.Tests
             }
         }
 
-        // Resolves the fzf executable path explicitly from PATH (m22 — the injected-path seam).
-        private static string? ResolveFzfPath()
-        {
-            string pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            foreach (string dir in pathEnv.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                string trimmed = dir.Trim();
-                if (trimmed.Length == 0)
-                {
-                    continue;
-                }
-                foreach (string name in new[] { "fzf.exe", "fzf" })
-                {
-                    string candidate = Path.Combine(trimmed, name);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-            }
-            return null;
-        }
-
         // ================================================================
         // FzfFilter injected-path seam (BP-3/M6a, BP-4/M6b, BP-5/M6c)
         // RED: FilterTimeoutMs does not exist -> compile error (CS1061);

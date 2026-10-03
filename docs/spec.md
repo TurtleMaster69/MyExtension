@@ -93,6 +93,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Finders/CodeIssuesFinder.cs` | Warnings/errors + TODO/FIXME/HACK/XXX marker finder. |
 | `Telescope/Finders/ReferencesFinder.cs` | Symbol-at-caret find-references with read/write access (Roslyn `FindReferencesAsync`; host-injected gatherer keeps it hermetic-testable). |
 | `Telescope/Finders/GrepFinder.cs` | Query-driven grep over `ProjectFiles.Enumerate` (per-keystroke re-gather with a ~200ms debounce; skips fzf for query finders). |
+| `Telescope/Finders/FzfFinder.cs` | Query-driven fuzzy content finder over `ProjectFiles.Enumerate` (per-file fzf `--filter`; literal fallback when fzf unavailable). |
 | `Telescope/Finders/ImplementationFinder.cs` | Symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering (host-injected gatherer). |
 | `Telescope/Finders/Utils/ProjectFiles.cs` | Shared DTE project-file enumeration. |
 | `Telescope/Finders/Utils/HierarchyWalker.cs` | Pure tree-walk over the Solution Explorer hierarchy. |
@@ -180,15 +181,17 @@ on the list, or `TextMotionNavigator` (vim motions) when focus is on the preview
   sequences are matched after the leader key (e.g. `W`, `F,F`).
 - Action names resolve in `InputHandler.ResolveAction`: `navigate-left/right/up/down`,
   `telescope`, `telescope-issues`, `telescope-references`, `telescope-grep`,
-  `telescope-implementation`, `toggle-solution-explorer`, or `command:<VsCommandName>`.
-- To add a *new built-in action*, add a case in `ResolveAction` and a line in
-  `default-keybindings.json`.
+  `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`, or
+  `command:<VsCommandName>`.
+- Telescope actions are derived from `TelescopeLauncher.FinderNames` (add a `FinderNames`
+  entry + a `default-keybindings.json` line); `ResolveAction` cases are only for
+  non-telescope built-ins.
 
 Built-in defaults (`MyExtension/Resources/default-keybindings.json`): `Ctrl+H/J/K/L` →
 navigate; `Space+B,D` close; `Space+W` save; `Space+Q` exit; `Space+E`
 toggle-solution-explorer; `Space+F,F` GoToFile; `Space+F,T` telescope;
 `Space+F,D` telescope-issues; `Space+F,R` telescope-references; `Space+F,G` telescope-grep;
-`Space+F,I` telescope-implementation; `Space+C,W` Command Window;
+`Space+F,Z` telescope-fzf; `Space+F,I` telescope-implementation; `Space+C,W` Command Window;
 plus Git/build/terminal
 `command:` bindings.
 
@@ -217,6 +220,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...`
 - `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
 - `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
+- `[Telescope] fzf hits=...` / `[Telescope] opened fzf: file=... line=...` / `[Telescope] fzf unavailable — literal fallback`
 - `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
 - `[Telescope] focus target=List|Preview`
 - `[Telescope] result-mapper unknown display: {display}` (unknown-match warning when a display string has no payload)
@@ -245,12 +249,13 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **157 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **172 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
   syntax highlighting (`SyntaxHighlighter.Tokenize`), prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
+  fzf finder (`FzfFinder`/`FzfHit`/`FzfLineMapper`/`LiteralLineScanner`),
   implementation finder (`ImplementationFinder`/`ImplementationHit`), the finder
   base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`),
   the shared preview index (`LineIndex`), the focus-target state machine
@@ -283,16 +288,17 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 35 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 36 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
+The **36 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
-`telescope-grep`, `telescope-implementation`, `telescope-open-file-searchbox`,
+`telescope-grep`, `telescope-implementation`, `telescope-fzf`,
+`telescope-open-file-searchbox`,
 `telescope-open-file-navigation`, `telescope-prompt-motions`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
 `telescope-no-selection`, `telescope-preview`, `neovisual-window-nav`,
@@ -397,17 +403,19 @@ The **35 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
   at the caret via Roslyn `FindImplementationsAsync` (first in-source declaring
   location, deterministic type-before-member ordering); preview jumps to the
   implementation line; Enter opens the file at the line.
-
-### Pending (user-requested, NOT yet implemented)
-
-- **Telescope finder**: fzf — with preview pane. (Scope DECIDED 2026-09-28:
-  fuzzy content finder + fuzzy file finder; status PLANNED, not executed. The
-  overlay already uses fzf internally as its filter engine.)
+- Fzf finder (`Space+F Z`): query-driven fuzzy **content** finder over the
+  solution's project files (`FzfFinder`, `Name="Fzf"`; per-keystroke re-gather
+  with a ~200ms debounce, one file at a time via fzf `--filter`, matched lines
+  mapped back by the pure `FzfLineMapper`); falls back to a literal
+  case-insensitive substring scan (`LiteralLineScanner`, shared with
+  `GrepFinder`) when fzf is unavailable; preview jumps to the hit line; Enter
+  opens the file at the line. The existing `FileFinder` (`Space+F T`) is the
+  fuzzy file finder. — `telescope-fzf` live test passes.
 
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (157) and
+- Offline units: `dotnet run --project tests/Telescope.Tests` (172) and
   `dotnet run --project tests/NeoVisual.Tests` (168).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios; no known-RED; a few flake on retry);
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (36 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

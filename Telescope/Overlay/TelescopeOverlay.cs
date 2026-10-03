@@ -378,7 +378,7 @@ namespace Telescope.Overlay
             await Task.Delay(QueryDebounceMs); // resumes on the UI thread (SynchronizationContext)
             if (gen != _queryGeneration || !IsOpen) return;
             IReadOnlyList<FinderEntry> results;
-            try { results = finder.GetCandidates(query) ?? Array.Empty<FinderEntry>(); }
+            try { results = await finder.GetCandidatesAsync(query) ?? Array.Empty<FinderEntry>(); }
             catch (Exception ex) { TelescopeLog.Log($"query gather failed: {ex.Message}"); results = Array.Empty<FinderEntry>(); }
             if (gen != _queryGeneration || !IsOpen) return;
             _results = results;

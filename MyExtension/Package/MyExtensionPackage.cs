@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Telescope.Controller;
+using Telescope.Filter;
 using Telescope.Finders;
 using Telescope.Logging;
 
@@ -100,6 +101,7 @@ namespace MyExtension.Package
                         _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)!, fileCache));
                         _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this)!, fileCache));
                         _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this)!, fileCache));
+                        _telescope.RegisterFinder(new FzfFinder(() => VsServices.Dte(this)!, fileCache, new FzfFilter()));
                         _telescope.RegisterFinder(new ReferencesFinder(
                             () => _roslynGatherers!.GatherReferences(),
                             hit => OpenHitAtLine(hit)));

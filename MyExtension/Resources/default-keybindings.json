@@ -14,6 +14,7 @@
     "F,T": "telescope",
     "F,D": "telescope-issues",
     "F,G": "telescope-grep",
+    "F,Z": "telescope-fzf",
     "F,B": "command:Window.NavigateTo",
     "F,R": "telescope-references",
     "F,I": "telescope-implementation",

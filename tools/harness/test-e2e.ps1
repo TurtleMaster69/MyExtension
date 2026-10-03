@@ -15,6 +15,7 @@
 #   telescope-references  Space F R: lists read/write references to the caret symbol, previews+opens at line
 #   telescope-implementation  Space F I: lists implementations of the caret symbol, previews+opens at the decl line
 #   telescope-grep      Space F G: grep finder searches files for the query, previews + opens at the hit line
+#   telescope-fzf       Space F Z: fzf finder fuzzy-matches file contents, previews + opens at the hit line
 #   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 #   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
 #   telescope-q-close    q closes the overlay in normal mode
@@ -366,6 +367,10 @@ $script:SeedCanonical = @{
     # lines of GrepProbe.cs (line 4 and line 6), so `grep hits=2` is exact and the first hit
     # (line 4) pins the preview + opened-line assertions. Uniform CRLF.
     'GrepProbe.cs'          = "// GrepProbe.cs`r`nclass GrepProbe`r`n{`r`n    // GREPME first hit line 4`r`n    int alpha = 1;`r`n    // GREPME second hit line 6`r`n    string beta = `"gamma`";`r`n}`r`n"
+    # Distinctive marker for the fzf finder (telescope-fzf): "FUZZYPROBE" appears on exactly ONE
+    # line of FzfProbe.cs (line 4), so `fzf hits=1` is exact and line 4 pins the preview +
+    # opened-line assertions. Uniform CRLF.
+    'FzfProbe.cs'           = "// FzfProbe.cs`r`nclass FzfProbe`r`n{`r`n    // FUZZYPROBE first hit line 4`r`n    int alpha = 1;`r`n}`r`n"
     # Real compilable interface->implementation graph for the implementation finder
     # (telescope-implementation): `interface IShape` declared in Models/IShape.cs (the interface
     # name `IShape` sits on line 1 starting at col 10 — a deterministic w-motion target), and
@@ -1354,6 +1359,37 @@ Register-Scenario 'telescope-grep' {
     # Step 4: Enter opens the file at the pinned hit line (line 4).
     Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
     Assert-NewLogLine $logPath "$($script:PfxTel)opened grep: file=.*GrepProbe\.cs line=4" 'Enter opened the grep hit at line 4'
+
+    # Step 5: close.
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-fzf --------------------------------------------------------
+# The fzf finder (Space F Z) fuzzy-matches the solution's source-file CONTENTS for the typed query
+# (query-driven, per-file fzf --filter), shows each hit's file/line/text, previews the hit file with
+# the caret jumped to the hit line, and opens the file at that line on Enter. The scratch solution
+# seeds a distinctive marker "FUZZYPROBE" on exactly ONE line of FzfProbe.cs (line 4), so
+# `fzf hits=1` is exact and line 4 pins the preview + opened-line assertions end-to-end.
+Register-Scenario 'telescope-fzf' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-TelescopeFinder -Vs $vs -LogPath $logPath -Key 'F,Z' -Finder 'Fzf'
+    Assert-OverlayFocused $vs
+
+    # Step 1: empty query -> deterministic 0 candidates.
+    Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Fzf candidates=0" 'fzf finder opened with empty query -> 0 candidates'
+
+    # Step 2: type the token; the debounce re-runs the query-driven gather after typing settles.
+    Send-Text 'FUZZYPROBE'
+    Assert-NewLogLine $logPath "$($script:PfxTel)fzf hits=1$" 'fzf fuzzy-matched the 1 seeded FUZZYPROBE line'
+
+    # Step 3: preview jumps to the hit's file/line (FzfProbe.cs, line 4).
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*FzfProbe\.cs" 'preview shows the fzf hit file'
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=4" 'preview caret jumped to the hit line'
+
+    # Step 4: Enter opens the file at the pinned hit line (line 4).
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened fzf: file=.*FzfProbe\.cs line=4" 'Enter opened the fzf hit at line 4'
 
     # Step 5: close.
     Close-Telescope $vs $logPath

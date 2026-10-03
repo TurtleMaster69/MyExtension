@@ -153,7 +153,6 @@ $bareNameAllowlist = @(
 # harness module). When the item lands, the real name must replace the proposal.
 $proposedSymbols = @(
     'SimpleKeyBuilder'                                  # F22 — proposed extraction
-    'FzfFinder'                                         # code-review backlog — proposed finder
 )
 $proposedPaths = @(
     # Phase 13 (restructure): `tools/harness-common.ps1` moved to

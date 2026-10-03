@@ -7,18 +7,17 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-02 · **Last item:** Code-review fixes (72 findings) — GREEN 2026-10-02 (bugfix lane, **e2e ENABLED**; full 35-scenario suite + both unit suites GREEN)
+> **Status:** ACTIVE · **Updated:** 2026-10-03 · **Last item:** Telescope `fzf` finder — GREEN 2026-10-03 (feature lane, **e2e ENABLED**; full 36-scenario suite + both unit suites GREEN)
 
 ## Current state
 
 - **In progress:** (none — the **Code review fixes (72 findings)** plan reached GREEN
   2026-10-02; see the Done section).
-- **Next up:** the Telescope `fzf` finder (SCOPE DECIDED 2026-09-28; FEATURE-TRIAGE
-  2026-10-02: **BUILD both** — fuzzy content finder + fuzzy file finder — using the
-  terminal `fzf` subprocess, not a custom matcher), then the user-requested features 6-9
-  (all four selected; FEATURE-TRIAGE autonomy granted). The Architecture backlog is now
-  **CLOSED** — F13 and F43 were verified already-fixed and annotated FIXED (2026-10-02).
-  See the Pending queue + User-requested features sections below.
+- **Next up:** the user-requested features 6-9 (all four selected; FEATURE-TRIAGE
+  autonomy granted). The Telescope `fzf` finder (item 5) is **DONE** (GREEN 2026-10-03;
+  see the Done section). The Architecture backlog is now **CLOSED** — F13 and F43 were
+  verified already-fixed and annotated FIXED (2026-10-02). See the Pending queue +
+  User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
@@ -63,12 +62,12 @@ reads at the start of every loop iteration.
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **153 passed**; `tests/NeoVisual.Tests`
-  **163 passed** (after the Code review fixes (51 findings) plan, 2026-10-02).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **35 scenarios** (incl. `seed-reset`,
-  `seed-leak`, `neovisual-explorer-move-editor-focus`). **No known-RED remains** —
-  `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 35-scenario suite is GREEN.
+- Offline units: `tests/Telescope.Tests` **172 passed**; `tests/NeoVisual.Tests`
+  **168 passed** (after the Code review fixes (72 findings) plan, 2026-10-02).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **36 scenarios** (incl. `seed-reset`,
+  `seed-leak`, `neovisual-explorer-move-editor-focus`, `telescope-fzf`). **No known-RED remains** —
+  `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
+  `telescope-implementation` 7c6569b) - the full 36-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -273,7 +272,8 @@ Top of the queue, in priority order:
 > **UPDATE 2026-10-02:** F5→R3, F7→R4, F8/F9→R22/R42, F10→R2, F14→R45 are now covered
 > by the 51-findings plan (GREEN 2026-10-02) — do not double-execute. Remaining
 > after it: F13 (no-seam dedup), F43 (not RED-provable).
-> The Telescope `fzf` finder (item 5) — SCOPE DECIDED 2026-09-28, PLANNED (not executed).
+> The Telescope `fzf` finder (item 5) — **DONE** (GREEN 2026-10-03; see the Done section).
+> The queue's next item is the user-requested features 6-9 (LazyVim gaps).
 
 0. ~~Harness seeding hardening~~ — **DONE** (see Done section).
 1. ~~F45 e2e verification subset (BP-23)~~ — **DONE**: the 19-scenario gate ran
@@ -290,10 +290,9 @@ Top of the queue, in priority order:
      with a debounce, preview line-jump).
    - ~~`implementation` finder~~ — **DONE** (see Done section; `Space+F I`,
      Roslyn `FindImplementationsAsync`, preview line-jump).
-   - `fzf` finder — with preview pane. **SCOPE DECIDED 2026-09-28** (user: fuzzy
-     content finder + fuzzy file finder; see the Decisions section + `backlog-plans.md`).
-     Was DEFERRED (user clarified 2026-09-19: build implementation first; fzf-finder
-     scope TBD by the user) — now PLANNED, not executed.
+   - ~~`fzf` finder — with preview pane.~~ — ✅ **DONE** (see the Done section;
+     `Space+F Z`, `FzfFinder` fuzzy content finder + the existing `FileFinder` as the
+     fuzzy file finder; new e2e scenario `telescope-fzf`).
 4. ~~Add the 4 new planned E2E scenarios~~ — **PARTIAL**: `telescope-open-file-searchbox`
    + `telescope-open-file-navigation` **DONE** (see Done section); the other 2
    exposed real gaps → now the next queue items:
@@ -301,8 +300,10 @@ Top of the queue, in priority order:
      GREEN 2026-09-19; see Done section).
    - ~~**`explorer-open-searchbox`**~~ — ✅ **DONE** (search-box focus-exit gap
      fixed, GREEN 2026-09-27; see Done section).
-5. **Telescope `fzf` finder** — **SCOPE DECIDED 2026-09-28** (fuzzy content finder + fuzzy
-   file finder; see the Decisions section + `backlog-plans.md`), **PLANNED** (not executed).
+5. ~~**Telescope `fzf` finder**~~ — ✅ **DONE** (see the Done section; `Space+F Z`,
+   `FzfFinder` fuzzy content finder + the existing `FileFinder` as the fuzzy file finder;
+   new e2e scenario `telescope-fzf`; diagnostics `fzf hits=...`,
+   `fzf unavailable — literal fallback`, `opened fzf: file=... line=...`).
 5.5. ~~**`telescope-implementation` — intermittent injected-Enter loss.**~~ ✅ **DONE
     2026-09-27** (see the Done section; commit `7c6569b`). Root cause was a **harness focus
     race** — `Assert-OverlayFocused` was PID-only, so Enter was injected before the overlay
@@ -425,6 +426,39 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-03 — Telescope `fzf` finder** (Lane: `feature`; 18 delegations, 3 VS boots,
+  1 iteration). New `FzfFinder` (Telescope, `Name="Fzf"`, `Space+F Z`) — a query-driven fuzzy
+  **content** finder: per-query re-gather over `ProjectFiles.Enumerate` with fzf `--filter`
+  fuzzy matching (one file at a time, mapped back via the pure `FzfLineMapper`), preview jumps
+  to the hit line, Enter opens at the line. Falls back to a literal substring scan
+  (`LiteralLineScanner`, shared with `GrepFinder`) when fzf is unavailable. New
+  `IFinder.GetCandidatesAsync` seam (abstract on `IFinder`, implemented in `FinderBase<THit>`)
+  so the overlay's query-driven path awaits the async fzf gather without blocking the UI
+  thread. Confirmed the existing `FileFinder` (`Space+F T`) is the fuzzy file finder (no code
+  change). New diagnostics: `[Telescope] fzf hits={count}`,
+  `[Telescope] fzf unavailable — literal fallback`,
+  `[Telescope] opened fzf: file={path} line={line}`. New e2e scenario `telescope-fzf` (36th).
+  Final suites: **Telescope.Tests 172, NeoVisual.Tests 168** (both 0 failed); full
+  36-scenario e2e suite GREEN; `dotnet build` 0 errors; check-doc-refs PASS.
+  **Change summary:** created `Telescope/Filter/IFzfEngine.cs`,
+  `Telescope/Finders/FzfFinder.cs`, `Telescope/Finders/Utils/FzfHit.cs`,
+  `Telescope/Finders/Utils/FzfLineMapper.cs`, `Telescope/Finders/Utils/LiteralLineScanner.cs`;
+  modified `Telescope/Filter/FzfFilter.cs` (`: IFzfEngine`),
+  `Telescope/Finders/GrepFinder.cs` (`ScanFile` → `LiteralLineScanner`),
+  `Telescope/Finders/TelescopeFinder.cs` (abstract `GetCandidatesAsync`),
+  `Telescope/Finders/FinderBase.cs` (impl),
+  `Telescope/Overlay/TelescopeOverlay.cs` (await),
+  `MyExtension/Package/MyExtensionPackage.cs` (register),
+  `MyExtension/Package/Utils/TelescopeLauncher.cs` (`FinderNames`),
+  `MyExtension/Resources/default-keybindings.json` (`F,Z`),
+  `tools/harness/test-e2e.ps1` (scenario + seed + anchor),
+  `tests/Telescope.Tests/Program.cs` (+15), `tests/NeoVisual.Tests/Program.cs` (registry
+  count 11), docs. **If this regresses, look first at `FzfFinder.GetCandidatesAsync` (the
+  per-file fzf gather + `FzfLineMapper` mapping) and the
+  `IFinder.GetCandidatesAsync`/`FinderBase` seam (the overlay await) — the two highest-risk
+  changes.** Iteration-1 fix: `Run_ActionsRegistry_ContainsAllBuiltins` updated to 11 builtins
+  (BP-13, test-only).
 
 - **2026-10-02 — Code review fixes (72 findings)** (Lane: `bugfix`, **e2e ENABLED**;
   12 delegations, 2 VS boots, 1 iteration). All 72 findings (2 critical, 8 major, 44 minor,

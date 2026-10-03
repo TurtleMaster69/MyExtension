@@ -32,7 +32,7 @@ namespace Telescope.Filter
     /// subprocess — so it can be invoked from a background task. Callers marshal the result back
     /// to the WPF dispatcher themselves.
     /// </summary>
-    internal sealed class FzfFilter
+    internal sealed class FzfFilter : IFzfEngine
     {
         private const int DefaultFilterTimeoutMs = 3000;
 

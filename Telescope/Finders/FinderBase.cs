@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using Telescope.Logging;
 
 namespace Telescope.Finders
@@ -41,6 +42,9 @@ namespace Telescope.Finders
 
             return hits.Select(ToEntry).ToList();
         }
+
+        public virtual Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "")
+            => Task.FromResult(GetCandidates(query));
 
         public void OnSelected(FinderEntry entry)
         {

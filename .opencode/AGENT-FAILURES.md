@@ -133,3 +133,8 @@ FIX: use `Select-Object -First N` (PowerShell) instead of the Unix `head`. Added
 COMMAND: `pwsh tools/harness/test-e2e.ps1 -Tests a,b,c`
 ERROR: the comma list arrived as one string -> "Unknown scenario(s)" (the `[string[]]` array did not bind through the native `pwsh` boundary).
 FIX: use the call operator `& tools/harness/test-e2e.ps1 -Tests a,b,c` (or `pwsh -Command "& ... -Tests a,b,c"`). Added to the command-log known-bad index.
+
+## 2026-10-03 | verification-agent | agent-syntax
+COMMAND: `pwsh -NoProfile -Command "$errs=$null; ... [ref]$errs ... if ($errs) {...}"` (a double-quoted `-Command` argument containing an inner pwsh script).
+ERROR: `ParserError: Missing condition in if statement after 'if ('` — the OUTER pwsh interpolated `$errs`/`$toks`/`$_` before the inner pwsh parsed them, so the inner `if ($errs)` arrived empty.
+FIX: pass the inner script as a SINGLE-quoted `-Command` argument (or a script file) so the outer shell does not interpolate the inner script's variables. Recovered with a single-quoted `-Command`. FIXED 2026-10-03 (workaround noted).

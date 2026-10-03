@@ -85,7 +85,8 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
 
 - `dotnet run --project tests/Telescope.Tests` — Telescope overlay logic.
   Covers overlay navigation + insert/normal mode (`OverlayKeyHandler`, extracted
-  pure state machine), file search (`FzfFilter`), file open (`FileFinder`
+  pure state machine), file search (`FzfFilter`), the fzf finder
+  (`FzfFinder`/`FzfHit`/`FzfLineMapper`/`LiteralLineScanner`), file open (`FileFinder`
   hermetic seam), results formatting, log writer (buffered `LogFileWriter`),
   the preview-pane vim motions (`TextMotionNavigator`), the finder base
   (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models),
@@ -96,7 +97,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   and the pane-failure fallback (`PaneFailureTracker`).
   `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
   `-- LineIndex`, `-- FocusTarget`, `-- Syntax` run subsets.
-  Currently **157 tests, all passing**.
+  Currently **172 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -127,13 +128,13 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 35 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 36 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (35 total; no known-RED remaining — `explorer-open-searchbox` was GREened
+Scenarios (36 total; no known-RED remaining — `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -146,6 +147,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-references` — Space F R: references to the symbol at the caret (read/write access), previews, opens at line
 - `telescope-grep` — Space F G: query-driven search of the solution's files (grep hits per typed query), previews, opens at line
 - `telescope-implementation` — Space F I: implementations/overrides of the symbol at the caret, previews, opens at line
+- `telescope-fzf` — Space F Z: fuzzy content finder over the solution's files (fzf hits per typed query), previews, opens at the hit line
 - `telescope-open-file-searchbox` — insert-mode query, wait for the filtered result, Enter opens it
 - `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
 - `explorer-open-navigation` — `g` programmatically selects the first source file (`solution-explorer select file=...`) then `o` opens it
@@ -221,6 +223,9 @@ Key facts that make this reliable:
   (references finder — read/write access from Roslyn FindReferences),
   `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
   (grep finder — query-driven, per-query gather summary),
+  `[Telescope] fzf hits=...` / `[Telescope] opened fzf: file=... line=...` /
+  `[Telescope] fzf unavailable — literal fallback`
+  (fzf finder — query-driven fuzzy content finder; literal fallback when fzf is missing),
   `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
   (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
   `[Telescope] focus target=List|Preview`, `[Telescope] result-mapper unknown display: {display}`
@@ -309,6 +314,16 @@ Done and tested (live + unit):
   200 hits; the preview jumps to the hit line; Enter opens the file at the line.
   Diagnostics: `grep hits=...` (per-query summary) and
   `opened grep: file=... line=...`. — `telescope-grep` live test passes.
+- Fzf finder: `FzfFinder` (Telescope, `Name="Fzf"`, `Space+F Z`) fuzzy-matches the
+  solution's project-file **contents** for the typed query — **query-driven** through
+  the `IsQueryDriven` seam (per-keystroke re-gather with a ~200ms debounce), filtering
+  one file at a time with fzf `--filter` and mapping matched lines back via the pure
+  `FzfLineMapper`. Empty query → no candidates; when fzf is unavailable it falls back
+  to a literal case-insensitive substring scan (`LiteralLineScanner`, shared with
+  `GrepFinder`), capped at 200 hits; the preview jumps to the hit line; Enter opens the
+  file at the line. Diagnostics: `fzf hits=...` (per-query summary),
+  `fzf unavailable — literal fallback`, and `opened fzf: file=... line=...`.
+  — `telescope-fzf` live test passes.
 - Implementation finder: `ImplementationFinder` (Telescope, `Name="Implementation"`,
   `Space+F I`) lists the implementations/overrides of the symbol at the caret,
   gathered from Roslyn `SymbolFinder.FindImplementationsAsync` (MEF-resolved
@@ -321,11 +336,6 @@ Done and tested (live + unit):
   `implementations gathered count=...` (gather summary) and
   `opened implementation: file=... line=...`. All Roslyn async calls run inside
   `ThreadHelper.JoinableTaskFactory.Run`. — `telescope-implementation` live test passes.
-
-Pending (user-requested, NOT yet implemented):
-- **Telescope finder**: fzf — with preview pane. (Scope DECIDED 2026-09-28:
-  fuzzy content finder + fuzzy file finder; status PLANNED, not executed. The
-  overlay already uses fzf internally as its filter engine.)
 
 ## Hard requirements that are easy to violate
 

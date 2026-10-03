@@ -31,6 +31,7 @@ namespace MyExtension.Package
                 ["telescope-references"] = "References",
                 ["telescope-implementation"] = "Implementation",
                 ["telescope-grep"] = "Grep",
+                ["telescope-fzf"] = "Fzf",
             };
 
         public void Open(string finderName)

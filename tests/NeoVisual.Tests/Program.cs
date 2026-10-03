@@ -1592,14 +1592,15 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionsRegistry_ContainsAllBuiltins()
         {
-            // The registry must hold exactly the 10 built-in action names, kept in sync with
+            // The registry must hold exactly the 11 built-in action names, kept in sync with
             // default-keybindings.json (the hand-sync bug this seam removes).
-            Assert.Equal(10, Actions.Registry.Count);
+            Assert.Equal(11, Actions.Registry.Count);
             var names = new[]
             {
                 "navigate-left", "navigate-right", "navigate-up", "navigate-down",
                 "telescope", "telescope-issues", "telescope-references",
-                "telescope-implementation", "telescope-grep", "toggle-solution-explorer",
+                "telescope-implementation", "telescope-grep", "telescope-fzf",
+                "toggle-solution-explorer",
             };
             foreach (string name in names)
             {

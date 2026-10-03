@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Telescope.Finders
 {
@@ -23,6 +24,14 @@ namespace Telescope.Finders
         /// <see cref="IsQueryDriven"/>); non-query finders ignore it.
         /// </summary>
         IReadOnlyList<FinderEntry> GetCandidates(string query = "");
+
+        /// <summary>
+        /// Async variant of <see cref="GetCandidates(string)"/> for query-driven finders whose
+        /// gather is asynchronous (e.g. an fzf subprocess). The overlay awaits this on the
+        /// query-driven path so a slow gather never blocks the UI thread. Abstract (NOT a default
+        /// interface method — net472 rejects C# 8 default implementations).
+        /// </summary>
+        Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "");
 
         /// <summary>
         /// True when the finder is <b>query-driven</b>: every query change re-gathers candidates

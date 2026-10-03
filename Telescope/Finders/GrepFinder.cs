@@ -210,17 +210,9 @@ namespace Telescope.Finders
             try
             {
                 string[] lines = _contentCache.GetLines(path);
-                for (int i = 0; i < lines.Length; i++)
+                foreach (int ln in LiteralLineScanner.Scan(lines, query, HitCap - hits.Count))
                 {
-                    if (hits.Count >= HitCap)
-                    {
-                        break;
-                    }
-                    string line = lines[i];
-                    if (line.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        hits.Add(new GrepHit(path, i + 1, line));
-                    }
+                    hits.Add(new GrepHit(path, ln, lines[ln - 1]));
                 }
             }
             catch

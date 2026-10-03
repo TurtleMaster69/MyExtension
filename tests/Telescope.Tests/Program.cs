@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -2491,6 +2492,329 @@ namespace Telescope.Tests
                 var hits = finder.GetCandidates("alpha");
                 Assert.Equal(1, hits.Count);
                 Assert.True(hits[0].Display.Contains("A.cs"), "hit display names the file");
+            }
+        }
+
+        // ================================================================
+        // FzfFinder — query-driven fuzzy content finder over the solution's files
+        // (hermetic seams mirroring GrepFinder: injected file-PATH source + Action<FzfHit>
+        // opener + an IFzfEngine availability/filter seam; the finder reads file CONTENT
+        // off disk from those paths and maps fzf-matched lines back via FzfLineMapper).
+        // RED: FzfFinder / FzfHit / FzfLineMapper / IFzfEngine do not exist yet -> CS0246.
+        // ================================================================
+
+        // Test double for the IFzfEngine availability+filter seam (finding 2): drives both the
+        // available (fuzzy filter) and unavailable (literal-fallback) paths with no real fzf
+        // subprocess. FilterCalls records whether the finder spawned a filter (the empty-query
+        // and unavailable paths must NOT).
+        private sealed class FakeFzfEngine : IFzfEngine
+        {
+            private readonly bool _available;
+            private readonly Func<IEnumerable<string>, string, IReadOnlyList<string>> _filter;
+
+            public int FilterCalls { get; private set; }
+
+            public FakeFzfEngine(bool available, Func<IEnumerable<string>, string, IReadOnlyList<string>>? filter = null)
+            {
+                _available = available;
+                _filter = filter ?? ((candidates, query) =>
+                    candidates.Where(c => c.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).ToList());
+            }
+
+            public Task<bool> IsAvailableAsync() => Task.FromResult(_available);
+
+            public Task<IReadOnlyList<string>> FilterAsync(IEnumerable<string> candidates, string query, CancellationToken ct)
+            {
+                FilterCalls++;
+                return Task.FromResult(_filter(candidates, query));
+            }
+        }
+
+        public static void Run_FzfLineMapper_ExactLineMapsToLineNumber()
+        {
+            var fileLines = new[] { "alpha", "NEEDLE here", "beta" };
+            var matched = new[] { "NEEDLE here" };
+
+            var lines = FzfLineMapper.Map(fileLines, matched);
+
+            Assert.Equal(1, lines.Count);
+            Assert.Equal(2, lines[0]);
+        }
+
+        public static void Run_FzfLineMapper_DuplicateLinesMapOrdinal()
+        {
+            // Two identical lines in one file must map to their two distinct 1-based line numbers
+            // in matched order (ordinal consumption), not both to the first occurrence (AC5).
+            var fileLines = new[] { "dup", "x", "dup" };
+            var matched = new[] { "dup", "dup" };
+
+            var lines = FzfLineMapper.Map(fileLines, matched);
+
+            Assert.Equal(2, lines.Count);
+            Assert.Equal(1, lines[0]);
+            Assert.Equal(3, lines[1]);
+        }
+
+        public static void Run_FzfLineMapper_UnknownLineSkipped()
+        {
+            // A matched string with no remaining unconsumed identical line is skipped (no bogus line).
+            var fileLines = new[] { "alpha", "beta" };
+            var matched = new[] { "not-in-file" };
+
+            var lines = FzfLineMapper.Map(fileLines, matched);
+
+            Assert.Equal(0, lines.Count);
+        }
+
+        public static void Run_FzfFinder_EmptyQueryReturnsZeroCandidates()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// NEEDLE here\n");
+
+                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                Assert.Equal(0, finder.GetCandidates("").Count);
+            }
+        }
+
+        public static void Run_FzfFinder_EmptyQueryCleanEmptyNoFailureLog()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var finder = new FzfFinder(() => new[] { "a" }, _ => { }, new FakeFzfEngine(true));
+
+                    // The empty-query path is a clean empty: no gather log and no failure log.
+                    var entries = finder.GetCandidates("");
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(0, entries.Count);
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    var lines = content.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    Assert.Equal(0, lines.Count(l => l.Contains("[Telescope] fzf hits=")));
+                    Assert.Equal(0, lines.Count(l => l.Contains("[Telescope] FzfFinder failed to enumerate:")));
+                });
+            }
+        }
+
+        public static async Task Run_FzfFinder_EmptyQueryAsyncShortCircuits()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                string original = LogFileWriter.LogPath;
+                try
+                {
+                    LogFileWriter.LogPath = logPath;
+                    var engine = new FakeFzfEngine(true);
+                    var finder = new FzfFinder(() => new[] { "a" }, _ => { }, engine);
+
+                    // The cleared-prompt path (async) must short-circuit: 0 candidates, no gather
+                    // log, and NO fzf spawn (finding 1).
+                    var entries = await finder.GetCandidatesAsync("");
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(0, entries.Count);
+                    Assert.Equal(0, engine.FilterCalls);
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    int hitLines = content.Split(new[] { Environment.NewLine }, StringSplitOptions.None)
+                        .Count(l => l.Contains("[Telescope] fzf hits="));
+                    Assert.Equal(0, hitLines);
+                }
+                finally
+                {
+                    LogFileWriter.LogPath = original;
+                }
+            }
+        }
+
+        public static async Task Run_FzfFinder_FuzzyMatchReportsHits()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                string original = LogFileWriter.LogPath;
+                try
+                {
+                    LogFileWriter.LogPath = logPath;
+                    string a = Path.Combine(dir.Path, "A.cs");
+                    File.WriteAllText(a, "alpha\nFUZZYPROBE here\nbeta\n");
+
+                    var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                    var entries = await finder.GetCandidatesAsync("FUZZYPROBE");
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(1, entries.Count);
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.True(content.Contains("[Telescope] fzf hits=1"), "logs fzf hits=1");
+                }
+                finally
+                {
+                    LogFileWriter.LogPath = original;
+                }
+            }
+        }
+
+        public static async Task Run_FzfFinder_DisplayIsFileNameLineText()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "first\nNEEDLE here\n");
+
+                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var entry = (await finder.GetCandidatesAsync("NEEDLE"))[0];
+                // Deterministic {fileName}:{line}: {lineText} display (1-based line, fileName only).
+                Assert.Equal("A.cs:2: NEEDLE here", entry.Display);
+            }
+        }
+
+        public static async Task Run_FzfFinder_PayloadRoundTripsFzfHit()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "x\n// NEEDLE x\n");
+
+                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var entry = (await finder.GetCandidatesAsync("NEEDLE"))[0];
+                // The FzfHit payload must round-trip through FinderEntry.Payload so OnSelected can
+                // recover the exact file/line/text to open.
+                var payload = entry.Payload as FzfHit;
+                Assert.True(payload != null, "payload is a FzfHit");
+                Assert.Equal(a, payload!.FilePath);
+                Assert.Equal(2, payload.LineNumber);
+                Assert.Equal("// NEEDLE x", payload.LineText);
+            }
+        }
+
+        public static async Task Run_FzfFinder_OnSelectedOpensHitAtLine()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "first\n// NEEDLE x\n");
+
+                FzfHit? opened = null;
+                var finder = new FzfFinder(() => new[] { a }, hit => opened = hit, new FakeFzfEngine(true));
+                var entry = (await finder.GetCandidatesAsync("NEEDLE"))[0];
+
+                finder.OnSelected(entry);
+                Assert.True(opened != null, "opener invoked");
+                Assert.Equal(a, opened!.FilePath);
+                Assert.Equal(2, opened.LineNumber);
+                Assert.Equal("// NEEDLE x", opened.LineText);
+            }
+        }
+
+        public static async Task Run_FzfFinder_HitCapBounded()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < 500; i++) { sb.AppendLine("NEEDLE " + i); }
+                File.WriteAllText(a, sb.ToString());
+
+                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var entries = await finder.GetCandidatesAsync("NEEDLE");
+                Assert.True(entries.Count > 0, "hits are still returned up to the cap");
+                Assert.True(entries.Count <= 200, $"hit cap bounds the result set (got {entries.Count})");
+            }
+        }
+
+        public static async Task Run_FzfFinder_CacheEnumeratesOnce()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// NEEDLE here\n");
+
+                int count = 0;
+                var cache = new ProjectFileCache();
+                var finder = new FzfFinder(cache, () => { count++; return new[] { a }; }, _ => { }, new FakeFzfEngine(true));
+
+                await finder.GetCandidatesAsync("NEEDLE");
+                await finder.GetCandidatesAsync("NEEDLE2");
+
+                // The enumerate delegate must run ONCE across two queries — the cache serves the
+                // second GetCandidatesAsync.
+                Assert.Equal(1, count);
+            }
+        }
+
+        public static async Task Run_FzfFinder_QueryDrivenBehavior()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "class A\n{\n    int alpha;\n}");
+
+                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+
+                Assert.True(finder.IsQueryDriven, "FzfFinder is query-driven (GetCandidatesAsync(query))");
+                Assert.True(finder.GetCandidates("").Count == 0, "empty query -> no candidates (short-circuit)");
+                var hits = await finder.GetCandidatesAsync("alpha");
+                Assert.Equal(1, hits.Count);
+                Assert.True(hits[0].Display.Contains("A.cs"), "hit display names the file");
+            }
+        }
+
+        public static void Run_FzfFinder_OpenPathNoFailureLog()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var finder = new FzfFinder(() => new[] { "a" }, _ => { }, new FakeFzfEngine(true));
+
+                    // The overlay-open path calls the SYNC GetCandidates("") (D2b): it must return 0
+                    // candidates and NOT log a "FzfFinder failed to enumerate:" failure.
+                    var entries = finder.GetCandidates("");
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(0, entries.Count);
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    int failureLines = content.Split(new[] { Environment.NewLine }, StringSplitOptions.None)
+                        .Count(l => l.Contains("[Telescope] FzfFinder failed to enumerate:"));
+                    Assert.Equal(0, failureLines);
+                });
+            }
+        }
+
+        public static async Task Run_FzfFinder_UnavailableFallsBackToLiteralScan()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                string original = LogFileWriter.LogPath;
+                try
+                {
+                    LogFileWriter.LogPath = logPath;
+                    string a = Path.Combine(dir.Path, "A.cs");
+                    File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
+
+                    var engine = new FakeFzfEngine(false);
+                    var finder = new FzfFinder(() => new[] { a }, _ => { }, engine);
+
+                    // fzf unavailable -> literal case-insensitive substring scan (NOT the full list),
+                    // a real hit count, and the fallback diagnostic; no fzf spawn (AC9/D2c).
+                    var entries = await finder.GetCandidatesAsync("needle");
+                    LogFileWriter.Flush();
+
+                    Assert.Equal(2, entries.Count);
+                    Assert.Equal(0, engine.FilterCalls);
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.True(content.Contains("[Telescope] fzf unavailable — literal fallback"), "logs the literal-fallback diagnostic");
+                }
+                finally
+                {
+                    LogFileWriter.LogPath = original;
+                }
             }
         }
 

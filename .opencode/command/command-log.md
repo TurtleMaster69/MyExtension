@@ -51,9 +51,9 @@
 | command | what it does | notes |
 |---|---|---|
 | `dotnet build` | build the VSIX solution | allowed; this is a VSIX — a plain `dotnet run` does not work |
-| `dotnet run --project tests/Telescope.Tests` | offline Telescope unit tests (151) | allowed; supports a substring filter as the first arg and `--list` |
-| `dotnet run --project tests/NeoVisual.Tests` | offline NeoVisual unit tests (158) | allowed; supports a substring filter as the first arg and `--list` |
-| `pwsh tools/harness/test-e2e.ps1` | live E2E suite (35 scenarios, boots VS Experimental) | allowed; slow — use `-Tests <subset>` during a loop, full suite only as the final gate |
+| `dotnet run --project tests/Telescope.Tests` | offline Telescope unit tests (172) | allowed; supports a substring filter as the first arg and `--list` |
+| `dotnet run --project tests/NeoVisual.Tests` | offline NeoVisual unit tests (168) | allowed; supports a substring filter as the first arg and `--list` |
+| `pwsh tools/harness/test-e2e.ps1` | live E2E suite (36 scenarios, boots VS Experimental) | allowed; slow — use `-Tests <subset>` during a loop, full suite only as the final gate |
 | `pwsh tools/harness/test-e2e.ps1 -Tests <names>` | run a subset of e2e scenarios | allowed; `-NoBootstrap` reuses an already-booted instance (same code state only) |
 | `pwsh tools/harness/test-e2e.ps1 -List` | list registered scenarios | allowed; cheap no-VS parse check |
 | `pwsh tools/lint/check-doc-refs.ps1` | doc-reference lint (unresolved backticked refs) | allowed; ~2s, no VS |
@@ -126,4 +126,11 @@
 - RESULT: **WORKS** — returned the FocusGuard.HasToolWindowActionKeys caller list (proxy-aware). The correct import is `from trailmark.query import QueryEngine` (NOT `from trailmark.parse import QueryEngine`, which raises `ImportError: cannot import name 'QueryEngine' from 'trailmark.parse'`). `QueryEngine.from_directory` + `callers_of` are functional on this install.
 - REASON: misuse — the entry above used the wrong import path (`trailmark.parse`) and/or a stale API shape; the documented `trailmark.query.QueryEngine` API is usable
 - ALTERNATIVE: use `from trailmark.query import QueryEngine` for all structural queries; do NOT fall back to grep/read for call-graph questions
+- NEEDS-PERMISSION: no
+
+### 2026-10-03 — verification-agent (fzf final gate)
+- CMD: `pwsh -NoProfile -Command "$errs=$null; ... [ref]$errs ... if ($errs) {...}"` (double-quoted `-Command` arg)
+- RESULT: `ParserError: Missing condition in if statement after 'if ('` — the OUTER pwsh interpolated `$errs`/`$toks`/`$_` before the inner pwsh saw them, so the inner script arrived mangled
+- REASON: misuse — nested pwsh quoting; a double-quoted `-Command` string is expanded by the calling shell
+- ALTERNATIVE: single-quote the `-Command` argument (`pwsh -NoProfile -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it
 - NEEDS-PERMISSION: no

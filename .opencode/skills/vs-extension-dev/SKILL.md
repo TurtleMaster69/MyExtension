@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 35 live E2E scenarios (no known-RED; a few flake on retry), feature
+> test commands, the 36 live E2E scenarios (no known-RED; a few flake on retry), feature
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -87,7 +87,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Navigation/Utils/NavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `MyExtension/Navigation/Utils/WindowRect.cs` | Simple int `x, y, width, height` rect value object. |
 | `MyExtension/Navigation/Utils/NavigationSnapshot.cs` | Single-pass snapshot of navigation candidates (active rect derived from the candidate list — no N+1 COM rect calls). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `SyntaxHighlighter` preview syntax coloring, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `SyntaxHighlighter` preview syntax coloring, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
 | `Telescope/Finders/Utils/HitOpener.cs` | Shared null/missing-file guard + open-at-line for the finders. |
 | `Telescope/Finders/Utils/FileContentCache.cs` | mtime-keyed file-content cache (LRU-capped). |
 | `Telescope/Finders/Utils/ProjectFileCache.cs` | Cached `ProjectFiles.Enumerate` enumeration. |
@@ -170,9 +170,11 @@ matched only after the leader key (e.g. `W`, `F,F`), and simple modifier
 shortcuts (e.g. `Ctrl+H`, distinguished by a `+`). Action names resolve in
 `InputHandler.ResolveAction`: `navigate-left/right/up/down`, `telescope`,
 `telescope-issues`, `telescope-references`, `telescope-grep`,
-`telescope-implementation`, `toggle-solution-explorer`, or
-`command:<VsCommandName>`. To add a *new built-in
-action*, add a case in `ResolveAction` and a line in `default-keybindings.json`.
+`telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`, or
+`command:<VsCommandName>`. Telescope actions are derived from
+`TelescopeLauncher.FinderNames` (add a `FinderNames` entry + a
+`default-keybindings.json` line); `ResolveAction` cases are only for
+non-telescope built-ins.
 
 ## The navigation algorithm (WindowNavigationEngine)
 
@@ -241,10 +243,10 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (157) and
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (172) and
   `dotnet run --project tests/NeoVisual.Tests` (168), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (35 scenarios against the experimental
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (36 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

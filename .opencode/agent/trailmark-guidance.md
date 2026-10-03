@@ -12,9 +12,15 @@ guidance changes, change it here and update the one-line reference in each agent
 
 ## When Trailmark is mandatory
 
-AGENTS.md makes Trailmark mandatory for structural questions: call paths
-(`paths_between`), callers/callees (`callers_of`/`callees_of`), transitive reach
-(`ancestors_of`/`reachable_from`), blast radius, complexity hotspots, "who calls X" /
+**LSP is primary for symbol-level navigation** — use the `lsp` tool (`goToDefinition`,
+`findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`,
+and **direct** `incomingCalls`/`outgoingCalls`) before `grep`/`read`/Trailmark. It is
+Roslyn-resolved, so it dodges the `proxy.unresolved` trap for cross-class callers. See
+`.opencode/skills/using-lsp/SKILL.md`.
+
+AGENTS.md makes Trailmark mandatory for **graph-level** structural questions: call paths
+(`paths_between`), transitive reach (`ancestors_of`/`reachable_from`), blast radius,
+taint, privilege boundaries, complexity hotspots, entry points, structural diffs,
 "what reaches Y" / "what breaks if I change Z". Use Trailmark (vendored under
 `.opencode/skills/trailmark`) for these — do NOT hand-trace call graphs with `grep`.
 `grep`/`glob`/`read` are only for literal text, non-source files, and single-file

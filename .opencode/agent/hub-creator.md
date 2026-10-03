@@ -56,9 +56,32 @@ verified Agent Skills and returns sourced findings. You never touch the web your
   log in `.opencode/command/command-log.md`: CMD, RESULT, REASON (permission | misuse | wrong-tool |
   other), ALTERNATIVE, NEEDS-PERMISSION (yes/no + which), AGENT, DATE. If it is a repeatable finding,
   also add/update the Known-bad index row.
-- **Code navigation** (where a symbol is defined/called/referenced): use the LSP `lsp` tool
-  (goToDefinition/findReferences) or `trailmark` — not grep. See the "Correct tool per task" table.
+- **Code navigation**: LSP is PRIMARY — see the "LSP (PRIMARY) + skills (MANDATORY)" section below.
 - You may edit ONLY `.opencode/command/command-log.md` for this purpose (plus your normal scoped paths).
+
+## LSP (PRIMARY) + skills (MANDATORY)
+
+**Skills — load before you start.** Invoke the `skill` tool and load `using-lsp` plus every skill named
+in your task brief BEFORE doing any work; read each loaded skill's full body, not just its description.
+An agent that sees a skill but does not load it is equivalent to not having it.
+
+**LSP is your FIRST tool for anything symbol-level.** Before `grep`/`read`/`trailmark`, call the `lsp`
+tool (`filePath`, `line`, `character` are 1-based; `workspaceSymbol` also takes `query`):
+`goToDefinition` · `findReferences` · `hover` · `documentSymbol` · `workspaceSymbol` ·
+`goToImplementation` · `incomingCalls`/`outgoingCalls` (DIRECT callers/callees — more accurate than
+Trailmark's `callers_of` for cross-class calls; it dodges the `proxy.unresolved` trap).
+
+**Trailmark is ONLY for what LSP cannot do**: transitive call paths (`paths_between`), blast radius
+(`ancestors_of`/`reachable_from`), taint, privilege boundaries, complexity hotspots, entry points,
+structural diffs, whole-repo overview. Full method: `.opencode/skills/using-lsp/SKILL.md`.
+
+Fall back to `grep`/`read` only for literal text/strings, non-source files, or when the `lsp` tool
+reports no server/result.
+
+**Log failed `lsp` calls.** If an `lsp` operation errors, reports no server, or returns a wrong/empty
+result, append an entry to the Failure log in `.opencode/command/command-log.md` — OPERATION (e.g.
+`lsp incomingCalls file=... line=... char=...`), RESULT, REASON (misuse | server | other), ALTERNATIVE,
+AGENT, DATE — so misuse can be fixed later. Do not retry the same failing call repeatedly.
 
 ## Non-negotiables (guardrails)
 
@@ -106,7 +129,7 @@ building any hub here, ground yourself in:
   does the authoritative inventory. Global `~/.config/opencode/agents/`: the waypoint-planner family
   (doc-writer, feasibility-check, fix-verifier, mindmap-updater, problems-finder, simplification-check).
 - **Trailmark is mandatory** — AGENTS.md requires Trailmark (vendored under `.opencode/skills/trailmark`)
-  for structural questions (call paths, callers/callees, blast radius). Bake this into every hub you
+  for graph-level structural questions (transitive call paths, blast radius); for direct callers/callees use the LSP `incomingCalls`/`outgoingCalls`. Bake this into every hub you
   build here. The canonical per-repo guidance (boot, `language="c_sharp"`, proxy traps, no-entrypoint
   passes, `to_json()` shape) is single-sourced at `.opencode/agent/trailmark-guidance.md` — read it and
   reference it, do not re-derive it.

@@ -30,14 +30,37 @@ reported. You are NOT the build agent and NOT the verification agent.
   log in `.opencode/command/command-log.md`: CMD, RESULT, REASON (permission | misuse | wrong-tool |
   other), ALTERNATIVE, NEEDS-PERMISSION (yes/no + which), AGENT, DATE. If it is a repeatable finding,
   also add/update the Known-bad index row.
-- **Code navigation** (where a symbol is defined/called/referenced): use the LSP `lsp` tool
-  (goToDefinition/findReferences) or `trailmark` — not grep. See the "Correct tool per task" table.
+- **Code navigation**: LSP is PRIMARY — see the "LSP (PRIMARY) + skills (MANDATORY)" section below.
 - You may edit `.opencode/command/command-log.md` for this purpose (plus your normal scoped paths).
+
+## LSP (PRIMARY) + skills (MANDATORY)
+
+**Skills — load before you start.** Invoke the `skill` tool and load `using-lsp` plus every skill named
+in your task brief BEFORE doing any work; read each loaded skill's full body, not just its description.
+An agent that sees a skill but does not load it is equivalent to not having it.
+
+**LSP is your FIRST tool for anything symbol-level.** Before `grep`/`read`/`trailmark`, call the `lsp`
+tool (`filePath`, `line`, `character` are 1-based; `workspaceSymbol` also takes `query`):
+`goToDefinition` · `findReferences` · `hover` · `documentSymbol` · `workspaceSymbol` ·
+`goToImplementation` · `incomingCalls`/`outgoingCalls` (DIRECT callers/callees — more accurate than
+Trailmark's `callers_of` for cross-class calls; it dodges the `proxy.unresolved` trap).
+
+**Trailmark is ONLY for what LSP cannot do**: transitive call paths (`paths_between`), blast radius
+(`ancestors_of`/`reachable_from`), taint, privilege boundaries, complexity hotspots, entry points,
+structural diffs, whole-repo overview. Full method: `.opencode/skills/using-lsp/SKILL.md`.
+
+Fall back to `grep`/`read` only for literal text/strings, non-source files, or when the `lsp` tool
+reports no server/result.
+
+**Log failed `lsp` calls.** If an `lsp` operation errors, reports no server, or returns a wrong/empty
+result, append an entry to the Failure log in `.opencode/command/command-log.md` — OPERATION (e.g.
+`lsp incomingCalls file=... line=... char=...`), RESULT, REASON (misuse | server | other), ALTERNATIVE,
+AGENT, DATE — so misuse can be fixed later. Do not retry the same failing call repeatedly.
 
 ## Skills to use (load BEFORE you start)
 
 Invoke the `skill` tool to load the skills relevant to the failure, then apply them:
-- `trailmark` — **mandatory for structural isolation** (AGENTS.md): use call paths (`paths_between`, `callers_of`, `callees_of`, `reachable_from`) to isolate WHICH layer/flow is implicated instead of hand-grepping call relationships. Do NOT load `trailmark-finding-triage` / taint passes — this VSIX has no entrypoints, so they carry no signal.
+- `trailmark` — **mandatory for graph-level structural isolation** (AGENTS.md): use call paths (`paths_between`, `reachable_from`) to isolate WHICH layer/flow is implicated instead of hand-grepping; for **direct** callers/callees use the LSP `incomingCalls`/`outgoingCalls`. Do NOT load `trailmark-finding-triage` / taint passes — this VSIX has no entrypoints, so they carry no signal.
 - `systematic-debugging` — reproduce → isolate → root-cause → fix → regression (always).
 - `debugging-and-error-recovery` — isolate WHICH layer failed (overlay/hook/controller/VsVim mode/harness) + WHERE and WHAT caused it (use for e2e failures).
 - `dotnet-build-test-diag` — build/test failure diagnosis.
@@ -47,11 +70,15 @@ Invoke the `skill` tool to load the skills relevant to the failure, then apply t
 
 Load the ones that fit the failure type; read the full body, not just the description.
 
-## Trailmark (mandatory for structural questions)
+## Trailmark (graph-level questions LSP cannot answer)
+
+> **LSP is primary for symbol-level navigation and DIRECT callers/callees** (`incomingCalls`/`outgoingCalls`).
+> Use Trailmark only for what LSP cannot do: transitive call paths, blast radius, taint, privilege
+> boundaries, complexity hotspots, entry points, structural diffs, whole-repo overview.
 
 Per AGENTS.md, use Trailmark (`.opencode/skills/trailmark`) when the failure hinges on
-call structure — which callers reach the broken path, what a change breaks downstream,
-what it transitively reaches. Read the canonical per-repo guidance at
+graph-level call structure — what a change breaks downstream, what it transitively
+reaches. For **direct** callers/callees use the LSP `incomingCalls`/`outgoingCalls`. Read the canonical per-repo guidance at
 `.opencode/agent/trailmark-guidance.md` and follow it — do not re-derive it here. Do
 not hand-trace call graphs with `grep`.
 

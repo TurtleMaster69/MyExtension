@@ -43,14 +43,37 @@ APPENDS filed findings to it only, on user approval.)
   log in `.opencode/command/command-log.md`: CMD, RESULT, REASON (permission | misuse | wrong-tool |
   other), ALTERNATIVE, NEEDS-PERMISSION (yes/no + which), AGENT, DATE. If it is a repeatable finding,
   also add/update the Known-bad index row.
-- **Code navigation** (where a symbol is defined/called/referenced): use the LSP `lsp` tool
-  (goToDefinition/findReferences) or `trailmark` — not grep. See the "Correct tool per task" table.
+- **Code navigation**: LSP is PRIMARY — see the "LSP (PRIMARY) + skills (MANDATORY)" section below.
 - You may edit `.opencode/command/command-log.md` for this purpose (plus your normal scoped paths).
+
+## LSP (PRIMARY) + skills (MANDATORY)
+
+**Skills — load before you start.** Invoke the `skill` tool and load `using-lsp` plus every skill named
+in your task brief BEFORE doing any work; read each loaded skill's full body, not just its description.
+An agent that sees a skill but does not load it is equivalent to not having it.
+
+**LSP is your FIRST tool for anything symbol-level.** Before `grep`/`read`/`trailmark`, call the `lsp`
+tool (`filePath`, `line`, `character` are 1-based; `workspaceSymbol` also takes `query`):
+`goToDefinition` · `findReferences` · `hover` · `documentSymbol` · `workspaceSymbol` ·
+`goToImplementation` · `incomingCalls`/`outgoingCalls` (DIRECT callers/callees — more accurate than
+Trailmark's `callers_of` for cross-class calls; it dodges the `proxy.unresolved` trap).
+
+**Trailmark is ONLY for what LSP cannot do**: transitive call paths (`paths_between`), blast radius
+(`ancestors_of`/`reachable_from`), taint, privilege boundaries, complexity hotspots, entry points,
+structural diffs, whole-repo overview. Full method: `.opencode/skills/using-lsp/SKILL.md`.
+
+Fall back to `grep`/`read` only for literal text/strings, non-source files, or when the `lsp` tool
+reports no server/result.
+
+**Log failed `lsp` calls.** If an `lsp` operation errors, reports no server, or returns a wrong/empty
+result, append an entry to the Failure log in `.opencode/command/command-log.md` — OPERATION (e.g.
+`lsp incomingCalls file=... line=... char=...`), RESULT, REASON (misuse | server | other), ALTERNATIVE,
+AGENT, DATE — so misuse can be fixed later. Do not retry the same failing call repeatedly.
 
 ## Skills to use (load before you orchestrate)
 
 Invoke the `skill` tool to load the skills relevant to the loop phase, then apply them:
-- `trailmark` / `trailmark-structural` / `trailmark-summary` — graph-backed structural orientation before planning; require subagents to answer structural questions with Trailmark evidence (callers/callees/paths/reach), not hand-grep. This is mandatory per AGENTS.md's "Trailmark is mandatory" section.
+- `trailmark` / `trailmark-structural` / `trailmark-summary` — graph-backed structural orientation before planning; require subagents to answer graph-level structural questions with Trailmark evidence (transitive paths/reach), not hand-grep; for **direct** callers/callees use the LSP `incomingCalls`/`outgoingCalls`. This is mandatory per AGENTS.md's "Trailmark is mandatory" section.
 - `sprint-plan-gate` — the plan-gate discipline you enforce via `docs-reviewer` (intent → spec/plan → approve → dispatch → lifecycle gate).
 - `dispatching-parallel-agents` — when you fan out independent review/analysis work.
 - `audit-verification-gates` — when judging a subagent's self-reported verdict (build-agent's "build passed", verification-agent's PASS) for trustworthiness — the "can 'done' be believed?" check.
@@ -61,14 +84,19 @@ Invoke the `skill` tool to load the skills relevant to the loop phase, then appl
 
 Load them when orchestrating a plan gate, a parallel dispatch, or a verdict judgment; read the full body.
 
-## Trailmark (mandatory for structural questions)
+## Trailmark (graph-level questions LSP cannot answer)
+
+> **LSP is primary for symbol-level navigation and DIRECT callers/callees** (`incomingCalls`/`outgoingCalls`).
+> Use Trailmark only for what LSP cannot do: transitive call paths, blast radius, taint, privilege
+> boundaries, complexity hotspots, entry points, structural diffs, whole-repo overview.
 
 Per AGENTS.md, structural questions MUST use Trailmark (vendored under
 `.opencode/skills/trailmark`). Read the canonical per-repo guidance at
 `.opencode/agent/trailmark-guidance.md` and follow it — do not re-derive it here.
-When you brief subagents, tell them to answer structural questions with Trailmark
-graph queries, not `grep`/manual reading, and to cite the query + result. Never accept
-a hand-traced call graph as structural evidence.
+When you brief subagents, tell them to answer graph-level structural questions with
+Trailmark graph queries, not `grep`/manual reading, and to cite the query + result; for
+**direct** callers/callees tell them to use the LSP `incomingCalls`/`outgoingCalls`. Never
+accept a hand-traced call graph as structural evidence.
 
 ## Prompt rule (MANDATORY)
 

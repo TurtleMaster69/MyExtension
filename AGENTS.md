@@ -13,24 +13,36 @@ via `MyExtension.slnx`.
 More detailed architecture lives in `.opencode/skills/vs-extension-dev/SKILL.md`;
 read it before making changes. This file only covers what's easy to get wrong.
 
-## Trailmark is mandatory for structural code questions
+## LSP is primary for symbol navigation
+
+opencode's `lsp` tool (backed by `roslyn-language-server`) is the **primary** tool for
+anything symbol-level: `goToDefinition`, `findReferences`, `hover`, `documentSymbol`,
+`workspaceSymbol`, `goToImplementation`, and **direct** `incomingCalls`/`outgoingCalls`.
+Use it before `grep`/`read`/Trailmark. It is Roslyn-resolved, so it dodges Trailmark's
+`proxy.unresolved` trap for cross-class callers. It requires the environment variable
+`OPENCODE_EXPERIMENTAL_LSP_TOOL=true` (there is no config field for it) — see
+`.opencode/LSP-SETUP.md`. Full method: `.opencode/skills/using-lsp/SKILL.md`.
+
+## Trailmark is mandatory for graph-level structural questions
 
 This repo vendors the [Trail of Bits Trailmark](https://github.com/trailofbits/trailmark)
 plugin (skills `trailmark`, `trailmark-structural`, `trailmark-summary`,
 `trailmark-finding-triage`, `trailmark-review-gate`, `graph-evolution`, etc. — see
 `.opencode/skills/trailmark`). Trailmark parses C# (net472) code into a queryable
-graph of functions/calls. **Every agent, hub, and subagent MUST use Trailmark instead
-of `grep`/`glob`/manual reading for anything it can answer better.**
+graph of functions/calls. **Every agent, hub, and subagent MUST use Trailmark for
+graph-level structural questions it can answer better (and the LSP `lsp` tool for
+symbol-level questions — see above), instead of `grep`/`glob`/manual reading.**
 
 - **Required** (do NOT hand-trace with grep): call paths (`paths_between`),
-  callers/callees (`callers_of`/`callees_of`), transitive reach
-  (`ancestors_of`/`reachable_from`), entrypoint reachability
-  (`entrypoint_paths_to`), blast radius, taint propagation, privilege boundaries,
+  transitive reach (`ancestors_of`/`reachable_from`), blast radius, taint propagation,
+  privilege boundaries,
   complexity hotspots, subgraph/edge queries, structural diffs, attack surface,
-  "who calls X" / "what does Y reach" / "what breaks if I change Z".
-- **`grep`/`glob`/`Read` are only for what Trailmark cannot do**: literal text and
-  strings; non-source files (JSON, Markdown, `.csproj`, docs, scripts); a single known
-  file/line lookup where a graph adds nothing.
+  "what does Y reach" / "what breaks if I change Z". For **direct** callers/callees of
+  a symbol you can point at, use the LSP `incomingCalls`/`outgoingCalls` instead
+  (Roslyn-resolved; avoids the `proxy.unresolved` trap).
+- **`grep`/`glob`/`Read` are only for what Trailmark and LSP cannot do**: literal text
+  and strings; non-source files (JSON, Markdown, `.csproj`, docs, scripts); a single
+  known file/line lookup where a graph adds nothing.
 - **Pre-flight**: `trailmark --version` (or `uv run trailmark --version`). If missing,
   install with `uv tool install trailmark` — **never silently fall back to manual
   code reading** (the `trailmark` skill's "Rationalizations to Reject" table forbids it).

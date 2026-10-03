@@ -79,8 +79,10 @@
 | `grep -rn <symbol> <dir>` to find where a symbol is defined/called | wasteful — scans every file | wrong-tool | LSP `lsp` tool: `goToDefinition` (defined) / `incomingCalls` (called) / `findReferences` | no |
 | `cat <file>` (bash) | bash denied; `read` tool is better | wrong-tool | `read` tool | no |
 | `head ...` (bash) | `head` is NOT installed on this machine (Unix tool) | other | `Select-Object -First N` (pwsh) | no |
+| `tail ...` (bash) | `tail` is NOT installed on this machine (Unix tool) | other | `Select-Object -Last N` (pwsh) | no |
 | `pwsh tools/harness/test-e2e.ps1 -Tests a,b,c` | the `[string[]]` array does not bind through the native `pwsh` boundary (arrives as one string → "Unknown scenario(s)") | misuse | `& tools/harness/test-e2e.ps1 -Tests a,b,c` (call operator) | no |
 | `pwsh -Command "<script with $vars>"` (double-quoted) | the OUTER shell interpolates the inner script's `$vars`/`$_` before the inner pwsh sees them → the inner script arrives mangled → `ParserError` | misuse | single-quote the `-Command` argument (`pwsh -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it | no |
+| `pwsh -Command '... [ref]$null ...'` (ParseFile tokens ref) | `InvalidOperation: [ref] cannot be applied to a variable that does not exist` — `[ref]$null` is invalid; the ParseFile tokens ref needs a real variable | misuse | use the harness's built-in `pwsh tools/harness/test-e2e.ps1 -SelfCheck` (parse + helper invariants + Assert-SeedConsistent), or assign `$tokens = $null` first | no |
 
 ## Correct tool per task (avoid wrong-tool waste)
 
@@ -134,4 +136,18 @@
 - RESULT: `ParserError: Missing condition in if statement after 'if ('` — the OUTER pwsh interpolated `$errs`/`$toks`/`$_` before the inner pwsh saw them, so the inner script arrived mangled
 - REASON: misuse — nested pwsh quoting; a double-quoted `-Command` string is expanded by the calling shell
 - ALTERNATIVE: single-quote the `-Command` argument (`pwsh -NoProfile -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it
+- NEEDS-PERMISSION: no
+
+### 2026-10-03 — e2e-test-builder (Feature 6 RED)
+- CMD: `rg -n "..." tests/NeoVisual.Tests/Program.cs | tail -80`
+- RESULT: `tail: The term 'tail' is not recognized as a name of a cmdlet, function, script file, or executable program.`
+- REASON: other — `tail` is a Unix tool, not installed on this Windows machine (same class as the known-bad `head`)
+- ALTERNATIVE: `Select-Object -Last N` (pwsh), or omit the pipe and read the file with the `read` tool
+- NEEDS-PERMISSION: no
+
+### 2026-10-04 — verification-agent (Feature 6 final gate)
+- CMD: `pwsh -NoProfile -Command '$null = [System.Management.Automation.Language.Parser]::ParseFile("tools/harness/test-e2e.ps1", [ref]$null, [ref]$errs); ...'`
+- RESULT: `InvalidOperation: [ref] cannot be applied to a variable that does not exist.`
+- REASON: misuse — `[ref]$null` is invalid; the ParseFile tokens ref needs a real variable
+- ALTERNATIVE: use the harness's built-in `pwsh tools/harness/test-e2e.ps1 -SelfCheck` (parse + helper invariants + Assert-SeedConsistent), or assign `$tokens = $null` first
 - NEEDS-PERMISSION: no

@@ -7,20 +7,44 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-03 · **Last item:** Telescope `fzf` finder — GREEN 2026-10-03 (feature lane, **e2e ENABLED**; full 36-scenario suite + both unit suites GREEN)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Feature 6 — Solution Explorer search-box vim motions (j/k/0/$) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 37-scenario suite + both unit suites GREEN)
 
 ## Current state
 
 - **In progress:** (none — the **Code review fixes (72 findings)** plan reached GREEN
   2026-10-02; see the Done section).
-- **Next up:** the user-requested features 6-9 (all four selected; FEATURE-TRIAGE
-  autonomy granted). The Telescope `fzf` finder (item 5) is **DONE** (GREEN 2026-10-03;
-  see the Done section). The Architecture backlog is now **CLOSED** — F13 and F43 were
-  verified already-fixed and annotated FIXED (2026-10-02). See the Pending queue +
-  User-requested features sections below.
+- **Next up:** the LazyVim gaps 1/3/4/5/6/8/9/10/11 + the remaining user-requested
+  features 7-9, in the user-chosen **"smallest first"** run order (2026-10-03):
+  gap 1 → gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
+  feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
+  gaps 8-11 triaged 2026-10-03). Feature 6 (Solution Explorer search-box vim motions)
+  is **DONE** (GREEN 2026-10-04; see the Done section). The Telescope `fzf` finder
+  (item 5) is **DONE** (GREEN 2026-10-03; see the Done section). The Architecture
+  backlog is now **CLOSED** — F13 and F43 were verified already-fixed and annotated
+  FIXED (2026-10-02). See the Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-10-03] DECIDED: LazyVim gaps 8-11 triage (via the `question` tool) — **Gap 8
+  (quickfix)** = use the native Error List data but display it in a **custom
+  Telescope-style view**; also fold quick-fix actions into the **code-actions picker**
+  (feature 8): `Leader+C+A` must show all possible code actions for the current
+  selection/at-caret, with **quick-fix actions at the top** and the **warning-fix action
+  first**. **Gap 9 (search/replace)** = extend/reuse native replace semantics but build a
+  **custom overlay**: two input fields (search, replace); seed the search from the current
+  selection, or the word at the caret if there is no selection; navigate between hits;
+  replace the current hit; replace all. **Gap 10 (hover/signature)** = extend/reuse native
+  QuickInfo/ParameterInfo data but build a **custom focusable overlay** navigable with vim
+  motions (to read docs/help/notes). **Gap 11 (git)** = **extend/reuse native** — add
+  leader bindings for the native git diff/blame/log/history commands (verify exact command
+  names live). Gaps 8/9/10 are **custom-view builds** (feature lane); gap 11 is **native
+  bindings** (small); gap 8 is **folded into feature 8**. Chosen run order (**smallest
+  first**): feature 6 → gap 1 → gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 →
+  gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last. **Which-key decision:**
+  at the very end, build **BOTH** a bottom-right non-focus-stealing popup overlay
+  (LazyVim-style) AND an inline popup variant, so both can be tested. Plans in
+  `docs/plans/backlog-plans.md` / `docs/plans/whichkey-research.md` — status: PLANNED
+  (not executed).
 - [2026-09-28] DECIDED: Telescope `fzf` finder scope (via the `question` tool) — the
   user wants **BOTH** the fuzzy content finder (A: a `FzfFinder` scanning file contents
   with fzf fuzzy matching, preview + open at line) AND the fuzzy file finder (B: the
@@ -35,6 +59,8 @@ reads at the start of every loop iteration.
   Gap 7 org imports = SKIP. Gaps 8-11 (quickfix, search/replace, hover/signature, git
   status/diff/blame/log) NOT YET TRIAGED. Chosen items added to the pending queue
   (items 6-10). Plans in `docs/plans/backlog-plans.md` — status: PLANNED (not executed).
+  **SUPERSEDED 2026-10-03:** gaps 8-11 are now triaged — see the newest Decisions entry
+  (gap 8 folded into feature 8; gaps 9/10 custom overlays; gap 11 native bindings).
 - [2026-09-28] DECIDED: FEATURE-TRIAGE for user-requested features 6-9 — the user
   chose **BUILD** for all four (via the `question` tool): (6) extend the Solution
   Explorer search-box vim motions to j/k/0/$ + block caret; (7) extend the overlay to a
@@ -63,11 +89,12 @@ reads at the start of every loop iteration.
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **172 passed**; `tests/NeoVisual.Tests`
-  **168 passed** (after the Code review fixes (72 findings) plan, 2026-10-02).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **36 scenarios** (incl. `seed-reset`,
-  `seed-leak`, `neovisual-explorer-move-editor-focus`, `telescope-fzf`). **No known-RED remains** —
+  **171 passed** (after Feature 6 — Solution Explorer search-box vim motions, 2026-10-04).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **37 scenarios** (incl. `seed-reset`,
+  `seed-leak`, `neovisual-explorer-move-editor-focus`, `telescope-fzf`,
+  `explorer-searchbox-motions`). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 36-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the full 37-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -185,6 +212,14 @@ were known-backlog assertion bugs, not regressions).
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
+
+> **RUN ORDER (user-chosen 2026-10-03, "smallest first"):** ~~feature 6~~ (**DONE** GREEN
+> 2026-10-04) → **gap 1 (next)** → gap 3 →
+> gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
+> feature 9 → which-key last. Gaps 8/9/10 are **custom-view builds** (feature lane); gap 11
+> is **native bindings** (small); gap 8 is **folded into feature 8**. The which-key item is
+> built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
+> (LazyVim-style) AND an inline popup variant, so both can be tested.
 
 > **FIRST ITEM (2026-10-02):** ~~the **Code review fixes (72 findings)** plan~~ —
 > **DONE** (GREEN 2026-10-02, bugfix lane, **e2e ENABLED**; see the Done section). Source:
@@ -327,6 +362,28 @@ Top of the queue, in priority order:
     (LazyVim gap-analysis, triage=BUILD 2026-09-28) — a goto-definition finder; VsVim's
     `gd`/`gr`/`gi` trigger the Telescope finders (references for `gr`, implementation for
     `gi`, goto-definition for `gd`). Feature lane. Plan in `docs/plans/backlog-plans.md`.
+11. **Gap 8: Quickfix / code-actions picker** (LazyVim gap-analysis, triage=BUILD custom
+    view 2026-10-03) — use the native Error List data but display it in a **custom
+    Telescope-style view**; **folded into feature 8** (the `Leader+C+A` code-actions picker
+    must show all possible code actions for the current selection/at-caret, with
+    **quick-fix actions at the top** and the **warning-fix action first**). Feature lane.
+    Plan in `docs/plans/backlog-plans.md`.
+12. **Gap 9: Search/replace** (LazyVim gap-analysis, triage=BUILD custom overlay
+    2026-10-03) — extend/reuse native replace semantics but build a **custom overlay**:
+    two input fields (search, replace); seed the search from the current selection, or the
+    word at the caret if there is no selection; navigate between hits; replace the current
+    hit; replace all. Feature lane. Plan in `docs/plans/backlog-plans.md`.
+13. **Gap 10: Hover/signature** (LazyVim gap-analysis, triage=BUILD custom overlay
+    2026-10-03) — extend/reuse native QuickInfo/ParameterInfo data but build a **custom
+    focusable overlay** navigable with vim motions (to read docs/help/notes). Feature lane.
+    Plan in `docs/plans/backlog-plans.md`.
+14. **Gap 11: Git** (LazyVim gap-analysis, triage=EXTEND/REUSE native 2026-10-03) — add
+    leader bindings for the native git diff/blame/log/history commands (verify exact
+    command names live). Small feature. Plan in `docs/plans/backlog-plans.md`.
+15. **Which-key popup** (LazyVim gap-analysis, triage=BUILD 2026-10-03) — built **last**;
+    deliver **BOTH** a bottom-right non-focus-stealing popup overlay (LazyVim-style) AND an
+    inline popup variant, so both can be tested. Feature lane. Research in
+    `docs/plans/whichkey-research.md`.
 
 ## User-requested features (added 2026-09-19, not yet started — pick after the in-flight explorer items)
 
@@ -359,11 +416,14 @@ Top of the queue, in priority order:
 > for the code-actions picker). Each needs its own feature-lane pipeline (M-M7
 > applies to any that add a `[Telescope]`/`[NeoVisual]` diagnostic).
 
-6. **Vim motions in the Solution Explorer search box.** (Partially exists — the
-   search box already routes h/l/w/b/e/a/A/I via `TextMotionHelper` while a WPF
-   TextBox is focused; confirm/extend the full motion set — e.g. `j`/`k`/`0`/`$`,
-   block caret — to match the text-input tool-window surfaces. TBD: exact set.)
-   Feature lane.
+6. ~~**Vim motions in the Solution Explorer search box.**~~ **DONE — GREEN 2026-10-04.**
+   The search box now routes the full normal-mode motion set h/l/w/b/e/a/A/I + j/k/0/$
+   via `TextMotionHelper` while a WPF TextBox is focused (j/k are single-line no-ops,
+   0/$ move to line start/end); the white block caret is applied in normal mode.
+   `TextMotionDispatcher.MapKey` maps J/K/D0/D4; `SolutionExplorerController._actions`
+   carries D0/D4; the `FocusGuard` shift overload exempts a focused search-box TextBox
+   (`WindowManager.IsFocusedTextBoxInCurrentToolWindow`). New e2e scenario
+   `explorer-searchbox-motions`; unit suite 168 → 171. Feature lane.
 
 7. **Ctrl+H/J/K/L navigation INSIDE the Telescope overlay — 3 panes, modal.**
    The overlay should have **3 windows: input field (prompt), results list,
@@ -426,6 +486,25 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Feature 6: Solution Explorer search-box vim motions** (Lane: `feature`;
+  16 delegations, 2 VS boots, 0 iterations). Extended the Solution Explorer search box's
+  vim motions to `j`/`k`/`0`/`$` (matching the text-input tool-window surfaces):
+  `TextMotionDispatcher.MapKey` (WinForms) now maps `J`/`K`/`D0`/`D4`;
+  `SolutionExplorerController._actions` gained `D0`/`D4` so the hook pre-filter routes
+  them; the `FocusGuard` shift overload gained a scoped `textBoxFocused` exemption
+  (`WindowManager.IsFocusedTextBoxInCurrentToolWindow`) so `$` (Shift+D4) reaches the box
+  without regressing the `Shift+O/R/M/A/G` tree-action gate. Block caret already applied
+  (confirmed). New e2e scenario `explorer-searchbox-motions` (37th). Final suites:
+  NeoVisual.Tests 171, Telescope.Tests 172 (both 0 failed); full 37-scenario e2e suite
+  GREEN; `dotnet build` 0 errors; check-doc-refs PASS.
+  **Change summary:** modified `Telescope/Overlay/Utils/TextMotionDispatcher.cs`,
+  `MyExtension/ToolWindows/SolutionExplorerController.cs`,
+  `MyExtension/ToolWindows/Utils/FocusGuard.cs`, `MyExtension/ToolWindows/WindowManager.cs`,
+  `MyExtension/Input/InputHandler.cs`, `tools/harness/test-e2e.ps1`,
+  `tests/NeoVisual.Tests/Program.cs`, docs. **If this regresses, look first at
+  `WindowManager.IsFocusedTextBoxInCurrentToolWindow` (the scoped shift exemption) and the
+  `FocusGuard` shift overload — the two highest-risk changes.**
 
 - **2026-10-03 — Telescope `fzf` finder** (Lane: `feature`; 18 delegations, 3 VS boots,
   1 iteration). New `FzfFinder` (Telescope, `Name="Fzf"`, `Space+F Z`) — a query-driven fuzzy

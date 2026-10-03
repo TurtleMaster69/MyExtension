@@ -139,7 +139,69 @@ namespace MyExtension.ToolWindows
     
             return false;
         }
-    
+
+        /// <summary>
+        /// True when the focused WPF TextBox belongs to the CURRENT tool window. Primary path: the box is
+        /// a descendant of the current tool window's VSFPROPID_DocView content (the same walk
+        /// ComputeTextInputSurfaceFocused uses). Fallback when the DocView is a COM object (not a WPF
+        /// FrameworkElement — see ComputeTextInputSurfaceFocused:110-119): scope by the focused box's own
+        /// top-level window — the box must be hosted in the VS main window (Owner == null), NOT a separate
+        /// modal dialog (whose Window has an Owner). Scopes the D4 shift-gate exemption to the current
+        /// tool window's own search box, preserving R10. UI thread only.
+        /// </summary>
+        public bool IsFocusedTextBoxInCurrentToolWindow()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!IsToolWindow || CurrentWindow == null)
+            {
+                return false;
+            }
+            var box = TextMotionHelper.FindFocusedTextBox();
+            if (box == null)
+            {
+                return false;
+            }
+            try
+            {
+                CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out object docViewObj);
+                if (docViewObj is System.Windows.FrameworkElement frameContent)
+                {
+                    // Primary: the focused box is a descendant of the current tool window's DocView content.
+                    for (var current = (System.Windows.DependencyObject)box; current != null; current = TextMotionHelper.GetParent(current))
+                    {
+                        if (ReferenceEquals(current, frameContent))
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                // Fallback: the DocView is a COM object (not a WPF FrameworkElement), so the descendant
+                // walk can never match. Scope by the focused box's own top-level window: the VS main
+                // window has Owner == null; a modal dialog's Window has an Owner (the main window), so a
+                // modal rename/move dialog's TextBox is NOT exempted (R10 preserved).
+                var top = FindTopLevelWindow(box);
+                return top != null && top.Owner == null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static System.Windows.Window? FindTopLevelWindow(System.Windows.DependencyObject child)
+        {
+            for (var current = child; current != null; current = TextMotionHelper.GetParent(current))
+            {
+                if (current is System.Windows.Window window)
+                {
+                    return window;
+                }
+            }
+            return null;
+        }
+
         /// <summary>
         /// The controller driving the currently focused tool window, or null when focus is not in a
         /// tool window. Re-evaluated from <see cref="Type"/> on every access (cheap dictionary lookup).

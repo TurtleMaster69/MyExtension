@@ -331,7 +331,8 @@ namespace MyExtension.Input
                         _windowManager.CurrentController?.IsInputMode == true,
                         _windowManager.IsTextInputType,
                         _windowManager.TextInputSurfaceFocused,
-                        shift))
+                        shift,
+                        shift && _windowManager.IsFocusedTextBoxInCurrentToolWindow()))
                     {
                         // A controller-specific insert key (text-input I = insert at line start) is
                         // handled by TryMove first; the generic 'i' below is the plain-insert

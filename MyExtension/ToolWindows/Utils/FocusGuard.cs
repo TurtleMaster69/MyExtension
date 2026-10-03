@@ -47,9 +47,9 @@ namespace MyExtension.ToolWindows
         /// key); text-input controllers still need shift to tell <c>I</c>/<c>i</c> and <c>A</c>/<c>a</c>
         /// apart, so they are exempt from the shift gate.
         /// </summary>
-        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused, bool shiftHeld)
+        public static bool ShouldRouteToolWindowKey(bool isToolWindow, bool editorFocused, bool isInputMode, bool isTextInputSurface, bool textInputSurfaceFocused, bool shiftHeld, bool textBoxFocused = false)
             => ShouldRouteToolWindowKey(isToolWindow, editorFocused, isInputMode, isTextInputSurface, textInputSurfaceFocused)
-               && !(shiftHeld && !isTextInputSurface);
+               && !(shiftHeld && !isTextInputSurface && !textBoxFocused);
 
         /// <summary>
         /// True when the user is typing, so the leader key must type a literal space. A tool window

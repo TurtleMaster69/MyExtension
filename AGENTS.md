@@ -112,7 +112,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
   `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-  run subsets. Currently **168 tests, all passing**.
+  run subsets. Currently **171 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -128,13 +128,13 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 36 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 37 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (36 total; no known-RED remaining — `explorer-open-searchbox` was GREened
+Scenarios (37 total; no known-RED remaining — `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -152,6 +152,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
 - `explorer-open-navigation` — `g` programmatically selects the first source file (`solution-explorer select file=...`) then `o` opens it
 - `explorer-open-searchbox` — i focuses the search box, query filters the tree, o opens (GREened 2026-09-27 via `ReturnFocusToTree`)
+- `explorer-searchbox-motions` — search box focused in normal mode: j/k/0/$ move/consume the caret via the shared `TextMotionHelper` (j/k single-line no-ops)
 - `telescope-prompt-motions` — normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 - `telescope-preview-motions` — preview pane h/l/j/k/w/b/e/0/$/g/G motions over the seeded Motions.cs
 - `telescope-q-close` — q closes the overlay in normal mode
@@ -282,7 +283,8 @@ Done and tested (live + unit):
 - Solution Explorer search box: `i` (normal mode) **focuses the search box** via the native
   `Window.SolutionExplorerSearch` command and enters input mode (so `i` types a query, Escape
   returns focus to the tree). While a WPF TextBox (the search box) is focused, the controller acts
-  like a text-input window: h/l/w/b/e/a/A/I move the caret (shared `TextMotionHelper`) and all
+  like a text-input window: h/l/w/b/e/a/A/I + j/k/0/$ move the caret (shared `TextMotionHelper`;
+  j/k are single-line no-ops, 0/$ move to line start/end) and all
   other keys fall through into the box — no tree actions/arrow injection. Exiting input mode
   refocuses the tree (`View.SolutionExplorer`). — `neovisual-explorer-*` live tests pass.
 - Code-issues finder: `CodeIssuesFinder` (Telescope, `Name="Issues"`, `Space+F D`) lists the VS

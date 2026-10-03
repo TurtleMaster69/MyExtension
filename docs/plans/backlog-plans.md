@@ -650,3 +650,152 @@ finder (B)**.
 - **e2e (NEW scenario):** a scenario that opens the fzf finder, types a query, asserts
   the fuzzy hits + preview, and opens at the line.
 - **Blocker:** e2e RED booting VS (the fzf fuzzy gather only exists in a live instance).
+
+---
+
+# LazyVim gaps 8-11 — FEATURE-TRIAGE research (2026-10-03)
+
+> Research-only pass (no Build Plan, no production code). Each gap goes through the
+> FEATURE-TRIAGE gate (LOOP step 1f): research LazyVim (the reference), check native VS,
+> then the **user decides** build vs extend/reuse-native vs skip. The decision is recorded
+> in `docs/progress.md` Decisions. Grounded in the current binding table
+> (`MyExtension/Resources/default-keybindings.json`), the action registry
+> (`MyExtension/Package/Utils/Actions.cs`), the finder set (`Telescope/Finders/`), and the
+> LazyVim keymaps page (https://www.lazyvim.org/keymaps, fetched 2026-10-03).
+
+> **SUPERSEDED 2026-10-03 (gaps 8/9/10 only).** The recommendations for **Gap 8, Gap 9,
+> and Gap 10** below are stale — the user decided to **BUILD custom views** for all three.
+> **Gap 11** (extend/reuse native) is unchanged. Authoritative decisions live in
+> `docs/progress.md` → Decisions `[2026-10-03] DECIDED: LazyVim gaps 8-11 triage`; the
+> original analysis text is retained below for history (append-only).
+
+## Gap 8 — Quickfix finder
+
+- **LazyVim reference:** `<leader>xq` = Quickfix List (trouble.nvim `<leader>xQ` = Quickfix
+  List (Trouble); `<leader>sq` = Quickfix List (Telescope/snacks picker); `[q`/`]q` =
+  prev/next quickfix item). The quickfix list is Neovim's global list of locations produced
+  by `:grep`, `:make`, LSP, etc. — a picker over it, plus next/prev navigation.
+- **Native VS check:** VS already has the **Error List** (`View.ErrorList`) and the
+  **Output** window (`View.Output`). The Error List is the closest analog to the quickfix
+  list (compiler/analyzer diagnostics + build errors). **Neither is bound** in
+  `default-keybindings.json`. **Critically, the existing `CodeIssuesFinder` (`Space+F D`,
+  `Name="Issues"`) ALREADY reads the Error List** (`CodeIssuesFinder.CollectErrorList`,
+  CodeIssuesFinder.cs:170-205 — `dte2.ToolWindows.ErrorList.ErrorItems`) plus TODO markers,
+  with a preview + open-at-line. So a "quickfix finder" that lists Error List items is
+  **largely redundant** with the issues finder.
+- **Options:**
+  - **build** — a Telescope finder over the Error List only (no TODO markers). *Rationale:*
+    redundant with `CodeIssuesFinder`; low value. Effort S, risk low.
+  - **extend/reuse native** — bind `<leader>xq`/`<leader>sq` to `command:View.ErrorList`
+    (and optionally `[q`/`]q` to `Edit.NextError`/`Edit.PreviousError`, which is **Gap 3**,
+    already triaged EXTEND/REUSE). *Rationale:* zero new code, native surface, no
+    diagnostic contract. Effort XS, risk none.
+  - **skip** — the issues finder + native Error List already cover it. Effort none.
+- **Recommendation:** **extend/reuse native** (bind `View.ErrorList`; the next/prev half is
+  already Gap 3). A separate quickfix *finder* is redundant with `CodeIssuesFinder` — do not
+  build it. (User decides.)
+  > **SUPERSEDED 2026-10-03 — do NOT follow the recommendation above.** The user decided to
+  > **BUILD a custom Telescope-style view** over the native Error List data, and to fold
+  > quick-fix actions into the `Leader+C+A` code-actions picker (quick-fixes at top,
+  > warning-fix first). Authoritative decision: `docs/progress.md` → Decisions
+  > `[2026-10-03] DECIDED: LazyVim gaps 8-11 triage` (gap 8 folded into feature 8).
+
+## Gap 9 — Search/replace
+
+- **LazyVim reference:** `<leader>sr` = Search and Replace (grug-far.nvim, modes n/x). A
+  buffer that takes a search pattern + replacement, shows a live preview of matches across
+  the project, and applies the replacement (with per-match review).
+- **Native VS check:** VS has **Replace in Files** (`Edit.ReplaceInFiles`, Ctrl+Shift+H) —
+  a project/solution-wide search+replace with a preview list and per-match control. It is
+  the direct native analog of grug-far. **Not bound** in `default-keybindings.json`.
+- **Options:**
+  - **build** — a Telescope-style search/replace overlay (query + replacement fields,
+    preview, apply). *Rationale:* reimplements a mature native dialog; high effort (new
+    overlay surface, apply semantics, undo integration). Effort L, risk high.
+  - **extend/reuse native** — bind `<leader>sr` to `command:Edit.ReplaceInFiles`.
+    *Rationale:* one line in `default-keybindings.json`; native preview + apply + undo.
+    Effort XS, risk none.
+  - **skip** — Ctrl+Shift+H already exists; only the leader binding is missing. Effort none.
+- **Recommendation:** **extend/reuse native** (bind `Edit.ReplaceInFiles`). Building a
+  grug-far clone is not worth it against VS's mature Replace-in-Files. (User decides.)
+  > **SUPERSEDED 2026-10-03 — do NOT follow the recommendation above.** The user decided to
+  > **BUILD a custom two-field search/replace overlay** (seed the search from the current
+  > selection, else the word at the caret; navigate hits; replace-current; replace-all),
+  > reusing native replace semantics. Authoritative decision: `docs/progress.md` → Decisions
+  > `[2026-10-03] DECIDED: LazyVim gaps 8-11 triage`.
+
+## Gap 10 — Hover / signature help
+
+- **LazyVim reference:** `K` = Hover (`vim.lsp.buf.hover` — type/docs popup at the caret);
+  `gK` = Signature Help (`vim.lsp.buf.signature_help`); `<c-k>` = Signature Help in insert
+  mode. Both are LSP-driven popups.
+- **Native VS check:** VS has **Quick Info** (`Edit.QuickInfo`, Ctrl+K Ctrl+I — the hover
+  tooltip) and **Parameter Info** (`Edit.ParameterInfo`, Ctrl+Shift+Space — signature help).
+  Both are the exact native analogs. **Neither is bound** in `default-keybindings.json`.
+  Note: `K`/`gK` are **VsVim-owned** keys — VsVim already maps `K` to its own hover in
+  normal mode, so a leader binding is the clean extension point (not a bare `K`).
+- **Options:**
+  - **build** — a Telescope-style hover/signature popup. *Rationale:* reimplements native
+    IntelliSense popups; no value. Effort L, risk high.
+  - **extend/reuse native** — bind leader keys (e.g. `C,K` → `command:Edit.QuickInfo`,
+    `C,S` → `command:Edit.ParameterInfo`) or wire VsVim's `K`/`gK` to the native commands.
+    *Rationale:* native popups, zero new code. Effort XS, risk none.
+  - **skip** — Ctrl+K Ctrl+I / Ctrl+Shift+Space already exist; VsVim's `K` already hovers.
+    Effort none.
+- **Recommendation:** **extend/reuse native** (bind `Edit.QuickInfo` / `Edit.ParameterInfo`
+  to leader keys). Do not build a popup. (User decides.)
+  > **SUPERSEDED 2026-10-03 — do NOT follow the recommendation above.** The user decided to
+  > **BUILD a custom focusable overlay** over the native QuickInfo/ParameterInfo data,
+  > navigable with vim motions (to read docs/help/notes). Authoritative decision:
+  > `docs/progress.md` → Decisions `[2026-10-03] DECIDED: LazyVim gaps 8-11 triage`.
+
+## Gap 11 — Git status/diff/blame/log
+
+- **LazyVim reference:** `<leader>gs` = Git Status (snacks picker); `<leader>gd` = Git Diff
+  (hunks); `<leader>gb` = Git Blame Line; `<leader>gl` = Git Log; `<leader>gL` = Git Log
+  (cwd); `<leader>gf` = Git Current File History; `<leader>gB`/`<leader>gY` = Git Browse
+  (open/copy). All are snacks.nvim pickers over git data.
+- **Native VS check:** VS has the **Git Changes** window (`View.GitChanges` — **already
+  bound** to `Space+G G`), plus `Team.Git.Branches` (`Space+G B`) and `Team.Git.Commit`
+  (`Space+G C`). VS's Git tooling also provides file history, blame (inline annotations),
+  and diff via the Git Changes / File History windows and the editor's gutter. The
+  `Team.Git.*` command family covers most of the rest. **No blame/log/diff leader bindings
+  exist** beyond the three above.
+- **Options:**
+  - **build** — Telescope-style git status/diff/blame/log finders (shell out to `git` or use
+    the VS Git APIs). *Rationale:* large surface (4+ finders), duplicates VS's Git tooling;
+    high effort. Effort XL, risk high.
+  - **extend/reuse native** — add leader bindings to the native Git commands/windows
+    (e.g. `G,S` → `View.GitChanges` [already `G,G`], `G,L` → file history, `G,D` → diff,
+    `G,B` → blame). *Rationale:* native Git UI, zero new code; the exact command names for
+    history/blame/diff need a live-VS check (they are `Team.Git.*` / `Git.*` family).
+    Effort S, risk low (command-name verification only).
+  - **skip** — `Space+G G/B/C` already cover status/branches/commit; the rest is available
+    via VS's Git menu. Effort none.
+- **Recommendation:** **extend/reuse native** (add a few `Team.Git.*`/`Git.*` leader
+  bindings after verifying the exact command names in a live instance). Do not build git
+  finders. (User decides.)
+
+## Redundancy summary
+
+- **Gap 8 (quickfix finder) is redundant with the existing `CodeIssuesFinder`** (`Space+F D`,
+  `Name="Issues"`), which already reads the VS Error List (`CollectErrorList`) plus TODO
+  markers. A separate quickfix *finder* would duplicate it — prefer the native
+  `View.ErrorList` binding.
+- **Gap 11 (git status)** partially overlaps the already-bound `Space+G G`
+  (`View.GitChanges`); only diff/blame/log/history bindings are genuinely missing.
+- Gaps 9 and 10 have no existing extension feature — they are pure native-command bindings.
+
+## Next step
+
+> **SUPERSEDED 2026-10-03 — this "Next step" is DONE; do NOT re-run it.** The user was
+> already presented gaps 8-11 and the decisions are recorded in `docs/progress.md` →
+> Decisions `[2026-10-03] DECIDED: LazyVim gaps 8-11 triage` (authoritative). Outcome:
+> gaps 8/9/10 = **BUILD custom views** (feature lane); gap 11 = **extend/reuse native**
+> bindings. The stale "all four recommendations are extend/reuse native" line below is
+> retained for history only.
+
+Present gaps 8-11 to the user via the `question` tool (build / extend-reuse native VS /
+skip per gap), record the decisions in `docs/progress.md` Decisions, and add the chosen
+ones to the pending queue. All four recommendations are **extend/reuse native** (XS-S
+effort, no new diagnostics, no feature-lane pipeline) — but the user decides.

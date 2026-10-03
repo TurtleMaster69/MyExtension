@@ -9,7 +9,7 @@
 > JetBrains `which-key-lazy` port (a close analog for a non-Neovim IDE).
 >
 > **Ground truth:** repo GREEN (Telescope `fzf` finder, 2026-10-03). Unit suites
-> `tests/Telescope.Tests` 172 / `tests/NeoVisual.Tests` 168; live E2E 36 scenarios, no
+> `tests/Telescope.Tests` 172 / `tests/NeoVisual.Tests` 171; live E2E 37 scenarios, no
 > known-RED. All file:line evidence below was read from the current tree.
 
 ---

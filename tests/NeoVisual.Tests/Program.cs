@@ -311,6 +311,10 @@ namespace NeoVisual.Tests
             Assert.True(keys.Contains(Keys.M), "m is an action key");
             Assert.True(keys.Contains(Keys.A), "a is an action key");
             Assert.True(keys.Contains(Keys.G), "g is an action key");
+            // Feature 6 (AC5): 0/$ must be action keys so the hook pre-filter routes them to the
+            // search box (they are not in DefaultControllerKeys). RED: _actions lacks D0/D4 today.
+            Assert.True(keys.Contains(Keys.D0), "0 is an action key (search-box line start)");
+            Assert.True(keys.Contains(Keys.D4), "$ is an action key (search-box line end)");
             // All are consumed by TryMove (logged actions).
             Assert.True(controller.TryMove(Keys.O), "o opens");
             Assert.True(controller.TryMove(Keys.R), "r renames");
@@ -754,6 +758,25 @@ namespace NeoVisual.Tests
             Assert.Equal(null, TextMotionDispatcher.MapKey(Keys.X, false));
         }
 
+        public static void Run_TextMotionEngine_MapMotion_DownUp()
+        {
+            // Feature 6 (AC1/AC2): the WinForms mapping must translate j/k to Down/Up so the
+            // Solution Explorer search box consumes them as motions (single-line -> no-op).
+            // RED: MapKey(Keys.J/K) is not in the switch today -> returns null, not Down/Up.
+            Assert.Equal(TextMotion.Down, TextMotionDispatcher.MapKey(Keys.J, false));
+            Assert.Equal(TextMotion.Up, TextMotionDispatcher.MapKey(Keys.K, false));
+        }
+
+        public static void Run_TextMotionEngine_MapMotion_LineStartEnd()
+        {
+            // Feature 6 (AC3/AC4): 0 -> LineStart; $ (Shift+D4) -> LineEnd; a bare 4 is NOT a
+            // motion (the $ drift fix). RED: MapKey(Keys.D0/D4) is not in the switch today ->
+            // returns null.
+            Assert.Equal(TextMotion.LineStart, TextMotionDispatcher.MapKey(Keys.D0, false));
+            Assert.Equal(TextMotion.LineEnd, TextMotionDispatcher.MapKey(Keys.D4, true));
+            Assert.Equal(null, TextMotionDispatcher.MapKey(Keys.D4, false));
+        }
+
         public static void Run_TextMotionHelper_MapMotionDelegatesToDispatcher()
         {
             // N51 (BP-33): TextMotionHelper.TryMoveFocusedSurface's motion dispatch was verified
@@ -769,6 +792,13 @@ namespace NeoVisual.Tests
             Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
             Assert.Equal(null, TextMotionHelper.MapMotion(Keys.I, false));
             Assert.Equal(null, TextMotionHelper.MapMotion(Keys.X, false));
+            // Feature 6: the search-box motion set (j/k/0/$) must flow through the same
+            // delegation seam. RED: MapKey does not map J/K/D0/D4 today -> null.
+            Assert.Equal(TextMotion.Down, TextMotionHelper.MapMotion(Keys.J, false));
+            Assert.Equal(TextMotion.Up, TextMotionHelper.MapMotion(Keys.K, false));
+            Assert.Equal(TextMotion.LineStart, TextMotionHelper.MapMotion(Keys.D0, false));
+            Assert.Equal(TextMotion.LineEnd, TextMotionHelper.MapMotion(Keys.D4, true));
+            Assert.Equal(null, TextMotionHelper.MapMotion(Keys.D4, false));
         }
 
         public static void Run_TextMotionHelper_ApplyMotionMovesNavigator()
@@ -800,6 +830,20 @@ namespace NeoVisual.Tests
             Assert.True(TextMotionDispatcher.Apply(TextMotion.InsertStart, n, out CaretPlacement? start));
             Assert.Equal(CaretPlacement.Start, start);
             Assert.Equal(0, n.Caret);
+
+            // Feature 6: the navigator math the search box applies for j/k/0/$ — Down/Up are
+            // single-line no-ops, LineStart/LineEnd move to the line bounds. (The navigator
+            // already supports these; this pins the shared math the new mapping feeds.)
+            n.SetText("one two");
+            n.MoveTo(4);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.Down, n, out _));
+            Assert.Equal(4, n.Caret);   // single line -> Down is a no-op
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.Up, n, out _));
+            Assert.Equal(4, n.Caret);   // first line -> Up is a no-op
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.LineStart, n, out _));
+            Assert.Equal(0, n.Caret);
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.LineEnd, n, out _));
+            Assert.Equal(7, n.Caret);
         }
 
         // ================================================================
@@ -968,6 +1012,9 @@ namespace NeoVisual.Tests
             {
                 Keys.O, Keys.Enter, Keys.R, Keys.M, Keys.A, Keys.G,
                 Keys.W, Keys.B, Keys.E, Keys.H, Keys.J, Keys.K, Keys.L, Keys.I,
+                // Feature 6 (AC5): 0/$ are search-box text motions and must be action keys so the
+                // hook pre-filter routes them (they are not in DefaultControllerKeys).
+                Keys.D0, Keys.D4,
             };
             var actual = new List<Keys>(controller.ActionKeys);
             Assert.Equal(expected.Length, actual.Count);
@@ -1347,6 +1394,27 @@ namespace NeoVisual.Tests
                     isToolWindow: true, editorFocused: false, isInputMode: false,
                     isTextInputSurface: false, textInputSurfaceFocused: false, shiftHeld: true),
                 "shift+action-key must not be interesting for a non-text-input controller (R10)");
+        }
+
+        public static void Run_FocusGuard_ShiftAllowsSearchBoxTextMotion()
+        {
+            // Feature 6 (AC6/D4): $ (Shift+D4) must reach the Solution Explorer search box despite
+            // the R10 shift gate. A focused WPF TextBox that belongs to the current tool window is
+            // exempt from the shift gate; with no such box the gate still blocks Shift+action-key
+            // (R10 preserved). RED: the shift overload has no textBoxFocused parameter -> compile
+            // error CS1739 (the best overload does not have a parameter named 'textBoxFocused').
+            Assert.True(
+                FocusGuard.ShouldRouteToolWindowKey(
+                    isToolWindow: true, editorFocused: false, isInputMode: false,
+                    isTextInputSurface: false, textInputSurfaceFocused: false,
+                    shiftHeld: true, textBoxFocused: true),
+                "a focused search-box TextBox exempts $ from the shift gate");
+            Assert.False(
+                FocusGuard.ShouldRouteToolWindowKey(
+                    isToolWindow: true, editorFocused: false, isInputMode: false,
+                    isTextInputSurface: false, textInputSurfaceFocused: false,
+                    shiftHeld: true, textBoxFocused: false),
+                "without a focused search-box TextBox the shift gate still blocks (R10)");
         }
 
         // ================================================================

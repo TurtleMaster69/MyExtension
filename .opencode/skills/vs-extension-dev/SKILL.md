@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 36 live E2E scenarios (no known-RED; a few flake on retry), feature
+> test commands, the 37 live E2E scenarios (no known-RED; a few flake on retry), feature
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -64,7 +64,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/ToolWindows/GeneralToolWindowController.cs` | Default controller: hjkl→arrow injection; `IsTextInputType` decides initial mode. |
 | `MyExtension/ToolWindows/TextInputToolWindowController.cs` | Text-input windows (CommandWindow/FindReplace/...): normal-mode h/l/w/b/e caret motions + a/A/I insert placements over the focused text box (WPF TextBox, editor `IWpfTextView`, or WinForms). |
 | `MyExtension/ToolWindows/Utils/TextMotionHelper.cs` | Shared vim-caret helper for WPF TextBox surfaces in tool windows (Solution Explorer search box + text-input windows): find the focused box, apply a motion via `TextMotionNavigator`, toggle the white block/line caret. |
-| `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g programmatically select the first source file (expand → walk → DTE `UIHierarchyItem.Select`, direct `ItemOperations.OpenFile`, ~1.5s re-select/refocus keeper to defeat the hover-preview focus steal), h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions via `TextMotionHelper`). |
+| `MyExtension/ToolWindows/SolutionExplorerController.cs` | Solution Explorer actions: o/Enter open, r rename, m move, a add, g programmatically select the first source file (expand → walk → DTE `UIHierarchyItem.Select`, direct `ItemOperations.OpenFile`, ~1.5s re-select/refocus keeper to defeat the hover-preview focus steal), h/l fold expand/collapse, j/k navigate, `i` focuses the search box (with search-box vim motions h/l/w/b/e/a/A/I + j/k/0/$ via `TextMotionHelper`). |
 | `MyExtension/ToolWindows/Utils/HierarchyResolver.cs` | Pure, dependency-free tree-walk seam (`HierarchyNode` + `FirstSourceFilePath`) behind the `g` selection action: Kind-GUID physical-file/physical-folder classification + in-order folder recursion; unit-tested without DTE. |
 | `MyExtension/ToolWindows/Utils/FocusKeeper.cs` | Re-select/refocus keeper that defeats VS's hover-preview focus steal. |
 | `MyExtension/ToolWindows/Utils/HierarchyForestBuilder.cs` | Pure tree-forest builder for the Solution Explorer walk. |
@@ -244,9 +244,9 @@ of any of these only when the task needs it.
 
 See **AGENTS.md** for the full picture. Summary:
 - Offline unit tests: `dotnet run --project tests/Telescope.Tests` (172) and
-  `dotnet run --project tests/NeoVisual.Tests` (168), with substring filter +
+  `dotnet run --project tests/NeoVisual.Tests` (171), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (36 scenarios against the experimental
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (37 scenarios against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

@@ -54,6 +54,8 @@ namespace MyExtension.ToolWindows
             _actions[Keys.J] = TreeMove(Keys.J);
             _actions[Keys.K] = TreeMove(Keys.K);
             AddTextMotionKeys(_actions);
+            _actions[Keys.D0] = TextMotion(Keys.D0);
+            _actions[Keys.D4] = TextMotion(Keys.D4);
         }
 
         /// <summary>N20: the shared hjkl→arrow shape for the tree; H/L additionally log the fold

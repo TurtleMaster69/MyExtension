@@ -262,7 +262,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), and the pane-failure fallback (`PaneFailureTracker`).
-- `dotnet run --project tests/NeoVisual.Tests` — **168 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **171 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -288,12 +288,12 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 36 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 37 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **36 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
+The **37 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
@@ -307,7 +307,8 @@ The **36 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
 `neovisual-explorer-add`, `neovisual-explorer-move`, `neovisual-explorer-move-editor-focus`,
 `neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
-`seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox`.
+`seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox`,
+`explorer-searchbox-motions`.
 
 ### 5.3 E2E harness gotchas
 
@@ -390,7 +391,8 @@ The **36 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 - Vim text motions in text-input tool windows (`TextInputToolWindowController`)
   + block caret in normal mode, line caret in insert.
 - Solution Explorer search box: `i` (normal mode) focuses the search box; WPF
-  TextBox motions via shared `TextMotionHelper`.
+  TextBox motions via shared `TextMotionHelper` (h/l/w/b/e/a/A/I + j/k/0/$; j/k are
+  single-line no-ops, 0/$ move to line start/end).
 - Code-issues finder (`Space+F D`): VS Error List warnings/errors + TODO markers,
   preview jumps to line, Enter opens file at line.
 - References finder (`Space+F R`): every reference to the symbol at the caret,
@@ -416,6 +418,6 @@ The **36 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (172) and
-  `dotnet run --project tests/NeoVisual.Tests` (168).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (36 scenarios; no known-RED; a few flake on retry);
+  `dotnet run --project tests/NeoVisual.Tests` (171).
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (37 scenarios; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

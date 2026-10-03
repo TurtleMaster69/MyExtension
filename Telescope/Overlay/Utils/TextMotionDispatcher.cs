@@ -76,6 +76,10 @@ namespace Telescope.Overlay
                 case Keys.E: canonical = MotionKey.E; break;
                 case Keys.A: canonical = MotionKey.A; break;
                 case Keys.I: canonical = MotionKey.I; break;
+                case Keys.J: canonical = MotionKey.J; break;
+                case Keys.K: canonical = MotionKey.K; break;
+                case Keys.D0: canonical = MotionKey.D0; break;
+                case Keys.D4: canonical = MotionKey.D4; break;
                 default: canonical = null; break;
             }
             return canonical == null ? null : MapMotion(canonical.Value, shift);

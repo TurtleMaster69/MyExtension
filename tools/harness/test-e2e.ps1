@@ -36,6 +36,7 @@
 #   neovisual-explorer-move-editor-focus  editor focused + stale frame: m must NOT fire a tree action
 #   explorer-open-navigation   g selects the first source file programmatically (UIHierarchy), o opens it
 #   explorer-open-searchbox    i focuses the search box, type a query, o opens the filtered result
+#   explorer-searchbox-motions search box focused: j/k/0/$ are consumed as vim text motions
 #   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview
 #   neovisual-editor-insert  insert-mode typing reaches the editor (hook must not swallow text)
 #   neovisual-textinput-motions  Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret
@@ -276,6 +277,16 @@ function Focus-SolutionExplorer([int]$devenvPid) {
     $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
     if (-not (Test-Path $dteCmd)) { return }
     try { & $dteCmd -DevenvPid $devenvPid -Command 'View.SolutionExplorer' 2>$null | Out-Null } catch { }
+}
+
+function Focus-SolutionExplorerSearchBox([int]$devenvPid) {
+    # Focus the Solution Explorer search box via the native `Window.SolutionExplorerSearch` command
+    # (the same command the controller's `i` action executes) WITHOUT entering input mode, so the
+    # controller stays in normal mode and routes text motions. Harness-only; deterministic and
+    # independent of the Ctrl+; keybinding (Feature 6 open-risk #1 fallback).
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { return }
+    try { & $dteCmd -DevenvPid $devenvPid -Command 'Window.SolutionExplorerSearch' 2>$null | Out-Null } catch { }
 }
 
 function Wait-ActiveDocumentMatch([int]$devenvPid, [string]$pattern, [int]$maxMs = 3000) {
@@ -968,6 +979,44 @@ Register-Scenario 'explorer-open-searchbox' {
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
     Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*[\\/]GrepProbe\.cs" 'o opened the filtered result (GrepProbe.cs)'
     Assert-NoEnterStorm $logPath 'explorer-open-searchbox'
+}
+
+# --- explorer-searchbox-motions ------------------------------------------
+# Vim motions in the Solution Explorer search box: with the box focused (native
+# Window.SolutionExplorerSearch, WITHOUT entering input mode) the controller stays in normal mode
+# and routes j/k/0/$ as text motions (consumed, never typed). The box is a single-line TextBox, so
+# j/k are no-ops (caret unchanged) while 0/$ move to the line start/end. The existing
+# [NeoVisual] text-motion diagnostic is the oracle.
+Register-Scenario 'explorer-searchbox-motions' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'explorer search-box motions'
+    Ensure-SolutionExplorerOpen $vs $logPath
+
+    # Focus the search box natively (Window.SolutionExplorerSearch) WITHOUT entering input mode, so
+    # the controller stays in normal mode and routes motions. Executed via DTE (deterministic,
+    # independent of the Ctrl+; keybinding) — the same command the controller's `i` action runs.
+    Focus-SolutionExplorerSearchBox $vs.Id
+    Start-Sleep -Milliseconds 500
+
+    # Type unmapped chars (x/y/z are not action keys) -> they fall through and land in the box.
+    Send-Text 'xyz'; Start-Sleep -Milliseconds 300
+
+    # 0 -> line start (caret 0).
+    Send-Tap 0x30; Start-Sleep -Milliseconds 200
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=D0 caret=0" '0 moved the search-box caret to the line start'
+    # $ (Shift+4) -> line end (caret 3).
+    Send-Shift 0x34; Start-Sleep -Milliseconds 200
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=D4 caret=3" '$ moved the search-box caret to the line end'
+    # j -> single-line no-op (caret stays 3), consumed not typed.
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=J caret=3" 'j was consumed as a motion (single-line no-op)'
+    # k -> single-line no-op (caret stays 3), consumed not typed.
+    Send-Tap $script:VkK; Start-Sleep -Milliseconds 200
+    Assert-NewLogLine $logPath "$($script:PfxNeo)text-motion key=K caret=3" 'k was consumed as a motion (single-line no-op)'
+
+    Write-Pass 'search-box vim motions j/k/0/$ moved/consumed the caret'
 }
 
 # --- telescope-wrap ------------------------------------------------------

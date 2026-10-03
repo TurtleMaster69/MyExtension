@@ -457,8 +457,8 @@ Top of the queue, in priority order:
   count 11), docs. **If this regresses, look first at `FzfFinder.GetCandidatesAsync` (the
   per-file fzf gather + `FzfLineMapper` mapping) and the
   `IFinder.GetCandidatesAsync`/`FinderBase` seam (the overlay await) — the two highest-risk
-  changes.** Iteration-1 fix: `Run_ActionsRegistry_ContainsAllBuiltins` updated to 11 builtins
-  (BP-13, test-only).
+   changes.** Iteration-1 fix: `Run_ActionsRegistry_ContainsAllBuiltins` updated to 11 builtins
+   (BP-13, test-only). Commit: `deebeb2`.
 
 - **2026-10-02 — Code review fixes (72 findings)** (Lane: `bugfix`, **e2e ENABLED**;
   12 delegations, 2 VS boots, 1 iteration). All 72 findings (2 critical, 8 major, 44 minor,

@@ -785,3 +785,9 @@ GrepFinder` → all `Run_GrepFinder_*` still PASS.
 (157 / 168). The verification-agent must NOT flag any pre-existing scenario as a regression. The
 only expected RED is the new `telescope-fzf` scenario + the new `Run_FzfFinder_*` /
 `Run_FzfLineMapper_*` tests before the feature exists.
+
+## Execution Log
+
+### Attempt 1 — GREEN (2026-10-03)
+- lane feature; 18 delegations, 3 VS boots, 1 iteration; BUILD pass (BP-1…BP-13); VERIFY PASS (full 36-scenario e2e + Telescope 172 + NeoVisual 168); DEVIATION: BP-6b `ThreadHelper.ThrowIfNotOnUIThread()` moved to a synchronous `EnumerateFiles()` helper (VSTHRD109) → ACCEPT (behavior-preserving); iteration 1: `Run_ActionsRegistry_ContainsAllBuiltins` → BP-13 (test-only).
+- failure-log sweep: 10 entries read, 0 fixed, 0 queued, 1 annotated.

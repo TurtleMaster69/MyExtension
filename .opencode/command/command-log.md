@@ -80,6 +80,7 @@
 | `cat <file>` (bash) | bash denied; `read` tool is better | wrong-tool | `read` tool | no |
 | `head ...` (bash) | `head` is NOT installed on this machine (Unix tool) | other | `Select-Object -First N` (pwsh) | no |
 | `pwsh tools/harness/test-e2e.ps1 -Tests a,b,c` | the `[string[]]` array does not bind through the native `pwsh` boundary (arrives as one string → "Unknown scenario(s)") | misuse | `& tools/harness/test-e2e.ps1 -Tests a,b,c` (call operator) | no |
+| `pwsh -Command "<script with $vars>"` (double-quoted) | the OUTER shell interpolates the inner script's `$vars`/`$_` before the inner pwsh sees them → the inner script arrives mangled → `ParserError` | misuse | single-quote the `-Command` argument (`pwsh -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it | no |
 
 ## Correct tool per task (avoid wrong-tool waste)
 

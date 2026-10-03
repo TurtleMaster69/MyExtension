@@ -505,6 +505,7 @@ Top of the queue, in priority order:
   `tests/NeoVisual.Tests/Program.cs`, docs. **If this regresses, look first at
   `WindowManager.IsFocusedTextBoxInCurrentToolWindow` (the scoped shift exemption) and the
   `FocusGuard` shift overload — the two highest-risk changes.**
+  Commit: `d5927e5`.
 
 - **2026-10-03 — Telescope `fzf` finder** (Lane: `feature`; 18 delegations, 3 VS boots,
   1 iteration). New `FzfFinder` (Telescope, `Name="Fzf"`, `Space+F Z`) — a query-driven fuzzy

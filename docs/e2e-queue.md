@@ -1,5 +1,12 @@
 # E2E queue
 
+> **POLICY CHANGE (2026-10-04, user instruction):** e2e tests are **DEFERRED again**.
+> Do NOT run `tools/harness/test-e2e.ps1` (incl. `-Tests <subset>`) until the user says so.
+> Every item from now on uses the **unit-only lane** and appends its e2e gate here with
+> **Status: QUEUED**. Run the queued gates later on a VS-capable machine when the user
+> authorizes it. (The no-VS harness-health self-checks — `-List`, `-SelfCheck`,
+> `check-doc-refs.ps1` — remain allowed.)
+
 **Status: EMPTY (2026-10-02).** Every previously-queued e2e gate has been run GREEN and
 removed from the active queue.
 

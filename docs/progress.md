@@ -9,12 +9,96 @@ reads at the start of every loop iteration.
 
 > **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Feature 6 — Solution Explorer search-box vim motions (j/k/0/$) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 37-scenario suite + both unit suites GREEN)
 
+## SESSION HANDOFF (2026-10-04) — read this first
+
+> **Where we left off:** the build loop is **PAUSED by the user**. The last GREEN item is
+> **Feature 6** (commit `d5927e5`, hash recorded in `13c7098`). The next item is **Gap 1
+> (window-management leader bindings)** — its initial plan was NOT written (the
+> `implementation-planner` subagent returned an empty result twice; the user then changed
+> the planning tactic, below). Nothing is in flight; the working tree is clean.
+
+### User instructions that override the default loop (2026-10-04)
+
+1. **E2E TESTS ARE DEFERRED — DO NOT RUN THEM.** The user said: *"we are again queuing e2e
+   tests for later. never run the e2e tests until I tell you."* So for every item from now
+   on: **do NOT boot the VS Experimental Instance, do NOT run
+   `tools/harness/test-e2e.ps1`** (not even `-Tests <subset>`). This is the **unit-only
+   lane** (the same lane used by the 51/98/67-findings plans). RED is proven at the **unit
+   level only**; the e2e gates are **queued in `docs/e2e-queue.md`** with status QUEUED and
+   run later on a VS-capable machine when the user says so. The harness-health no-VS
+   self-checks (`-List`, `-SelfCheck`, `check-doc-refs.ps1`) are still allowed (they do not
+   boot VS) — but the full/subset e2e runs are not.
+   - **Consequence for the loop:** the feature lane's "e2e RED boots VS" step is replaced
+     by "unit RED only + queue the e2e gate". A feature item still needs a RED unit test
+     (or, where no hermetic seam exists, the `bugfix (no-seam)`-style stated reason + a
+     queued e2e gate). VERIFY runs the affected unit project(s) only; the final gate runs
+     **both unit projects** (no e2e).
+2. **NEW PLANNING TACTIC (user instruction 2026-10-04).** Instead of one planner writing
+   the whole detailed plan, use a **two-stage, fan-out** approach:
+   - **Stage 1 — general plan/architecture:** one `implementation-planner` task produces a
+     **general plan / architecture** (high-level, section-structured — NOT BP-n steps).
+   - **Stage 2 — split + parallel detail planning:** the **hub** splits that general plan
+     into its sections and dispatches **multiple parallel** `implementation-planner` tasks,
+     one per section, each expanding its section into detail.
+   - **Stage 3 — aggregate:** the **hub** aggregates the section outputs into the final
+     `docs/implementation_plan.md` (Build Plan + Verification Trace).
+   - Rationale: the single-planner approach crashed twice on Gap 1; fan-out is more robust
+     and parallelizes the detail work.
+3. **Autonomous run scope (user instruction 2026-10-04):** work through **features 6-9 +
+   the LazyVim gaps** in the **"smallest first"** order (below), then **which-key last**.
+   The user will interrupt when they return.
+
+### Run order (smallest first — user-chosen 2026-10-03)
+
+`feature 6 (DONE) → gap 1 → gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 →
+gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
+
+### Decisions made this session (2026-10-04)
+
+- **Gap 8 (quickfix):** native Error List data shown in a **custom Telescope-style view**;
+  quick-fix actions folded into the **code-actions picker** (feature 8) — `Leader+C+A` shows
+  all code actions for the selection/at-caret, **quick-fixes at the top**, **warning-fix
+  first**.
+- **Gap 9 (search/replace):** custom overlay with **two input fields** (search, replace);
+  seed search from the selection, else the word at the caret; navigate hits; replace current;
+  replace all.
+- **Gap 10 (hover/signature):** custom **focusable** overlay over native QuickInfo/
+  ParameterInfo, navigable with vim motions.
+- **Gap 11 (git):** extend/reuse native — leader bindings for native git diff/blame/log/
+  history (verify exact command names live).
+- **Which-key (last):** build **BOTH** a **bottom-right non-focus-stealing popup overlay**
+  (LazyVim-style — visually appears, does not steal focus) **AND an inline popup variant**,
+  so both can be tested. Research is at `docs/plans/whichkey-research.md`.
+- **Feature 9 (r/a/m overlay):** **attempt it** — research VS's reference-fixing
+  rename/move API first (the open feasibility question).
+- **Gaps 8-11 triage:** done (see the `[2026-10-03]` Decisions entry).
+
+### Completed this session
+
+- **Telescope `fzf` finder** — GREEN 2026-10-03 (commit `deebeb2`; bookkeeping `08d31c8`).
+  Full 36-scenario e2e + Telescope 172 / NeoVisual 168. See the Done section.
+- **Feature 6 — Solution Explorer search-box vim motions (`j`/`k`/`0`/`$`)** — GREEN
+  2026-10-04 (commit `d5927e5`; hash recorded `13c7098`). Full 37-scenario e2e + NeoVisual
+  171 / Telescope 172. See the Done section.
+- **Which-key research** — `docs/plans/whichkey-research.md` (commit `5678b99`).
+- **LazyVim gaps 8-11 triage research** — `docs/plans/backlog-plans.md` (annotated
+  SUPERSEDED where the user's custom-view decisions override the earlier recommendations).
+
+### Next session — first actions
+
+1. Re-read this handoff + the `[2026-10-03]`/`[2026-10-04]` Decisions entries.
+2. Start **Gap 1** using the **new two-stage fan-out tactic** (general plan → split →
+   parallel detail planners → aggregate). **Unit-only lane; queue the e2e gate; do NOT run
+   e2e.**
+3. Continue down the run order.
+
 ## Current state
 
-- **In progress:** (none — the **Code review fixes (72 findings)** plan reached GREEN
-  2026-10-02; see the Done section).
-- **Next up:** the LazyVim gaps 1/3/4/5/6/8/9/10/11 + the remaining user-requested
-  features 7-9, in the user-chosen **"smallest first"** run order (2026-10-03):
+- **In progress:** (none — **PAUSED by the user** after Feature 6 GREEN 2026-10-04; see the
+  SESSION HANDOFF block at the top of this file).
+- **Next up:** **Gap 1 (window-management leader bindings)** — use the **two-stage fan-out
+  planning tactic** and the **unit-only lane** (e2e deferred; queue the gate). Then the rest
+  of the user-chosen **"smallest first"** run order (2026-10-03):
   gap 1 → gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
   gaps 8-11 triaged 2026-10-03). Feature 6 (Solution Explorer search-box vim motions)
@@ -25,6 +109,23 @@ reads at the start of every loop iteration.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-10-04] DECIDED: **E2E TESTS DEFERRED (user instruction).** Do NOT run the e2e
+  harness (`tools/harness/test-e2e.ps1`, incl. `-Tests <subset>`) until the user explicitly
+  says so. All items from now on use the **unit-only lane**: RED at the unit level only;
+  e2e gates are **queued in `docs/e2e-queue.md`** (status QUEUED) and run later on a
+  VS-capable machine. The no-VS harness-health self-checks (`-List`, `-SelfCheck`,
+  `check-doc-refs.ps1`) remain allowed. VERIFY runs the affected unit project(s); the final
+  gate runs both unit projects (no e2e). — status: ACTIVE.
+- [2026-10-04] DECIDED: **New planning tactic — two-stage fan-out (user instruction).**
+  Stage 1: one `implementation-planner` produces a **general plan/architecture**
+  (section-structured, NOT BP-n). Stage 2: the **hub** splits it into sections and
+  dispatches **multiple parallel** `implementation-planner` tasks (one per section). Stage 3:
+  the **hub** aggregates the sections into the final `docs/implementation_plan.md` (Build
+  Plan + Verification Trace). Reason: the single-planner approach returned empty results
+  twice on Gap 1; fan-out is more robust and parallelizes detail work. — status: ACTIVE.
+- [2026-10-04] DECIDED: **Build loop PAUSED by the user** after Feature 6 GREEN; resume at
+  **Gap 1** using the two-stage fan-out tactic. See the SESSION HANDOFF block at the top of
+  this file. — status: ACTIVE.
 - [2026-10-03] DECIDED: LazyVim gaps 8-11 triage (via the `question` tool) — **Gap 8
   (quickfix)** = use the native Error List data but display it in a **custom
   Telescope-style view**; also fold quick-fix actions into the **code-actions picker**

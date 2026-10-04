@@ -7,11 +7,10 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** the preview buffer-source swap
-(the workspace buffer — the Peek model — for editor-OPEN solution files; FULL Roslyn
-highlighting) — GREEN 2026-10-04 (bugfix lane, e2e ENABLED; one RE-PLAN mid-item after the
-pinned `GetTextBuffer()` API proved absent on Roslyn 4.14; full 41-scenario suite + both unit
-suites GREEN, zero flakes, 0 iterations)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 11 — the git leader
+bindings (`g,d` diff / `g,b` blame / `g,h` history; the branches binding dropped) — GREEN
+2026-10-04 (feature lane, e2e ENABLED; one iteration: the `CompareWithUnmodified` clean-file
+refusal fixed scenario-side via the RE-PLAN; full 42-scenario suite + both unit suites GREEN)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -112,15 +111,15 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **the preview buffer-source swap reached GREEN 2026-10-04** with
-  e2e enabled; see the Done section. Nothing is in flight.)
-- **Next up:** **Gap 11 — the git bindings** (`plan-gap11.md`, gate-APPROVED): `g,d` diff /
-  `g,b` blame / `g,h` history (the branches binding DROPPED — the user's decision; the
-  deferred lazygit overlay covers it); `g,g`/`g,c` unchanged until that overlay ships; the
-  scratch repo seeded (`git init`, `.git` excluded from the seed-leak set); the e2e scenario
-  `neovisual-git-bindings` (E2E-GIT-1). **Then:** Feature 7 (the pane architecture —
-  WRITTEN + APPROVED), Gap 4 (the recent-files finder — WRITTEN + APPROVED; `f,e` PROPOSED —
-  confirm at handoff). All plans live in
+- **In progress:** (none — **Gap 11 (the git bindings) reached GREEN 2026-10-04** with e2e
+  enabled; see the Done section. Nothing is in flight.)
+- **Next up:** **Feature 7 — the overlay PANE architecture** (`plan-feature7.md`,
+  gate-APPROVED): the user's directive — REAL focus (not logical), left-click focusable panes,
+  one modular overlay (an IPane contract + a PaneHost registry) the deferred lazygit overlay
+  reuses; Ctrl+H=List, Ctrl+L=Preview, Ctrl+J=Input, Ctrl+K=cycle (the wrap pinned); M-M7
+  (`focus target=Input|List|Preview` — the 4 harness sites update); the e2e scenario
+  `telescope-focus-panes` (E2E-PANES-1). **Then:** Gap 4 (the recent-files finder —
+  WRITTEN + APPROVED; `f,e` PROPOSED — confirm at handoff). All plans live in
   `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/`
   and are handed off progressively (each written to `docs/implementation_plan.md` when it
   becomes the first item). Then the rest
@@ -253,12 +252,13 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **224 passed**; `tests/NeoVisual.Tests`
-  **190 passed** (after the preview buffer-source swap, 2026-10-04).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **41 scenarios** — ALL executed GREEN
-  (full-suite fresh boot with `-TimeoutSec 2400`, run 170, 2026-10-04; the preview
-  buffer-source swap's final gate — first-time pass, zero flakes). **No known-RED remains** —
+  **191 passed** (after Gap 11 — the git bindings, 2026-10-04).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **42 scenarios** — ALL executed GREEN
+  (full-suite fresh boot with `-TimeoutSec 2400`, run 174, 2026-10-04; Gap 11's final gate —
+  `neovisual-git-bindings` first-run PASS, zero new flakes; `telescope-goto` carries a flaky
+  count of 1 from run 172 — pass-on-retry, no 3rd strike). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 41-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the full 42-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -407,10 +407,13 @@ Top of the queue, in priority order:
 >    document-window embedding REJECTED (unsupported). One RE-PLAN mid-item (the pinned
 >    `GetTextBuffer()` API absent on Roslyn 4.14 → the verified `TryGetText` +
 >    `TryGetTextBuffer` chain). Telescope.Tests 221 → 224.
-> 3. **Gap 11 — the git bindings** (`plan-gap11.md`): `g,d` diff / `g,b` blame / `g,h` history
->    (the branches binding DROPPED — the user's decision; the deferred lazygit overlay covers
->    it); `g,g`/`g,c` unchanged until that overlay ships; the scratch repo seeded (`git init`,
->    `.git` excluded from the seed-leak set); the e2e scenario `neovisual-git-bindings`.
+> 3. ~~**Gap 11 — the git bindings** (`plan-gap11.md`)~~ — **DONE** (GREEN 2026-10-04,
+>    feature lane, e2e ENABLED; see the Done section). `g,d` diff / `g,b` blame / `g,h`
+>    history (the branches binding DROPPED — the user's decision); `g,g`/`g,c` unchanged until
+>    the deferred lazygit overlay ships; the scratch repo git-seeded; `.git` excluded from the
+>    seed-leak set; the e2e scenario `neovisual-git-bindings` (42nd) — first-run PASS after the
+>    RE-PLAN fixed the `CompareWithUnmodified` clean-file refusal scenario-side. NeoVisual
+>    190 → 191; Telescope 224 unchanged.
 > 4. **Feature 7 — the overlay PANE architecture** (`plan-feature7.md`): the user's directive —
 >    REAL focus (not logical), left-click focusable panes, one modular overlay (an IPane
 >    contract + a PaneHost registry — the types land with the plan) the deferred lazygit
@@ -798,6 +801,51 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Gap 11: git leader bindings (`g,d` diff / `g,b` blame / `g,h` history)** —
+  (Lane: `feature`, e2e ENABLED; 9 delegations, 4 VS boots, 1 iteration). Three pure
+  `command:` bindings under the existing `g` prefix in `default-keybindings.json` (36 → 38):
+  `g,d` → `command:Team.Git.CompareWithUnmodified` (diff the active file vs HEAD), `g,b` →
+  `command:Team.Git.Annotate` (blame — the old branches binding is DROPPED, the user's
+  decision; the deferred lazygit overlay covers branches), `g,h` → `command:Team.Git.ViewHistory`
+  (history); `g,g`/`g,c` UNCHANGED (they rebind when the deferred lazygit overlay ships). ZERO
+  C# changes — the `command:` path already logs `[NeoVisual] leader-binding executed: {seq}`
+  and `Command '...' failed: {msg}`. The e2e scratch solution is now a GIT REPO:
+  `Reset-ScratchSolution` seeds `git init` + an initial commit (a local identity, gpgsign off,
+  deterministic + offline) and `Get-SeedFiles` EXCLUDES `.git` (one regex token — the
+  seed-leak set stays file-scoped). New e2e scenario `neovisual-git-bindings` (42nd; after
+  `neovisual-diagnostic-nav`): fires `Space g b` → `g h` → `g d` with an editor focused;
+  asserts the three `leader-binding executed:` lines + the ABSENCE of
+  `Command 'Team.Git.*' failed` in the POST-retry window. **Iteration 1 (the VERIFY runs
+  172/173, fail-twice):** `CompareWithUnmodified` was REFUSED on the fully-clean seed
+  (`Command ... is not available` — DTE QueryStatus; the command diffs the SAVED working file
+  vs HEAD and there was nothing to diff) → the RE-PLAN (gate-RE-APPROVED) fixed it
+  SCENARIO-SIDE: the scenario DIRTIES the active seeded file ON DISK (a `File.SaveAll` first —
+  a clean buffer auto-reloads the external change silently; the marker uses the file's OWN
+  EOL) before `g,d` and RESTORES the exact original bytes in a `finally` (a SequenceEqual
+  self-check throws before `seed-leak` could see it — NO allowlist entry needed); the ORDER is
+  pinned (`g,b`/`g,h` fire on the clean file; `g,d` LAST — a successful diff opens the diff
+  view and steals the active document); a BOUNDED warm-up retry (2s grace → ONE re-fire per
+  failed sequence, the file tab re-activated via the NEW `dte-command.ps1` `File.Open` mode —
+  `ItemOperations.OpenFile`, since `ExecuteCommand('File.Open*')` is untrusted in this VS
+  build) absorbs the Git-provider warm-up race (`ViewHistory` was refused in run 172, available
+  in 173) while a wrong command NAME still fails the gate. Unit tests: NeoVisual 190 → **191**
+  (`Run_Keybinding_DefaultFileHasGitBindings`: the three pairs + `g,b`→Annotate + `g,g`/`g,c`
+  unchanged); Telescope 224 untouched. Final gates: `dotnet build` 0 errors; NeoVisual.Tests
+  **191 passed, 0 failed**; Telescope.Tests **224 passed, 0 failed** (staggered); full
+  42-scenario e2e suite GREEN on a fresh boot (run 174, `-TimeoutSec 2400`:
+  `neovisual-git-bindings` FIRST-RUN PASS — the retry absorbed the `g,h` warm-up refusal
+  exactly as designed; the restore self-check silent; `seed-leak`/`seed-reset` GREEN); both
+  lints PASS; `-SelfCheck` PASS; `-List` 42.
+  **Change summary:** modified `MyExtension/Resources/default-keybindings.json` (the git
+  block), `tools/harness/test-e2e.ps1` (the git seed + the `.git` exclusion + the scenario),
+  `tools/harness/dte-command.ps1` (the `File.Open` mode), `tests/NeoVisual.Tests/Program.cs`
+  (+1 test), `docs/spec.md` §3, `AGENTS.md`, SKILL.md. **If this regresses, look first at the
+  scenario's dirty/restore block (a failed restore = a seed-leak failure; a modal reload
+  prompt = a focus steal — check `File.SaveAll` ran before the disk write) and the binding
+  JSON (a wrong command name = the `Command '...' failed` line + a swallowed key — the
+  absence gate catches it); the command-availability semantics (saved-file-vs-HEAD) are
+  pinned in the plan's Mechanism notes.**
 
 - **2026-10-04 — Preview buffer-source swap (the workspace buffer — the Peek model — for
   editor-OPEN solution files; FULL Roslyn highlighting)** (Lane: `bugfix`, e2e ENABLED;

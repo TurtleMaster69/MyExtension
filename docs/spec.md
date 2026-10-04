@@ -227,9 +227,12 @@ toggle-solution-explorer; `Space+f,f` GoToFile; `Space+f,t` telescope;
 `Space+],e`/`Space+[,e` next/prev error and `Space+],w`/`Space+[,w` next/prev warning
 (the custom severity-filtered navigator: Error List entries for the ACTIVE document
 ordered by line, in-file, NO wrap — a no-op at the end or with no entries is logged,
-never a crash); `Space+c,w` Command Window;
-plus Git/build/terminal
-`command:` bindings. There is no save binding (save with Ctrl+S); `w` is a
+never a crash); `Space+c,w` Command Window; `Space+g,d` diff the active file
+(`command:Team.Git.CompareWithUnmodified`); `Space+g,b` blame
+(`command:Team.Git.Annotate` — the old branches binding is dropped); `Space+g,h`
+the active file's history (`command:Team.Git.ViewHistory`); `Space+g,g` Git Changes
+and `Space+g,c` Commit stay until the deferred lazygit overlay rebinds them; plus
+build/terminal `command:` bindings. There is no save binding (save with Ctrl+S); `w` is a
 window-management prefix — a lone `Space+w` consumes and waits, firing nothing.
 
 The **goto commands** — `goto-definition`, `goto-references`,
@@ -308,7 +311,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **221 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **224 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -325,7 +328,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
   results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`).
-- `dotnet run --project tests/NeoVisual.Tests` — **190 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **191 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key

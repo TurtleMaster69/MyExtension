@@ -145,10 +145,19 @@ if ($Command -eq 'GetActiveDocument') {
     exit 0
 }
 
+# 'File.Open' opens a file via dte.ItemOperations.OpenFile — no file-picker dialog. The
+# ExecuteCommand('File.Open*', path) arg path is UNTRUSTED in this VS build (see the
+# Solution.Open note below: File.OpenProject ignored its arg and opened the dialog). Used by
+# neovisual-git-bindings to re-activate the seeded file's tab after a git view (diff/annotate/
+# history) stole the active document; OpenFile on an already-open file ACTIVATES its tab.
+if ($Command -eq 'File.Open' -and $Arg) {
+    Invoke-DteWithTimeout { param($dte, $arg) $dte.ItemOperations.OpenFile($arg) | Out-Null } $TimeoutSec "File.Open '$Arg'" @($dte, $Arg) | Out-Null
+    Write-Output "Opened file '$Arg' on PID $DevenvPid"
+}
 # 'Solution.Open' opens a solution file directly via dte.Solution.Open — no file-picker dialog
 # (ExecuteCommand('File.OpenProject', path) opens the dialog instead). Use this for opening the
 # scratch .sln in the Experimental Instance.
-if ($Command -eq 'Solution.Open' -and $Arg) {
+elseif ($Command -eq 'Solution.Open' -and $Arg) {
     Invoke-DteWithTimeout { param($dte, $arg) $dte.Solution.Open($arg) } $TimeoutSec "Solution.Open '$Arg'" @($dte, $Arg) | Out-Null
     Write-Output "Opened solution '$Arg' on PID $DevenvPid"
 }
@@ -158,4 +167,4 @@ elseif ($Arg) {
 else {
     Invoke-DteWithTimeout { param($dte, $command) $dte.ExecuteCommand($command) } $TimeoutSec "ExecuteCommand '$Command'" @($dte, $Command) | Out-Null
 }
-if ($Command -ne 'Solution.Open') { Write-Output "Executed '$Command' (arg='$Arg') on PID $DevenvPid" }
+if ($Command -ne 'Solution.Open' -and $Command -ne 'File.Open') { Write-Output "Executed '$Command' (arg='$Arg') on PID $DevenvPid" }

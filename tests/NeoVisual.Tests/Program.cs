@@ -255,6 +255,33 @@ namespace NeoVisual.Tests
                 "a bare [ binding would shadow the [ pairs (prefix trap)");
         }
 
+        public static void Run_Keybinding_DefaultFileHasGitBindings()
+        {
+            // Gap 11 (AC1-AC4/D1): the shipped defaults gain the three git leader bindings under
+            // the existing `g` prefix and DROP the branches binding (g,b rebinds branches -> blame;
+            // the user's 2026-10-04 decision — the deferred lazygit overlay owns branches). g,g/g,c
+            // are UNCHANGED (they rebind when that overlay ships). LoadDefaults reads ONLY the
+            // embedded resource (hermetic — never the user's %APPDATA% file).
+            // RED classification: assertion-RED, not compile-RED — no new API is referenced; before
+            // BP-1 the ContainsKey("g,d")/ContainsKey("g,h") asserts throw and the g,b value assert
+            // sees command:Team.Git.Branches.
+            var cfg = KeybindingConfig.LoadDefaults();
+            Assert.True(cfg.Bindings.ContainsKey("g,d"), "g,d -> diff binding present");
+            Assert.Equal("command:Team.Git.CompareWithUnmodified", cfg.Bindings["g,d"]);
+            Assert.True(cfg.Bindings.ContainsKey("g,b"), "g,b -> blame binding present");
+            Assert.Equal("command:Team.Git.Annotate", cfg.Bindings["g,b"]);
+            // The branches binding is GONE: a dictionary has one value per key, so the Equal above
+            // already proves g,b no longer maps to Team.Git.Branches — pinned explicitly for the
+            // diff reader (the Assert API has no NotEqual: tests/TestRunner.cs:95-127).
+            Assert.False(cfg.Bindings["g,b"] == "command:Team.Git.Branches",
+                "g,b must not map to Team.Git.Branches (rebound to blame)");
+            Assert.True(cfg.Bindings.ContainsKey("g,h"), "g,h -> history binding present");
+            Assert.Equal("command:Team.Git.ViewHistory", cfg.Bindings["g,h"]);
+            // AC4: the deferred-overlay rebinds must NOT happen in this plan.
+            Assert.Equal("command:View.GitChanges", cfg.Bindings["g,g"]);
+            Assert.Equal("command:Team.Git.Commit", cfg.Bindings["g,c"]);
+        }
+
         public static void Run_KeybindingConfig_IsSimpleShortcut()
         {
             // m42: BuildBindings classifies any binding key containing "+" as a simple shortcut

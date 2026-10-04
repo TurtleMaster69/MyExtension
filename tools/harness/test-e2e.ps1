@@ -29,6 +29,7 @@
 #   neovisual-leader      Space w - + Space+E fire leader bindings (leader-binding executed: w,- / e)
 #   neovisual-window-management  Space w - / w | / w d split + close (leader-binding executed: w,*)
 #   neovisual-diagnostic-nav  Space ]d/[d native + ]e/[e/]w/[w severity nav (leader-binding + diagnostic-nav)
+#   neovisual-git-bindings  Space g d/g b/g h fire the git leader bindings (leader-binding executed: g,* + NO Command 'Team.Git.*' failed)
 #   neovisual-toolwindow  Solution Explorer: hjkl navigation + i/Esc input-mode (search box)
 #   neovisual-explorer-toggle  Space+E opens, then closes, then reopens Solution Explorer
 #   neovisual-explorer-open    l expands the fold, j/k navigate, Enter opens a file
@@ -485,6 +486,17 @@ function Reset-ScratchSolution([string]$scratchDir) {
     # Solution + project entry (ALWAYS, not gated on Test-Path).
     dotnet new sln -n TelescopeTest -o $scratchDir --format sln 2>&1 | Out-Null
     dotnet sln (Join-Path $scratchDir 'TelescopeTest.sln') add (Join-Path $probeDir 'Probe.csproj') 2>&1 | Out-Null
+
+    # Gap 11: seed a Git repo so the Team.Git.* leader bindings (g,d/g,b/g,h) have a target.
+    # Deterministic + offline (git init needs no network). Local identity — NEVER the machine's
+    # global config (a machine without one would make `git commit` fail); gpgsign forced off so
+    # a global commit.gpgsign=true cannot prompt/fail. Re-runs are safe: the dir was deleted
+    # above, so this always creates a FRESH repo. All calls use -C (no Set-Location).
+    git -C $scratchDir init 2>&1 | Out-Null
+    git -C $scratchDir config user.name "seed"
+    git -C $scratchDir config user.email "seed@local"
+    git -C $scratchDir add -A 2>&1 | Out-Null
+    git -C $scratchDir -c commit.gpgsign=false commit -m "seed" 2>&1 | Out-Null
 }
 
 # ---------------------------------------------------------------------------
@@ -505,7 +517,7 @@ function Get-SeedFiles([string]$scratchDir) {
     # Sorted by name so the expected/diff are deterministic.
     Get-ChildItem -Path $scratchDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in '.cs', '.sln', '.csproj' } |
-        Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } |
+        Where-Object { $_.FullName -notmatch '[\\/](obj|bin|\.git)[\\/]' } |
         Sort-Object FullName
 }
 
@@ -885,6 +897,162 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> prev-warning
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,w" 'Space [ w fired prev-warning'
     Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=prev severity=warning |no-op: )" '[,w logged a diagnostic-nav outcome (target or no-op)'
+}
+
+# --- neovisual-git-bindings ------------------------------------------------
+# Gap 11 git leader bindings (the `g` prefix): Space g d diffs the active file vs HEAD
+# (Team.Git.CompareWithUnmodified), Space g b blames it (Team.Git.Annotate — the old branches
+# binding is DROPPED), Space g h opens its history (Team.Git.ViewHistory). Pure command:
+# bindings — the contract is the EXISTING [NeoVisual] leader-binding executed: diagnostic (no
+# new log literal) PLUS the ABSENCE of the `Command 'Team.Git.*' failed` failure literal (a
+# wrong command name logs it via InputHandler.ExecuteVsCommand and swallows the key — the
+# leader-binding lines alone would not catch it). The scratch repo is seeded by
+# Reset-ScratchSolution (git init + an initial commit), so the commands have a target.
+#
+# RE-PLAN 2026-10-04 (VERIFY runs 172/173, fail-twice): on the fully-clean seed
+# Team.Git.CompareWithUnmodified is REFUSED by DTE QueryStatus ("Command ... is not
+# available") — it diffs the SAVED working-directory file vs HEAD (git diff HEAD semantics)
+# and the seed commits everything, so there was nothing to diff. The scenario therefore
+# DIRTIES the active seeded file ON DISK before g,d and RESTORES the exact original bytes in
+# a finally (byte-identical -> the seed-leak SHA-256 matches the bootstrap expected copy —
+# no allowlist, no Update-SeedExpected). The buffer is clean (File.SaveAll first), so VS
+# 2022's default "Auto-load changes, if saved" reloads it silently — no modal, no focus
+# steal; the marker uses the file's OWN EOL style so the reload never sees mixed EOLs.
+#
+# ORDER: g b and g h fire FIRST on the clean file (both proven available, runs 172/173); g d
+# fires LAST because a SUCCESSFUL CompareWithUnmodified opens the diff view and STEALS the
+# active document (a later Team.Git command would be refused against the diff buffer). The
+# seeded file's tab is re-activated (dte-command.ps1 File.Open -> ItemOperations.OpenFile)
+# before g d and before every retry re-fire.
+#
+# WARM-UP RETRY (bounded): the first Team.Git.* QueryStatus on a fresh boot can land before
+# the Git provider finishes initializing (ViewHistory was refused in run 172, available in
+# 173). After the first pass, any `Command 'Team.Git.*' failed` line triggers ONE retry: a
+# 2s grace, then each failed sequence is re-fired ONCE (logged — a second leader-binding
+# executed: line), then the absence gate re-scans the POST-RETRY window only. A warm-up race
+# (fails once, succeeds on retry) passes; a WRONG COMMAND NAME fails again and throws — the
+# gate's contract holds. The commands' VISUAL effects (diff/blame/history surfaces) are
+# deliberately never asserted (VS-native, not deterministic) — the same discipline as
+# neovisual-window-management's tab-group geometry.
+Register-Scenario 'neovisual-git-bindings' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'git leader bindings'
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    $scratch = Join-Path $env:TEMP 'telescope_scratch'
+
+    # The diff/blame/history target is the ACTIVE document (Get-ActiveDocumentPath is the
+    # harness's existing DTE-query wrapper, test-e2e.ps1:253 — it executes no VS command). It
+    # must be a seeded scratch file: the dirty/restore below must never touch anything
+    # outside the seed tree.
+    $targetPath = Get-ActiveDocumentPath $vs.Id
+    if (-not $targetPath -or -not $targetPath.StartsWith($scratch, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "neovisual-git-bindings: active document is not a seeded scratch file ('$targetPath') - setup drift"
+    }
+
+    # Snapshot BEFORE the first key: the absence gate scans only lines appended after it.
+    $preGit = Get-LogCacheIndex $logPath
+    $preRetry = $preGit      # final-gate window start (overwritten when the retry runs)
+
+    # 1. Space g b -> blame the active file (clean file — proven available, runs 172/173).
+    #    No $script:VkB constant exists (harness-common.ps1 is out of scope); Send-Text 'b'
+    #    TapVk's 0x42 unshifted via its letter path — the identical key the matcher sees.
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 150        # g (prefix)
+    Send-Text 'b'; Start-Sleep -Milliseconds 800               # b -> Team.Git.Annotate
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: g,b" 'Space g b fired the blame binding'
+    Assert-VsFocused $vs 'git bindings (after g,b)'
+
+    # 2. Space g h -> the active file's history (clean file; the warm-up race is handled by
+    #    the bounded retry below).
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 150        # g (prefix)
+    Send-Tap $script:VkH; Start-Sleep -Milliseconds 800        # h -> Team.Git.ViewHistory
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: g,h" 'Space g h fired the history binding'
+
+    # 3. Space g d -> diff the active file vs HEAD. Re-activate the seeded file's tab first
+    #    (the annotate/history surfaces above may hold focus), make every buffer clean (a
+    #    DIRTY buffer would turn the disk write below into a reload PROMPT — a focus-stealing
+    #    modal), then dirty the file ON DISK so the working tree differs from HEAD and the
+    #    command is available. Restored byte-exactly in the finally.
+    $origBytes = [System.IO.File]::ReadAllBytes($targetPath)
+    try {
+        & $dteCmd -DevenvPid $vs.Id -Command 'File.Open' -Arg $targetPath 2>$null | Out-Null
+        Start-Sleep -Milliseconds 400
+        & $dteCmd -DevenvPid $vs.Id -Command 'File.SaveAll' 2>$null | Out-Null
+        Start-Sleep -Milliseconds 400
+        $hasCrlf = $false
+        for ($i = 0; $i -lt $origBytes.Length - 1; $i++) {
+            if ($origBytes[$i] -eq 0x0D -and $origBytes[$i + 1] -eq 0x0A) { $hasCrlf = $true; break }
+        }
+        $eol = if ($hasCrlf) { "`r`n" } else { "`n" }
+        [System.IO.File]::AppendAllText($targetPath, "$eol// git-diff probe$eol", [System.Text.Encoding]::ASCII)
+        Start-Sleep -Milliseconds 600    # let the silent auto-reload settle before the keys
+
+        Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+        Send-Tap $script:VkG; Start-Sleep -Milliseconds 150        # g (prefix)
+        Send-Tap $script:VkD; Start-Sleep -Milliseconds 800        # d -> Team.Git.CompareWithUnmodified
+        Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: g,d" 'Space g d fired the diff binding'
+        Assert-VsFocused $vs 'git bindings (after g,d)'
+
+        # Settle, then scan the first-pass window for Team.Git.* failures.
+        Start-Sleep -Milliseconds 1200
+        Update-LogCache $logPath
+        $failed = @()
+        for ($i = $preGit; $i -lt $script:LogCache.Count; $i++) {
+            if ($script:LogCache[$i] -match "Command '(Team\.Git\.[^']*)' failed") { $failed += $Matches[1] }
+        }
+        $failed = @($failed | Select-Object -Unique)
+
+        if ($failed.Count -gt 0) {
+            # ONE bounded retry (the Git-provider warm-up race): 2s grace, re-activate the
+            # seeded file's tab (a git view stole it), re-fire each failed sequence ONCE
+            # (Send-Text's letter path = the same unshifted VK the matcher sees), then the
+            # absence gate re-scans the POST-RETRY window only ($preRetry) — a warm-up race
+            # passes, a wrong command name fails again and throws.
+            Write-Info "git-bindings: $($failed.Count) Team.Git command(s) failed - warm-up grace, then ONE retry"
+            Start-Sleep -Seconds 2
+            $preRetry = Get-LogCacheIndex $logPath
+            $seqKey = @{ 'Team.Git.CompareWithUnmodified' = 'd'; 'Team.Git.Annotate' = 'b'; 'Team.Git.ViewHistory' = 'h' }
+            foreach ($cmd in $failed) {
+                $letter = $seqKey[$cmd]
+                if (-not $letter) { throw "a Team.Git command failed and has no retry sequence: $cmd" }
+                & $dteCmd -DevenvPid $vs.Id -Command 'File.Open' -Arg $targetPath 2>$null | Out-Null
+                Start-Sleep -Milliseconds 400
+                Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+                Send-Tap $script:VkG; Start-Sleep -Milliseconds 150        # g (prefix)
+                Send-Text $letter; Start-Sleep -Milliseconds 800           # re-fire ONCE (bounded)
+            }
+        }
+    }
+    finally {
+        # Restore the EXACT original bytes: the seed-leak guard (Assert-NoSeedLeak) hashes
+        # seeded files at run end against the bootstrap expected copy (Write-SeedExpected,
+        # bootstrap line 2472) — a byte-identical restore hashes identical, so NO allowlist
+        # entry and NO Update-SeedExpected call are needed. The self-check makes a restore
+        # failure surface HERE (named) instead of as a confusing seed-leak failure at run end.
+        [System.IO.File]::WriteAllBytes($targetPath, $origBytes)
+        Start-Sleep -Milliseconds 600    # let the silent auto-reload settle
+        $restored = [System.IO.File]::ReadAllBytes($targetPath)
+        if (-not [System.Linq.Enumerable]::SequenceEqual([byte[]]$restored, [byte[]]$origBytes)) {
+            throw "neovisual-git-bindings: seed restore FAILED for $targetPath (seed-leak would flag it)"
+        }
+    }
+
+    # Absence gate (AC1-AC3), POST-RETRY window: no Team.Git.* command may have FAILED after
+    # the retry. Settle first so a late failure line lands, then scan (the Assert-NoEnterStorm
+    # idiom: Update-LogCache + a direct $script:LogCache scan — never a positive wait, which
+    # could never prove absence). A first-pass warm-up failure whose retry succeeded is
+    # tolerated (its line predates $preRetry); a persistent failure (a wrong command name, or
+    # the dirty mechanism broke) throws here — the gate's contract holds.
+    Start-Sleep -Milliseconds 1200
+    Update-LogCache $logPath
+    for ($i = $preRetry; $i -lt $script:LogCache.Count; $i++) {
+        if ($script:LogCache[$i] -match "Command 'Team\.Git\..*' failed") {
+            throw "a Team.Git command failed: $($script:LogCache[$i])"
+        }
+    }
 }
 
 # --- neovisual-toolwindow ------------------------------------------------

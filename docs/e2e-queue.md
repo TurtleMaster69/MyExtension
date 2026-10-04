@@ -67,6 +67,15 @@ in run 155/157)** — every gate was exercised and passed on the VS-capable mach
   VALUE read all-0 (the timing-bound read — see the adjudication in the item's Execution Log);
   the semantic coloring verified by the manual visual pass (code inspection + the deployment
   metadata; Telescope 224 / NeoVisual 190).
+- **Gap 11 — git bindings (2026-10-04):** `E2E-GIT-1` — discharged by the item's final gate
+  (the full 42-scenario fresh-boot suite, run 174, `-TimeoutSec 2400`): 42/42 GREEN;
+  `neovisual-git-bindings` FIRST-RUN PASS — the three `leader-binding executed: g,b|g,h|g,d`
+  lines in the pinned order + the POST-retry absence gate clean (the one first-pass
+  `ViewHistory` warm-up refusal absorbed by the DESIGNED bounded retry); the dirty-on-disk +
+  byte-exact-restore mechanism left `seed-leak`/`seed-reset` GREEN (no allowlist); Telescope
+  224 / NeoVisual 191. (The first VERIFY — run 172/173 — FAILED on the
+  `CompareWithUnmodified` clean-file refusal, fail-twice → the RE-PLAN fixed it scenario-side;
+  zero C# changes.)
 
 ## Queued gates — Telescope columns + preview (2026-10-04)
 
@@ -123,9 +132,11 @@ e2e is ENABLED - the gates drain at each plan's VERIFY.
   GREEN; `preview file=/caret=/tokens=` byte-stable; the tokens VALUE read all-0 — the
   timing-bound read cannot discriminate engagement, adjudicated + doc-corrected; see the What
   ran GREEN section). No new scenario; the semantic coloring is the MANUAL visual pass.
-- **E2E-GIT-1** - Gap 11 (third): the NEW `neovisual-git-bindings` scenario (created + proven RED
-  before the build): the three `leader-binding executed:` lines + the ABSENCE of
-  `Command 'Team.Git.*' failed` (the scratch repo seeded).
+- ~~**E2E-GIT-1** - Gap 11 (third)~~ — **DISCHARGED GREEN 2026-10-04** (the item's final gate:
+  the full 42-scenario fresh-boot suite, run 174; `neovisual-git-bindings` FIRST-RUN PASS —
+  the three `leader-binding executed:` lines + the POST-retry absence gate clean; the
+  dirty-on-disk fix for the `CompareWithUnmodified` clean-file refusal landed via the
+  RE-PLAN; see the What ran GREEN section).
 - **E2E-PANES-1** - Feature 7 (fourth): the NEW `telescope-focus-panes` scenario: Ctrl+J/H/L/K ->
   `focus target=Input|List|Preview` + the modal guarantee; the M-M7 migration of the 4 two-state
   sites; the left-click path is unit-pinned + manual.

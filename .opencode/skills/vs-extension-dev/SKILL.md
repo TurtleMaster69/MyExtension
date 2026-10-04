@@ -201,7 +201,11 @@ shortcuts (e.g. `Ctrl+H`, distinguished by a `+`). Leader sequences are
 `telescope-issues`, `telescope-references`, `telescope-grep`,
 `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`,
 `close-window`, `next-error`, `prev-error`, `next-warning`, `prev-warning`,
-or `command:<VsCommandName>`. Telescope actions are derived from
+or `command:<VsCommandName>`. The `g,` git prefix is pure `command:` bindings —
+`g,d` diff (`Team.Git.CompareWithUnmodified`), `g,b` blame (`Team.Git.Annotate`;
+the old branches binding was dropped), `g,h` history (`Team.Git.ViewHistory`) —
+no `ResolveAction` case; `g,g`/`g,c` stay until the deferred lazygit overlay
+rebinds them. Telescope actions are derived from
 `TelescopeLauncher.FinderNames` (add a `FinderNames` entry + a
 `default-keybindings.json` line); `ResolveAction` cases are only for
 non-telescope built-ins.
@@ -278,8 +282,8 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (221) and
-  `dotnet run --project tests/NeoVisual.Tests` (190), with substring filter +
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (224) and
+  `dotnet run --project tests/NeoVisual.Tests` (191), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — ALL executed GREEN
   against the experimental

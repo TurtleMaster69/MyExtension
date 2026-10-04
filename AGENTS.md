@@ -99,7 +99,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    goto dispatcher (`GotoDispatcher`) + the definition finder (`DefinitionFinder`).
    `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
    `-- LineIndex`, `-- FocusTarget` run subsets.
-   Currently **221 tests, all passing**.
+   Currently **224 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -116,7 +116,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
    `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
    `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-   run subsets. Currently **190 tests, all passing**.
+   run subsets. Currently **191 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -132,16 +132,14 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 41 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 42 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (41 registered — 38 GREEN with no known-RED; `neovisual-window-management` (E2E-GAP1-1),
-`neovisual-diagnostic-nav` (E2E-GAP3-1), and `telescope-results-columns` (E2E-RC-1) are
-registered but never executed;
-`explorer-open-searchbox` was GREened
+Scenarios (42 registered — all GREEN; the Gap 11 `neovisual-git-bindings` scenario executes at
+this item's VERIFY; `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -172,6 +170,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `neovisual-leader` — Space+E and Space w - fire leader bindings (lowercase sequences; a lone Space+W consumes and waits — no binding fires)
 - `neovisual-window-management` — Space w -/w |/w d fire the `w`-prefix bindings (split below/right, focus-aware close; registered, never executed — queued as E2E-GAP1-1)
 - `neovisual-diagnostic-nav` — Space ]/[ d/e/w fire the six diagnostic-nav bindings (native `],d`/`[,d` + severity-filtered `],e`/`[,e`/`],w`/`[,w`; registered, never executed — queued as E2E-GAP3-1)
+- `neovisual-git-bindings` — Space g d/g b/g h fire the git leader bindings (diff/blame/history via command:Team.Git.*; the scratch repo is git-seeded; the leader-binding lines + the ABSENCE of Command 'Team.Git.*' failed are the contract)
 - `neovisual-toolwindow` — Solution Explorer hjkl navigation + i/Esc input-mode
 - `neovisual-explorer-toggle` — Space+E opens/closes Solution Explorer (toggle)
 - `neovisual-explorer-open` — l expands fold, j/k navigate, Enter opens a file
@@ -404,6 +403,14 @@ Done and tested (live + unit):
   New diagnostic `results columns={ids}`; unit-tested in `tests/Telescope.Tests`
   (the column-set/visibility/width-fit/truncation tests); live e2e
   `telescope-results-columns` passes.
+- Git leader bindings: the `g` prefix gains `g,d` diff
+  (`command:Team.Git.CompareWithUnmodified`), `g,b` blame
+  (`command:Team.Git.Annotate` — the old branches binding is dropped), and `g,h`
+  history (`command:Team.Git.ViewHistory`); pure `command:` bindings (zero C#
+  changes); the scratch repo is git-seeded in `Reset-ScratchSolution` (git init +
+  an initial commit, local identity, gpgsign off) and `.git` is excluded from the
+  seed-leak set; unit `Run_Keybinding_DefaultFileHasGitBindings`; e2e
+  `neovisual-git-bindings`.
 
 ## Hard requirements that are easy to violate
 
@@ -431,8 +438,9 @@ Done and tested (live + unit):
   defaults in `MyExtension/Resources/default-keybindings.json` (embedded resource). Action
   names are resolved in `InputHandler.ResolveAction` (`navigate-left` etc.);
    `command:<VsCommandName>` runs any VS command by name (this is how the
-  LazyVim-style leader bindings like `w,-`→`Window.NewHorizontalTabGroup` and
-  `],d`→`command:Edit.GotoNextIssueinFile` are wired). The **goto commands**
+  LazyVim-style leader bindings like `w,-`→`Window.NewHorizontalTabGroup`,
+  `],d`→`command:Edit.GotoNextIssueinFile`, and
+  `g,d`→`command:Team.Git.CompareWithUnmodified` are wired). The **goto commands**
   (`goto-definition`/`goto-references`/`goto-implementation`) are VS commands
   (the `TelescopeCommand.cs` pattern) the user maps in **VsVim** to `gd`/`gr`/`gI`
   — no leader keys, no hook routing; the e2e executes them via DTE.

@@ -120,8 +120,11 @@ headers visible; one row = multiple columns from per-finder column sets —
 `ResultColumn` definitions, a default-visible subset per the column catalog;
 right-clicking a column header opens the chooser menu to toggle any column,
 catalog order stable), and a read-only **preview pane** on the right — a REAL
-read-only VS editor view hosted in the overlay (VS's own classifier highlighting;
-the Editable view role is excluded, so VsVim never attaches and there is no insert
+read-only VS editor view hosted in the overlay (the buffer is the file's LIVE
+`VisualStudioWorkspace` buffer for editor-OPEN solution files — the Peek model — so the
+FULL Roslyn classifier chain attaches, syntactic + semantic; CLOSED solution files and
+non-solution files fall back to the standalone content-type buffer with classifier
+highlighting only; the Editable view role is excluded, so VsVim never attaches and there is no insert
 mode; the custom SyntaxHighlighter tokenizer and its RichTextBox rendering are
 retired). Narrow columns render compact cell values: Access write → W, read → R;
 Issues Kind Error → err, Warning → warn, Todo → todo, Info → info; Implementation

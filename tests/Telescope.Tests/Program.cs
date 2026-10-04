@@ -2604,6 +2604,44 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // Preview buffer source (the workspace-attach fix, plan-preview-buffer):
+        // the pure try-workspace-then-fallback decision + the ownership split it
+        // implies. The VS-coupled host (MyExtension PreviewEditorHost) delegates
+        // the decision to this pure type — the workspace buffer is NEVER disposed
+        // by the host; only the standalone ITextDocument is.
+        // RED: PreviewBufferSource / PreviewBufferKind do not exist yet -> CS0246.
+        // ================================================================
+
+        public static void Run_PreviewBuffer_WorkspaceWhenAvailableAndFound()
+        {
+            // A resolved workspace + a document id for the path -> the LIVE workspace
+            // buffer (the Peek model). The host does NOT own it: OwnsDocument=false
+            // means CloseView must never dispose it (the workspace owns the buffer;
+            // the read-only view never mutates it).
+            var d = PreviewBufferSource.Resolve(workspaceAvailable: true, documentFound: true);
+            Assert.Equal(PreviewBufferKind.Workspace, d.Kind);
+            Assert.False(d.OwnsDocument);
+        }
+
+        public static void Run_PreviewBuffer_StandaloneWhenNoWorkspace()
+        {
+            // No workspace (MEF resolution failed/null) -> the standalone content-type
+            // document; the host owns + disposes it (the pre-fix behavior).
+            var d = PreviewBufferSource.Resolve(workspaceAvailable: false, documentFound: false);
+            Assert.Equal(PreviewBufferKind.Standalone, d.Kind);
+            Assert.True(d.OwnsDocument);
+        }
+
+        public static void Run_PreviewBuffer_StandaloneWhenDocumentMisses()
+        {
+            // A resolved workspace that does not know the path (a non-solution file,
+            // a non-Roslyn content type, C++) -> the standalone fallback.
+            var d = PreviewBufferSource.Resolve(workspaceAvailable: true, documentFound: false);
+            Assert.Equal(PreviewBufferKind.Standalone, d.Kind);
+            Assert.True(d.OwnsDocument);
+        }
+
+        // ================================================================
         // CodeIssuesFinder — warnings/errors/TODO markers
         // ================================================================
 

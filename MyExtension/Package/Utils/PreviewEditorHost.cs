@@ -48,6 +48,7 @@ namespace MyExtension.Package
         private ITextDocument? _document;
         private string? _documentPath;
         private DateTime _documentStamp;
+        private PreviewBufferDecision _decision;   // which buffer source the current view uses (owns the document?)
 
         public PreviewEditorHost(AsyncPackage package)
         {
@@ -96,7 +97,7 @@ namespace MyExtension.Package
                 }
 
                 return new PreviewEditorResult(
-                    _host!.HostControl, _document!.TextBuffer.CurrentSnapshot.GetText());
+                    _host!.HostControl, _view!.TextBuffer.CurrentSnapshot.GetText());
             }
             catch (Exception ex)
             {
@@ -106,44 +107,131 @@ namespace MyExtension.Package
         }
 
         /// <summary>Closes the previous view+document and creates the new ones (the mtime-cache
-        /// miss path — the role the old PreviewTokenCache.ShouldRebuild played for the FlowDocument).</summary>
+        /// miss path — the role the old PreviewTokenCache.ShouldRebuild played for the FlowDocument).
+        /// Workspace first (the Peek model): a solution file previews over its LIVE workspace
+        /// buffer so the full Roslyn classifier chain attaches (syntactic + semantic); any miss
+        /// falls back to the standalone content-type document the host owns.</summary>
         private void RebuildView(string path, DateTime stamp)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             CloseView();
 
-            // Content type by file extension (the preview shows ANY solution file, not just C#):
-            // .cs -> CSharp, .txt -> plaintext, ...; unregistered -> UnknownContentType (the view
-            // still displays, just unclassified).
-            IContentType contentType =
-                _fileExtensionRegistry!.GetContentTypeForExtension(Path.GetExtension(path).TrimStart('.'))
-                ?? _contentTypeRegistry!.UnknownContentType;
+            // Try the workspace first (D1): MEF VisualStudioWorkspace -> CurrentSolution ->
+            // GetDocumentIdsWithFilePath -> GetDocument(id) -> TryGetText ->
+            // TryGetTextBuffer(container). The buffer is the LIVE shared buffer (editor-OPEN
+            // documents only — a CLOSED document falls back to the standalone path); the
+            // read-only view (no Editable role) never mutates it.
+            Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace? workspace = TryResolveWorkspace();
+            Microsoft.VisualStudio.Text.ITextBuffer? workspaceBuffer =
+                workspace != null ? TryGetWorkspaceBuffer(workspace, path) : null;
+            _decision = PreviewBufferSource.Resolve(
+                workspaceAvailable: workspace != null,
+                documentFound: workspaceBuffer != null);
 
-            _document = _textDocumentFactory!.CreateAndLoadTextDocument(path, contentType);
+            Microsoft.VisualStudio.Text.ITextBuffer buffer;
+            if (_decision.Kind == PreviewBufferKind.Workspace)
+            {
+                buffer = workspaceBuffer!;
+                _document = null;   // the workspace buffer is NOT ours to dispose (CloseView skips it)
+            }
+            else
+            {
+                // Content type by file extension (the preview shows ANY solution file, not just
+                // C#): .cs -> CSharp, .txt -> plaintext, ...; unregistered ->
+                // UnknownContentType (the view still displays, just unclassified).
+                IContentType contentType =
+                    _fileExtensionRegistry!.GetContentTypeForExtension(Path.GetExtension(path).TrimStart('.'))
+                    ?? _contentTypeRegistry!.UnknownContentType;
+
+                _document = _textDocumentFactory!.CreateAndLoadTextDocument(path, contentType);
+                buffer = _document.TextBuffer;
+            }
             _documentStamp = stamp;
 
             // Roles: Document + Interactive + Zoomable, EXCLUDING Editable (D-P3) — non-editable,
-            // caret/selection enabled, VsVim never attaches.
+            // caret/selection enabled, VsVim never attaches. UNCHANGED by this plan (AC3).
             ITextViewRoleSet roles = _textEditorFactory!.CreateTextViewRoleSet(
                 PredefinedTextViewRoles.Document,
                 PredefinedTextViewRoles.Interactive,
                 PredefinedTextViewRoles.Zoomable);
 
-            var view = (IWpfTextView)_textEditorFactory.CreateTextView(_document.TextBuffer, roles);
+            var view = (IWpfTextView)_textEditorFactory.CreateTextView(buffer, roles);
             _host = _textEditorFactory.CreateTextViewHost(view, false /* do not steal focus */);
             _view = view;
             _documentPath = path;
 
             // The tokens= diagnostic: VS's own classifier-chain span count over the whole snapshot —
             // proves the editor's highlighting ran (the migration's point). Logged ONLY here (a
-            // rebuild), matching the old renderer's emission pattern (reuse skipped the log).
+            // rebuild), matching the old renderer's emission pattern (reuse skipped the log). On
+            // the workspace path the Roslyn classifier chain attaches and the count GROWS
+            // (semantic spans); the harness's tokens=\d+ assertion is count-agnostic (presence-only).
             TelescopeLog.Log($"preview tokens={CountClassificationSpans(_view)}");
-            TelescopeLog.Log(PreviewDiagnostics.File(path, _document.TextBuffer.CurrentSnapshot.Length));
+            TelescopeLog.Log(PreviewDiagnostics.File(path, buffer.CurrentSnapshot.Length));
+        }
+
+        /// <summary>
+        /// Resolves the MEF <c>VisualStudioWorkspace</c> LAZILY (the MyExtensionPackage.cs:97
+        /// pattern — <c>VsServices.Mef</c>). Lazy, NOT constructor-eager: the workspace is
+        /// OPTIONAL (its absence degrades to the standalone fallback, never to "no preview" —
+        /// it must NOT set _unavailableReason), and at package-init time (when the host is
+        /// constructed) the solution may not be loaded yet. Null on any failure. Silent by
+        /// design — the plan pins NO new diagnostic literal; the existing preview file=/tokens=
+        /// lines still emit on either path.
+        /// </summary>
+        private Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace? TryResolveWorkspace()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                return VsServices.Mef<Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace>(_package);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The workspace buffer for <paramref name="path"/> (the Peek model — the SAME chain as
+        /// RoslynGatherers.TryGetCaretSymbol): CurrentSolution →
+        /// GetDocumentIdsWithFilePath(path) → the FIRST id → GetDocument(id) → TryGetText →
+        /// TryGetTextBuffer(text.Container). The container of an editor-OPEN document is the
+        /// editor-backed buffer container, so TryGetTextBuffer returns the LIVE buffer identity
+        /// — the semantic tagger keys the Document off the buffer's workspace attachment, so a
+        /// text-clone would NOT work. Null on any miss (not a solution document / a CLOSED
+        /// document whose text is not loaded / Roslyn failure) — the caller falls back to the
+        /// standalone document.
+        /// </summary>
+        private Microsoft.VisualStudio.Text.ITextBuffer? TryGetWorkspaceBuffer(
+            Microsoft.VisualStudio.LanguageServices.VisualStudioWorkspace workspace, string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var docId = workspace.CurrentSolution.GetDocumentIdsWithFilePath(path).FirstOrDefault();
+                if (docId == null)
+                {
+                    return null;
+                }
+                var document = workspace.CurrentSolution.GetDocument(docId);
+                if (document == null || !document.TryGetText(out var text))
+                {
+                    // A CLOSED file's text is not loaded in the solution snapshot — zero disk
+                    // I/O on the UI thread; the caller falls back to the standalone document.
+                    return null;
+                }
+                return Microsoft.CodeAnalysis.Text.Extensions.TryGetTextBuffer(text.Container);
+            }
+            catch
+            {
+                return null;   // any Roslyn failure (solution churn, deleted file) -> fallback
+            }
         }
 
         private int CountClassificationSpans(IWpfTextView view)
         {
             // Own try/catch: a classifier failure must not kill the (already hosted) view — the
-            // count reads 0 and the harness's tokens>=1 assertion surfaces the broken highlighting.
+            // count reads 0 and the harness's tokens=\d+ regex is presence-only (count-agnostic).
             try
             {
                 IClassifier classifier = _classifierAggregator!.GetClassifier(view.TextBuffer);
@@ -192,8 +280,12 @@ namespace MyExtension.Package
                 _host = null;
                 _view = null;
             }
-            if (_document != null)
+            if (_decision.OwnsDocument && _document != null)
             {
+                // ONLY the standalone document is ours (PreviewBufferSource: OwnsDocument=true).
+                // The workspace buffer is the LIVE shared buffer — disposing it would corrupt the
+                // workspace/main editor; _document is null on the workspace path anyway (belt and
+                // braces: both conditions).
                 try { _document.Dispose(); }
                 catch { /* already disposed */ }
                 _document = null;

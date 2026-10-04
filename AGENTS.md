@@ -234,7 +234,15 @@ Key facts that make this reliable:
   `[NeoVisual] block-caret active=True|False` (editor-view block caret),
   `[NeoVisual] solution-explorer search-focus` (i focused the search box),
    `[Telescope] opened file: ...`, `[Telescope] overlay closed`, `[Telescope] preview file=...`,
-   `[Telescope] preview tokens=...` (the hosted editor view's classifier span count; KNOWN LIMITATION (2026-10-04): the count reads 0 on the workspace-detached preview buffer — no Roslyn C# classifier, no semantic highlighting — until the workspace-attach fix lands, in flight in the planning hub),
+   `[Telescope] preview tokens=...` (the hosted editor view's classifier span count; the
+   buffer-source swap RESOLVED the highlighting mechanism (2026-10-04): the buffer is the file's
+   LIVE `VisualStudioWorkspace` buffer for editor-OPEN solution files (the Peek model) — the
+   FULL Roslyn classifier chain attaches; a CLOSED solution file or a non-solution file falls
+   back to the standalone content-type buffer. NOTE: the count is read synchronously at view
+   creation — BEFORE async classification lands — so it reads **0 for BOTH buffer sources**
+   (runs 168/169/170 all-0) and cannot discriminate engagement; the semantic coloring is
+   verified by the manual visual pass, not by this line; the harness regex is presence-only
+   `tokens=\d+`),
   `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...` (code-issues finder),
   `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
   (references finder — read/write access from Roslyn FindReferences),

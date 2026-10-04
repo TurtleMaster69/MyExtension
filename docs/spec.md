@@ -170,8 +170,11 @@ headers visible; one row = multiple columns from per-finder column sets —
 `ResultColumn` definitions, a default-visible subset per the column catalog;
 right-clicking a column header opens the chooser menu to toggle any column,
 catalog order stable), and a read-only **preview pane** on the right — a REAL
-read-only VS editor view hosted in the overlay (VS's own classifier highlighting;
-the Editable view role is excluded, so VsVim never attaches and there is no insert
+read-only VS editor view hosted in the overlay (the buffer is the file's LIVE
+`VisualStudioWorkspace` buffer for editor-OPEN solution files — the Peek model — so the
+FULL Roslyn classifier chain attaches, syntactic + semantic; CLOSED solution files and
+non-solution files fall back to the standalone content-type buffer with classifier
+highlighting only; the Editable view role is excluded, so VsVim never attaches and there is no insert
 mode; the custom SyntaxHighlighter tokenizer and its RichTextBox rendering are
 retired). Narrow columns render compact cell values: Access write → W, read → R;
 Issues Kind Error → err, Warning → warn, Todo → todo, Info → info; Implementation
@@ -265,7 +268,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[NeoVisual] solution-explorer search-focus`
 - `[Telescope] opened file: ...`
 - `[Telescope] overlay closed`
-- `[Telescope] preview file=...` / `[Telescope] preview tokens=...` (the hosted editor view's classifier span count) — KNOWN LIMITATION (2026-10-04): the count reads 0 on the workspace-detached preview buffer (no Roslyn C# classifier, no semantic highlighting) until the workspace-attach fix lands (in flight in the planning hub)
+- `[Telescope] preview file=...` / `[Telescope] preview tokens=...` (the hosted editor view's classifier span count) — the buffer-source swap RESOLVED the highlighting mechanism (2026-10-04): the buffer is the file's LIVE `VisualStudioWorkspace` buffer for editor-OPEN solution files (the Peek model), so the FULL Roslyn classifier chain (syntactic + semantic) attaches; a CLOSED solution file or a non-solution file falls back to the standalone content-type buffer. NOTE: the count is read synchronously at view creation — BEFORE async classification lands — so it reads **0 for BOTH buffer sources** (runs 168/169/170 all-0) and cannot discriminate engagement; the semantic coloring is verified by the manual visual pass, not by this line (the harness regex is presence-only `tokens=\d+`)
 - `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...`
 - `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
 - `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
@@ -446,11 +449,17 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
   i/Esc input mode.
 - `Space+e` toggles Solution Explorer open/close.
 - Telescope preview pane: a REAL read-only VS editor view hosted in the overlay
-  (VS's own classifier highlighting; the Editable view role excluded — VsVim never
-  attaches, no insert mode), Ctrl+H/L focus switch between List/Preview,
-  `TextMotionNavigator` (shared pure vim motions) moving the editor view's caret;
-  a/A/I insert placements are no-ops (the view is not editable); the custom
-  SyntaxHighlighter tokenizer and its RichTextBox rendering are RETIRED.
+  (FULL Roslyn highlighting — syntactic + semantic — for editor-OPEN solution files:
+  the buffer is the file's LIVE `VisualStudioWorkspace` buffer, the Peek model;
+  CLOSED solution files and non-solution files fall back to the standalone
+  content-type buffer with classifier highlighting only; the Editable view role
+  excluded — VsVim never attaches, no insert mode), Ctrl+H/L focus switch between
+  List/Preview, `TextMotionNavigator` (shared pure vim motions) moving the editor
+  view's caret; a/A/I insert placements are no-ops (the view is not editable); the
+  custom SyntaxHighlighter tokenizer and its RichTextBox rendering are RETIRED.
+  CodeLens reference counts are SKIPPED (they never attach to a hosted programmatic
+  view — the References finder covers counts); embedding a real document window in
+  the overlay was REJECTED (unsupported `IVsWindowFrame` reparenting).
 - Telescope prompt vim motions + white block caret in normal mode.
 - Editor insert-mode swallowing regression guard (`neovisual-editor-insert`).
 - Tool-window action-key leak guard (`FocusGuard`): `o`/`r`/`m`/`a`/hjkl are routed to a

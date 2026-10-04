@@ -7,10 +7,11 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** the columns UX bugfix (no
-h-scroll, all columns visible, min/max widths, logical shortening, column-relative window
-width, the selection contrast) — GREEN 2026-10-04 (bugfix + UX lane, e2e ENABLED; full
-41-scenario suite + both unit suites GREEN, zero flakes, 0 iterations)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** the preview buffer-source swap
+(the workspace buffer — the Peek model — for editor-OPEN solution files; FULL Roslyn
+highlighting) — GREEN 2026-10-04 (bugfix lane, e2e ENABLED; one RE-PLAN mid-item after the
+pinned `GetTextBuffer()` API proved absent on Roslyn 4.14; full 41-scenario suite + both unit
+suites GREEN, zero flakes, 0 iterations)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -111,17 +112,15 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **the columns UX bugfix reached GREEN 2026-10-04** with e2e
-  enabled; see the Done section. Nothing is in flight.)
-- **Next up:** **the preview buffer-source swap** (`plan-preview-buffer.md` — the fix the
-  columns plan's Done entry OWNERS to the planning hub: the workspace buffer
-  (`VisualStudioWorkspace` → `GetDocumentIdsWithFilePath` → `GetTextBuffer()`) for solution
-  files → FULL Roslyn highlighting (the Peek model); the standalone fallback otherwise;
-  CodeLens SKIPPED; the document-window embedding REJECTED. Telescope.Tests 221 → 224; the
-  plan is gate-APPROVED in the planning-hub session). **Then:** Gap 11 (the git bindings —
-  WRITTEN + APPROVED), Feature 7 (the pane architecture — WRITTEN + APPROVED), Gap 4 (the
-  recent-files finder — WRITTEN + APPROVED; `f,e` PROPOSED — confirm at handoff). All plans
-  live in
+- **In progress:** (none — **the preview buffer-source swap reached GREEN 2026-10-04** with
+  e2e enabled; see the Done section. Nothing is in flight.)
+- **Next up:** **Gap 11 — the git bindings** (`plan-gap11.md`, gate-APPROVED): `g,d` diff /
+  `g,b` blame / `g,h` history (the branches binding DROPPED — the user's decision; the
+  deferred lazygit overlay covers it); `g,g`/`g,c` unchanged until that overlay ships; the
+  scratch repo seeded (`git init`, `.git` excluded from the seed-leak set); the e2e scenario
+  `neovisual-git-bindings` (E2E-GIT-1). **Then:** Feature 7 (the pane architecture —
+  WRITTEN + APPROVED), Gap 4 (the recent-files finder — WRITTEN + APPROVED; `f,e` PROPOSED —
+  confirm at handoff). All plans live in
   `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/`
   and are handed off progressively (each written to `docs/implementation_plan.md` when it
   becomes the first item). Then the rest
@@ -253,12 +252,11 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **221 passed**; `tests/NeoVisual.Tests`
-  **190 passed** (after the columns UX bugfix, 2026-10-04).
+- Offline units: `tests/Telescope.Tests` **224 passed**; `tests/NeoVisual.Tests`
+  **190 passed** (after the preview buffer-source swap, 2026-10-04).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **41 scenarios** — ALL executed GREEN
-  (full-suite fresh boot with `-TimeoutSec 2400`, run 169, 2026-10-04; the columns UX
-  bugfix's final gate — `telescope-results-columns` first-try, the diagnostics byte-stable,
-  zero flakes). **No known-RED remains** —
+  (full-suite fresh boot with `-TimeoutSec 2400`, run 170, 2026-10-04; the preview
+  buffer-source swap's final gate — first-time pass, zero flakes). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
   `telescope-implementation` 7c6569b) - the full 41-scenario suite is GREEN.
 
@@ -402,12 +400,13 @@ Top of the queue, in priority order:
 > `results columns=` / `results count=` lines byte-stable).
 
 > **THEN (2026-10-04, gate-APPROVED, handed off in order):**
-> 2. **the preview buffer-source swap** (`plan-preview-buffer.md`) — the fix the columns plan's
->    Done entry OWNERS to the planning hub: the workspace buffer (`VisualStudioWorkspace` →
->    `GetDocumentIdsWithFilePath` → `GetTextBuffer()`) for solution files → FULL Roslyn
->    highlighting (the Peek model); the standalone fallback otherwise; CodeLens SKIPPED (the
->    References finder covers counts); the document-window embedding REJECTED (unsupported).
->    Telescope.Tests 212 → 215.
+> 2. ~~**the preview buffer-source swap** (`plan-preview-buffer.md`)~~ — **DONE** (GREEN
+>    2026-10-04, bugfix lane, e2e ENABLED; see the Done section). The workspace buffer (the
+>    Peek model) for editor-OPEN solution files → FULL Roslyn highlighting; the standalone
+>    fallback otherwise; CodeLens SKIPPED (the References finder covers counts); the
+>    document-window embedding REJECTED (unsupported). One RE-PLAN mid-item (the pinned
+>    `GetTextBuffer()` API absent on Roslyn 4.14 → the verified `TryGetText` +
+>    `TryGetTextBuffer` chain). Telescope.Tests 221 → 224.
 > 3. **Gap 11 — the git bindings** (`plan-gap11.md`): `g,d` diff / `g,b` blame / `g,h` history
 >    (the branches binding DROPPED — the user's decision; the deferred lazygit overlay covers
 >    it); `g,g`/`g,c` unchanged until that overlay ships; the scratch repo seeded (`git init`,
@@ -424,6 +423,15 @@ Top of the queue, in priority order:
 >    e2e scenario `telescope-recent`.
 > The lazygit overlay (`g,g`) remains DEFERRED (a bonus when the core is finished — Feature 7's
 > pane host is its foundation). Gap 5 (symbols) is the next planning batch.
+
+> **QUEUE CANDIDATE (filed 2026-10-04, from the preview-buffer item's VERIFY adjudication —
+> low priority, feature lane if picked up):** make the `preview tokens=` diagnostic
+> DISCRIMINATE engagement — the count is read synchronously at view creation (before async
+> classification lands), so it reads 0 for BOTH buffer sources (runs 168/169/170 all-0). Fix
+> direction: read the count after classification lands (a ClassificationChanged listener or
+> a delayed re-read logging an UPDATED value). M-M7: a diagnostic-behavior change → the
+> feature lane. Only worth it if the user wants a harness-assertable proof of semantic
+> coloring; the coloring itself is verified by the manual visual pass.
 
 > **FIRST ITEM (2026-10-04):** ~~the **Telescope results columns + preview-as-editor**
 > plan~~ — **DONE** (GREEN 2026-10-04, feature lane, e2e ENABLED; see the Done section).
@@ -790,6 +798,51 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Preview buffer-source swap (the workspace buffer — the Peek model — for
+  editor-OPEN solution files; FULL Roslyn highlighting)** (Lane: `bugfix`, e2e ENABLED;
+  5 delegations, 1 VS boot, 0 iterations; one RE-PLAN mid-item). The hosted read-only preview
+  editor now sources its buffer from the `VisualStudioWorkspace` for editor-OPEN solution
+  files (the Peek model): `GetDocumentIdsWithFilePath(path)` → `GetDocument(id)` →
+  `TryGetText(out text)` → `text.Container` → the public extension
+  `Microsoft.CodeAnalysis.Text.Extensions.TryGetTextBuffer(container)` → the LIVE editor
+  `ITextBuffer` — the FULL Roslyn classifier chain (syntactic + semantic) attaches, so C#
+  previews get real type/identifier coloring. A CLOSED solution file or a non-solution file
+  falls back to the EXISTING standalone `CreateAndLoadTextDocument` buffer (the
+  classifier/syntactic highlighting) — the fallback covers every miss (workspace unavailable,
+  not in the solution, container not editor-backed). The ownership split: the workspace buffer
+  is NEVER disposed (`OwnsDocument=false`); the standalone document is (`OwnsDocument=true`
+  gates `CloseView`). CodeLens SKIPPED (a document-well feature; the References finder covers
+  counts); the document-window embedding REJECTED (unsupported `IVsWindowFrame` reparenting).
+  NO new diagnostic — `preview file=`/`caret=`/`tokens=` byte-stable. **RE-PLAN (mid-item):**
+  the plan's pinned `Document.GetTextBuffer()` does NOT exist on the Roslyn 4.14 closure
+  (CS1061 — the plan's own STOP case fired; the build-agent correctly did not substitute);
+  re-pinned to the verified chain above (reflection probe of the local 4.14.0 reference DLLs +
+  the roslyn source tag `Visual-Studio-2022-Version-17.14.17`; GetTextSynchronously is
+  internal on 4.14 — `TryGetText` is the public zero-I/O member; `TryGetTextBuffer` is
+  nullable-return with NO out param). The 4a gate RE-APPROVED. **Known limitation
+  (adjudicated):** the `preview tokens=` diagnostic reads the span count synchronously at view
+  creation — BEFORE async classification lands — so it reads **0 for BOTH buffer sources**
+  (runs 168/169/170 all-0) and cannot discriminate engagement; the semantic coloring is
+  verified by the manual visual pass (code inspection + the deployment metadata prove the
+  mechanism); a diagnostic-improvement candidate is filed in the Pending queue. Unit tests:
+  Telescope 221 → **224** (3 new `Run_PreviewBuffer_*`: the workspace-first-then-fallback
+  decision + the ownership split); NeoVisual 190 untouched. Final gates: `dotnet build`
+  0 errors; Telescope.Tests **224 passed, 0 failed**; NeoVisual.Tests **190 passed, 0 failed**
+  (staggered); full 41-scenario e2e suite GREEN on a fresh boot (run 170, `-TimeoutSec 2400`:
+  41/41, first-time, zero flakes); both lints PASS; `-SelfCheck` PASS; `-List` 41; the
+  deployed DLL verified byte-identical to the post-fix build output (SHA-256) with both new
+  chain members in its metadata.
+  **Change summary:** created `Telescope/Overlay/Utils/PreviewBufferSource.cs` (the pure
+  decision: `Resolve` + `OwnsDocument` + `PreviewBufferKind`); modified
+  `MyExtension/Package/Utils/PreviewEditorHost.cs` (the `TryGetWorkspaceBuffer` chain + the
+  `Show`/`CloseView` ownership split + the stale comments fixed), `tests/Telescope.Tests/
+  Program.cs` (+3 tests), `docs/spec.md` §2.5/§4/§7, `AGENTS.md`, SKILL.md (the resolved-state
+  notes). **If this regresses, look first at `PreviewEditorHost.TryGetWorkspaceBuffer` (the
+  chain: a null/`TryGetText`-fail/`TryGetTextBuffer`-null must ALL fall back to the standalone
+  path — a thrown exception there breaks the preview) and the `CloseView` ownership gate
+  (disposing the live workspace buffer corrupts the real editor) — pinned by the 3
+  `Run_PreviewBuffer_*` tests + the e2e preview scenarios.**
 
 - **2026-10-04 — Columns UX bugfix (no h-scroll, all columns visible, min/max widths,
   logical shortening, column-relative window width, the selection contrast)** (Lane:

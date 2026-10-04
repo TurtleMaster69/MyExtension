@@ -61,6 +61,12 @@ in run 155/157)** — every gate was exercised and passed on the VS-capable mach
   byte-stable (proven at the source-diff AND live-log level), zero flakes; the 7 visual ACs
   verified by the MANUAL visual pass (code lines + the unit-pinned `ColumnWidths`/
   `ColumnTruncation` invariants; Telescope 221 / NeoVisual 190).
+- **Preview buffer-source swap (2026-10-04):** `E2E-PBUF-1` — discharged by the item's final
+  gate (the full 41-scenario fresh-boot suite, run 170, `-TimeoutSec 2400`): 41/41 GREEN,
+  first-time, zero flakes; `preview file=/caret=/tokens=` byte-stable (63/63/63); the tokens
+  VALUE read all-0 (the timing-bound read — see the adjudication in the item's Execution Log);
+  the semantic coloring verified by the manual visual pass (code inspection + the deployment
+  metadata; Telescope 224 / NeoVisual 190).
 
 ## Queued gates — Telescope columns + preview (2026-10-04)
 
@@ -112,9 +118,11 @@ e2e is ENABLED - the gates drain at each plan's VERIFY.
   item's final gate: the full 41-scenario fresh-boot suite, run 169; `telescope-results-columns`
   first-try, the diagnostics byte-stable at source-diff + live-log level; see the What ran
   GREEN section). No new scenario; the visual ACs were the MANUAL visual pass (all 7 verified).
-- **E2E-PBUF-1** - the preview buffer-source swap (second): no new scenario; the existing preview
-  scenarios stay GREEN (`preview tokens=` VALUE grows - presence-only regex); the semantic
-  coloring is the MANUAL visual pass.
+- ~~**E2E-PBUF-1** - the preview buffer-source swap (second)~~ — **DISCHARGED GREEN 2026-10-04**
+  (the item's final gate: the full 41-scenario fresh-boot suite, run 170; the preview scenarios
+  GREEN; `preview file=/caret=/tokens=` byte-stable; the tokens VALUE read all-0 — the
+  timing-bound read cannot discriminate engagement, adjudicated + doc-corrected; see the What
+  ran GREEN section). No new scenario; the semantic coloring is the MANUAL visual pass.
 - **E2E-GIT-1** - Gap 11 (third): the NEW `neovisual-git-bindings` scenario (created + proven RED
   before the build): the three `leader-binding executed:` lines + the ABSENCE of
   `Command 'Team.Git.*' failed` (the scratch repo seeded).

@@ -107,12 +107,13 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   (`WindowRect`, `NavigationSettings`, `WindowNavigationEngine`), the
   leader/shortcut matchers (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`),
   the vim-mode classifier (`VimModeClassifier` + `IVimModeSource`), the
-  init orchestrator (`InitSteps`), the navigation snapshot (`NavigationSnapshot`),
-  and the focus-keeper schedule (`FocusKeeperSchedule`).
+   init orchestrator (`InitSteps`), the navigation snapshot (`NavigationSnapshot`),
+   the focus-keeper schedule (`FocusKeeperSchedule`), and the close-window seam
+   (`CloseWindowCommand`).
   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
   `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-  run subsets. Currently **171 tests, all passing**.
+  run subsets. Currently **177 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -128,13 +129,14 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 37 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 38 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (37 total; no known-RED remaining — `explorer-open-searchbox` was GREened
+Scenarios (38 registered — 37 GREEN with no known-RED; `neovisual-window-management` is
+registered but never executed, queued as E2E-GAP1-1; `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -160,7 +162,8 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-no-selection` — j/k on an empty result list is a no-op (selection stays 0)
 - `telescope-preview` — preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview; syntax-highlighted tokens
 - `neovisual-window-nav` — Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
-- `neovisual-leader` — Space+W/Space+E fire leader bindings
+- `neovisual-leader` — Space+E and Space w - fire leader bindings (lowercase sequences; a lone Space+W consumes and waits — no binding fires)
+- `neovisual-window-management` — Space w -/w |/w d fire the `w`-prefix bindings (split below/right, focus-aware close; registered, never executed — queued as E2E-GAP1-1)
 - `neovisual-toolwindow` — Solution Explorer hjkl navigation + i/Esc input-mode
 - `neovisual-explorer-toggle` — Space+E opens/closes Solution Explorer (toggle)
 - `neovisual-explorer-open` — l expands fold, j/k navigate, Enter opens a file
@@ -255,7 +258,7 @@ Done and tested (live + unit):
 - Cardinal window navigation (Ctrl+H/J/K/L).
 - Telescope overlay: open, search, navigate, insert/normal mode, open-file, wrap, preview pane.
 - Solution Explorer controller: `o`/`Enter` open, `r` rename, `m` move, `a` add, `h`/`l` collapse/expand folds, j/k navigate, i/Esc input mode, `g` programmatically selects the first source file (`solution-explorer select file=...`, DTE `UIHierarchyItem.Select` — escapes the injected-key csproj-open trap; the tree is expanded first, and the file is opened + the selection re-asserted for ~1.5s to defeat VS's hover-preview focus steal).
-- `Space+E` toggles Solution Explorer open/close (action `toggle-solution-explorer`).
+- `Space+e` toggles Solution Explorer open/close (action `toggle-solution-explorer`).
 - Telescope preview pane: `TextMotionNavigator` (shared pure vim motions h/l/j/k/w/b/e/0/$/gg/G
   + a/A/I insert placements), Ctrl+H/L focus switch between List/Preview, read-only (no insert),
   and **syntax highlighting** (`SyntaxHighlighter` tokenizer → colored runs in a RichTextBox) —
@@ -278,7 +281,7 @@ Done and tested (live + unit):
   branch. The caret is now a **solid white block** (vim-style, not a translucent selection-looking
   rect), and the adornment removes only its own layer tag — it must never `RemoveAllAdornments()`
   (that deletes the editor's native caret too, leaving NO caret in insert mode).
-  `Space+C W` (new default binding) opens the Command Window. — `neovisual-textinput-motions` live
+  `Space+c,w` (new default binding) opens the Command Window. — `neovisual-textinput-motions` live
   test passes.
 - Solution Explorer search box: `i` (normal mode) **focuses the search box** via the native
   `Window.SolutionExplorerSearch` command and enters input mode (so `i` types a query, Escape
@@ -287,14 +290,14 @@ Done and tested (live + unit):
   j/k are single-line no-ops, 0/$ move to line start/end) and all
   other keys fall through into the box — no tree actions/arrow injection. Exiting input mode
   refocuses the tree (`View.SolutionExplorer`). — `neovisual-explorer-*` live tests pass.
-- Code-issues finder: `CodeIssuesFinder` (Telescope, `Name="Issues"`, `Space+F D`) lists the VS
+- Code-issues finder: `CodeIssuesFinder` (Telescope, `Name="Issues"`, `Space+f,d`) lists the VS
   Error List warnings/errors plus TODO/FIXME/HACK/XXX markers scanned from the solution's project
   files (`ProjectFiles` shared enumeration). Each row shows kind + line + message; the preview
   jumps to the issue's line (`TextMotionNavigator.MoveToLine`); Enter opens the file at the line
   (`TextSelection.GotoLine`). The fzf input is written as explicit UTF-8 bytes (the default ANSI
   StreamWriter mangles non-ASCII display text and breaks the display-keyed payload lookup).
   — `telescope-issues` live test passes.
-- References finder: `ReferencesFinder` (Telescope, `Name="References"`, `Space+F R`)
+- References finder: `ReferencesFinder` (Telescope, `Name="References"`, `Space+f,r`)
   lists every reference to the symbol at the caret in the active document, gathered
   from Roslyn `SymbolFinder.FindReferencesAsync` (MEF-resolved
   `VisualStudioWorkspace`; the caret symbol resolved via the active editor view,
@@ -307,7 +310,7 @@ Done and tested (live + unit):
   async calls run inside `ThreadHelper.JoinableTaskFactory.Run` — never
   `.Result`/`.GetAwaiter().GetResult()` on the UI thread.
   — `telescope-references` live test passes.
-- Grep finder: `GrepFinder` (Telescope, `Name="Grep"`, `Space+F G`) searches the
+- Grep finder: `GrepFinder` (Telescope, `Name="Grep"`, `Space+f,g`) searches the
   solution's project files for the typed query — **query-driven** through the
   `IsQueryDriven` seam in the overlay (per-keystroke re-gather with a ~200ms
   debounce; the fzf filter path is skipped for query finders but untouched for
@@ -316,7 +319,7 @@ Done and tested (live + unit):
   200 hits; the preview jumps to the hit line; Enter opens the file at the line.
   Diagnostics: `grep hits=...` (per-query summary) and
   `opened grep: file=... line=...`. — `telescope-grep` live test passes.
-- Fzf finder: `FzfFinder` (Telescope, `Name="Fzf"`, `Space+F Z`) fuzzy-matches the
+- Fzf finder: `FzfFinder` (Telescope, `Name="Fzf"`, `Space+f,z`) fuzzy-matches the
   solution's project-file **contents** for the typed query — **query-driven** through
   the `IsQueryDriven` seam (per-keystroke re-gather with a ~200ms debounce), filtering
   one file at a time with fzf `--filter` and mapping matched lines back via the pure
@@ -327,7 +330,7 @@ Done and tested (live + unit):
   `fzf unavailable — literal fallback`, and `opened fzf: file=... line=...`.
   — `telescope-fzf` live test passes.
 - Implementation finder: `ImplementationFinder` (Telescope, `Name="Implementation"`,
-  `Space+F I`) lists the implementations/overrides of the symbol at the caret,
+  `Space+f,i`) lists the implementations/overrides of the symbol at the caret,
   gathered from Roslyn `SymbolFinder.FindImplementationsAsync` (MEF-resolved
   `VisualStudioWorkspace`; the caret symbol resolved via the active editor view).
   Each hit maps the implementation symbol's first in-source declaring location
@@ -365,11 +368,13 @@ Done and tested (live + unit):
   defaults in `MyExtension/Resources/default-keybindings.json` (embedded resource). Action
   names are resolved in `InputHandler.ResolveAction` (`navigate-left` etc.);
   `command:<VsCommandName>` runs any VS command by name (this is how the
-  LazyVim-style leader bindings like `w`→save are wired). To add a *new built-in
-  action*, add a case there and a line in `default-keybindings.json`.
+  LazyVim-style leader bindings like `w,-`→`Window.NewHorizontalTabGroup` are wired).
+  Leader sequences are **case-sensitive** (a capital letter in the config means
+  Shift+letter; `s,g` ≠ `s,G`); simple shortcuts stay case-insensitive. To add a
+  *new built-in action*, add a case there and a line in `default-keybindings.json`.
 - **`toggle-solution-explorer`** is a built-in action (`InputHandler.ToggleSolutionExplorer`)
   that opens/focuses Solution Explorer when hidden and closes it when visible, via
-  `dte.Windows.Item(vsWindowKindSolutionExplorer)`. `Space+E` is bound to it.
+   `dte.Windows.Item(vsWindowKindSolutionExplorer)`. `Space+e` is bound to it.
 - **Tool-window controllers**: `WindowManager.GetController(type)` returns a registered
   controller or a per-type `GeneralToolWindowController`. `SolutionExplorerController` is
   registered in `MyExtensionPackage` for `ToolWindowType.SolutionExplorer` and adds action keys

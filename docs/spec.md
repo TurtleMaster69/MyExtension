@@ -177,23 +177,29 @@ on the list, or `TextMotionNavigator` (vim motions) when focus is on the preview
 - **Leader key is Space** by default. Bindings are user-configurable via
   `%APPDATA%\MyExtension\keybindings.json` (read only if it exists; merged over
   the embedded `MyExtension/Resources/default-keybindings.json`).
-- Simple modifier shortcuts are distinguished by a `+` (e.g. `Ctrl+H`); leader
-  sequences are matched after the leader key (e.g. `W`, `F,F`).
+- Simple modifier shortcuts are distinguished by a `+` (e.g. `Ctrl+H`) and are matched
+  case-insensitively; leader sequences are matched after the leader key (e.g. `w`,
+  `f,f`) and are **case-sensitive** — a capital letter in the config means Shift+letter,
+  so `s,g` and `s,G` are distinct bindings (non-letter keys are shift-insensitive).
 - Action names resolve in `InputHandler.ResolveAction`: `navigate-left/right/up/down`,
   `telescope`, `telescope-issues`, `telescope-references`, `telescope-grep`,
-  `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`, or
-  `command:<VsCommandName>`.
+  `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`,
+  `close-window`, or `command:<VsCommandName>`.
 - Telescope actions are derived from `TelescopeLauncher.FinderNames` (add a `FinderNames`
   entry + a `default-keybindings.json` line); `ResolveAction` cases are only for
   non-telescope built-ins.
 
 Built-in defaults (`MyExtension/Resources/default-keybindings.json`): `Ctrl+H/J/K/L` →
-navigate; `Space+B,D` close; `Space+W` save; `Space+Q` exit; `Space+E`
-toggle-solution-explorer; `Space+F,F` GoToFile; `Space+F,T` telescope;
-`Space+F,D` telescope-issues; `Space+F,R` telescope-references; `Space+F,G` telescope-grep;
-`Space+F,Z` telescope-fzf; `Space+F,I` telescope-implementation; `Space+C,W` Command Window;
+navigate; `Space+w,-` split below (`command:Window.NewHorizontalTabGroup`); `Space+w,|`
+split right (`command:Window.NewVerticalTabGroup`); `Space+w,d` close-window
+(focus-aware: a focused tool window closes via `Window.CloseToolWindow`, anything else
+via `Window.CloseDocumentWindow`); `Space+b,d` close; `Space+q` exit; `Space+e`
+toggle-solution-explorer; `Space+f,f` GoToFile; `Space+f,t` telescope;
+`Space+f,d` telescope-issues; `Space+f,r` telescope-references; `Space+f,g` telescope-grep;
+`Space+f,z` telescope-fzf; `Space+f,i` telescope-implementation; `Space+c,w` Command Window;
 plus Git/build/terminal
-`command:` bindings.
+`command:` bindings. There is no save binding (save with Ctrl+S); `w` is a
+window-management prefix — a lone `Space+w` consumes and waits, firing nothing.
 
 ## 4. Diagnostics = test contract
 
@@ -262,7 +268,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), and the pane-failure fallback (`PaneFailureTracker`).
-- `dotnet run --project tests/NeoVisual.Tests` — **171 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **177 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -273,8 +279,8 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   `NavigationSettings`, `WindowNavigationEngine`), the leader/shortcut matchers
   (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`), the vim-mode classifier
   (`VimModeClassifier` + `IVimModeSource`), the init orchestrator (`InitSteps`),
-  the navigation snapshot (`NavigationSnapshot`), and the focus-keeper schedule
-  (`FocusKeeperSchedule`).
+   the navigation snapshot (`NavigationSnapshot`), the focus-keeper schedule
+   (`FocusKeeperSchedule`), and the close-window seam (`CloseWindowCommand`).
 
 `InternalsVisibleTo` is set for these assemblies. Extract pure logic into
 dependency-free classes (the `OverlayKeyHandler` / `TextMotionNavigator` pattern) so
@@ -288,13 +294,14 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 37 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 38 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **37 scenarios** (no known-RED remaining — `explorer-open-searchbox` was GREened
-2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
+The **38 registered scenarios** (37 GREEN with no known-RED — `neovisual-window-management`
+is registered but never executed, queued as E2E-GAP1-1; `explorer-open-searchbox` was
+GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
 `telescope-grep`, `telescope-implementation`, `telescope-fzf`,
@@ -302,7 +309,8 @@ The **37 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 `telescope-open-file-navigation`, `telescope-prompt-motions`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
 `telescope-no-selection`, `telescope-preview`, `neovisual-window-nav`,
-`neovisual-leader`, `neovisual-toolwindow`, `neovisual-explorer-toggle`,
+`neovisual-leader`, `neovisual-window-management`, `neovisual-toolwindow`,
+`neovisual-explorer-toggle`,
 `neovisual-explorer-open`, `neovisual-explorer-open-o`,
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
 `neovisual-explorer-add`, `neovisual-explorer-move`, `neovisual-explorer-move-editor-focus`,
@@ -377,7 +385,7 @@ The **37 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
   trap; tree expanded first, file opened + selection re-asserted ~1.5s to defeat
   VS's hover-preview focus steal), `h`/`l` collapse/expand folds, j/k navigate,
   i/Esc input mode.
-- `Space+E` toggles Solution Explorer open/close.
+- `Space+e` toggles Solution Explorer open/close.
 - Telescope preview pane: `TextMotionNavigator` (shared pure vim motions +
   a/A/I insert placements), Ctrl+H/L focus switch between List/Preview, read-only,
   syntax highlighting (`SyntaxHighlighter`).
@@ -393,25 +401,25 @@ The **37 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 - Solution Explorer search box: `i` (normal mode) focuses the search box; WPF
   TextBox motions via shared `TextMotionHelper` (h/l/w/b/e/a/A/I + j/k/0/$; j/k are
   single-line no-ops, 0/$ move to line start/end).
-- Code-issues finder (`Space+F D`): VS Error List warnings/errors + TODO markers,
+- Code-issues finder (`Space+f,d`): VS Error List warnings/errors + TODO markers,
   preview jumps to line, Enter opens file at line.
-- References finder (`Space+F R`): every reference to the symbol at the caret,
+- References finder (`Space+f,r`): every reference to the symbol at the caret,
   with read/write access from Roslyn find-references; preview jumps to the
   reference line; Enter opens the file at the line.
-- Grep finder (`Space+F G`): query-driven search of the solution's project
+- Grep finder (`Space+f,g`): query-driven search of the solution's project
   files (`IsQueryDriven` seam + ~200ms debounce, fzf skipped for query finders);
   preview jumps to the hit line; Enter opens the file at the line.
-- Implementation finder (`Space+F I`): implementations/overrides of the symbol
+- Implementation finder (`Space+f,i`): implementations/overrides of the symbol
   at the caret via Roslyn `FindImplementationsAsync` (first in-source declaring
   location, deterministic type-before-member ordering); preview jumps to the
   implementation line; Enter opens the file at the line.
-- Fzf finder (`Space+F Z`): query-driven fuzzy **content** finder over the
+- Fzf finder (`Space+f,z`): query-driven fuzzy **content** finder over the
   solution's project files (`FzfFinder`, `Name="Fzf"`; per-keystroke re-gather
   with a ~200ms debounce, one file at a time via fzf `--filter`, matched lines
   mapped back by the pure `FzfLineMapper`); falls back to a literal
   case-insensitive substring scan (`LiteralLineScanner`, shared with
   `GrepFinder`) when fzf is unavailable; preview jumps to the hit line; Enter
-  opens the file at the line. The existing `FileFinder` (`Space+F T`) is the
+  opens the file at the line. The existing `FileFinder` (`Space+f,t`) is the
   fuzzy file finder. — `telescope-fzf` live test passes.
 
 ## 8. Build & test commands
@@ -419,5 +427,6 @@ The **37 scenarios** (no known-RED remaining — `explorer-open-searchbox` was G
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (172) and
   `dotnet run --project tests/NeoVisual.Tests` (171).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (37 scenarios; no known-RED; a few flake on retry);
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (38 registered — 37 GREEN +
+  `neovisual-window-management` queued unexecuted; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

@@ -51,17 +51,18 @@
 | command | what it does | notes |
 |---|---|---|
 | `dotnet build` | build the VSIX solution | allowed; this is a VSIX — a plain `dotnet run` does not work |
-| `dotnet run --project tests/Telescope.Tests` | offline Telescope unit tests (172) | allowed; supports a substring filter as the first arg and `--list` |
-| `dotnet run --project tests/NeoVisual.Tests` | offline NeoVisual unit tests (168) | allowed; supports a substring filter as the first arg and `--list` |
-| `pwsh tools/harness/test-e2e.ps1` | live E2E suite (36 scenarios, boots VS Experimental) | allowed; slow — use `-Tests <subset>` during a loop, full suite only as the final gate |
-| `pwsh tools/harness/test-e2e.ps1 -Tests <names>` | run a subset of e2e scenarios | allowed; `-NoBootstrap` reuses an already-booted instance (same code state only) |
+| `dotnet run --project tests/Telescope.Tests` | offline Telescope unit tests | allowed; supports a substring filter as the first arg and `--list` |
+| `dotnet run --project tests/NeoVisual.Tests` | offline NeoVisual unit tests | allowed; supports a substring filter as the first arg and `--list` |
+| `pwsh tools/harness/test-e2e.ps1` | live E2E suite (boots VS Experimental) | allowed; slow — use `-Tests <subset>` during a loop, full suite only as the final gate |
+| `pwsh tools/harness/test-e2e.ps1 -Tests <names>` | run a subset of e2e scenarios | allowed; `-Tests` accepts ANY form (comma-joined, array, or repeated flags); `-NoBootstrap` reuses an already-booted instance (same code state only) |
 | `pwsh tools/harness/test-e2e.ps1 -List` | list registered scenarios | allowed; cheap no-VS parse check |
 | `pwsh tools/lint/check-doc-refs.ps1` | doc-reference lint (unresolved backticked refs) | allowed; ~2s, no VS |
+| `pwsh tools/lint/check-doc-content.ps1` | doc-content lint (12 fixed-state assertions incl. DOC-66-3 baseline attribution) | allowed; ~1s, no VS; `-List` prints the assertions without running |
 | `lsp` tool (opencode) | symbol navigation (definition/references/hover/symbols/implementations/direct callers) | requires `"lsp": true` in config + `OPENCODE_EXPERIMENTAL_LSP_TOOL=true`; see `.opencode/LSP-SETUP.md` |
 | `trailmark --version` / `uv run trailmark --version` | boot Trailmark (code graph) | allowed; if missing, install with `uv tool install trailmark` |
 | `uv run --with trailmark python -` | run a Trailmark query snippet | allowed; always parse with `language="c_sharp"` (the CLI default `python` yields an empty graph here) |
-| `git status` / `git diff` / `git log` / `git show` | inspect repo state | allowed (read-only) |
-| `git add <paths>` / `git commit -m "<msg>"` | stage + commit the GREEN change set (neovim_hub's atomic-commit policy) | allowed; push/merge/pull remain denied |
+| `git status` / `git diff` / `git log` / `git show` | inspect repo state | permission-dependent — allowed for agents with default bash; agents with `bash: {"*": deny, "rg *": allow}` are denied it (read-only) |
+| `git add <paths>` / `git commit -m "<msg>"` | stage + commit the GREEN change set (neovim_hub's atomic-commit policy) | permission-dependent (same caveat); push/merge/pull remain denied |
 | `rg --no-ignore -n <pattern> <path>` | search including gitignored paths | allowed; the `grep` tool cannot reach gitignored paths |
 | `Get-ChildItem ...` / `ls ...` / `dir ...` | list files/folders | permission-dependent — agents with `bash: {"*": deny, "rg *": allow}` are denied it; use the `read` (directory) or `glob` tool instead |
 
@@ -80,7 +81,6 @@
 | `cat <file>` (bash) | bash denied; `read` tool is better | wrong-tool | `read` tool | no |
 | `head ...` (bash) | `head` is NOT installed on this machine (Unix tool) | other | `Select-Object -First N` (pwsh) | no |
 | `tail ...` (bash) | `tail` is NOT installed on this machine (Unix tool) | other | `Select-Object -Last N` (pwsh) | no |
-| `pwsh tools/harness/test-e2e.ps1 -Tests a,b,c` | the `[string[]]` array does not bind through the native `pwsh` boundary (arrives as one string → "Unknown scenario(s)") | misuse | `& tools/harness/test-e2e.ps1 -Tests a,b,c` (call operator) | no |
 | `pwsh -Command "<script with $vars>"` (double-quoted) | the OUTER shell interpolates the inner script's `$vars`/`$_` before the inner pwsh sees them → the inner script arrives mangled → `ParserError` | misuse | single-quote the `-Command` argument (`pwsh -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it | no |
 | `pwsh -Command '... [ref]$null ...'` (ParseFile tokens ref) | `InvalidOperation: [ref] cannot be applied to a variable that does not exist` — `[ref]$null` is invalid; the ParseFile tokens ref needs a real variable | misuse | use the harness's built-in `pwsh tools/harness/test-e2e.ps1 -SelfCheck` (parse + helper invariants + Assert-SeedConsistent), or assign `$tokens = $null` first | no |
 
@@ -121,7 +121,7 @@
 - CMD: `uv run --with trailmark python -` (parse_directory + QueryEngine.callers_of / to_json / preanalysis)
 - RESULT: `ImportError: cannot import name 'from_directory'` (API is `parse_directory`); then `AttributeError: 'CodeGraph' object has no attribute '_graph'` (preanalysis + to_json); then `AttributeError: 'CodeGraph' object has no attribute 'find_node_id'` (callers_of on proxy ids)
 - REASON: other — the installed trailmark package's `CodeGraph` lacks `_graph`/`find_node_id`, so the documented QueryEngine API (preanalysis, to_json, callers_of) is broken on this install; parsing works but querying does not
-- ALTERNATIVE: `parse_directory` parses, but QueryEngine is unusable here — use grep/read for literal structural lookups until the trailmark version is reconciled with the vendored skill
+- ALTERNATIVE: **SUPERSEDED — see the CORRECTION entry below.** The QueryEngine API works with the correct import (`from trailmark.query import QueryEngine`); do NOT fall back to grep/read for call-graph questions.
 - NEEDS-PERMISSION: no
 
 ### 2026-10-02 — code-review-hub (verification) — CORRECTION to the entry above
@@ -150,4 +150,18 @@
 - RESULT: `InvalidOperation: [ref] cannot be applied to a variable that does not exist.`
 - REASON: misuse — `[ref]$null` is invalid; the ParseFile tokens ref needs a real variable
 - ALTERNATIVE: use the harness's built-in `pwsh tools/harness/test-e2e.ps1 -SelfCheck` (parse + helper invariants + Assert-SeedConsistent), or assign `$tokens = $null` first
+- NEEDS-PERMISSION: no
+
+### 2026-10-04 — implementation-planner (Section A build plan)
+- OPERATION: `glob` tool, pattern `.opencode/workspaces/.../artifacts/section-a.md` (file confirmed to exist via `read`)
+- RESULT: "No files found" — false negative; the `glob` tool does not reach paths under `.opencode/` (likely hidden/gitignored traversal)
+- REASON: wrong-tool
+- ALTERNATIVE: `read` the directory path (lists entries), or `rg --no-ignore` for content search under `.opencode/`
+- NEEDS-PERMISSION: no
+
+### 2026-10-04 — build-agent (Gap 1), logged by neovim_hub
+- OPERATION: `lsp` symbol queries (e.g. `workspaceSymbol`) against NEWLY CREATED files (e.g. `MyExtension/Input/Utils/CloseWindowCommand.cs` right after creation)
+- RESULT: stale-index false errors — the LSP reported the new symbol as non-existent until the next rebuild
+- REASON: server — the Roslyn language server's index lags newly created files until a build refreshes it
+- ALTERNATIVE: run `dotnet build` first (or re-query after the build); disprove a suspected LSP false negative with the compiler (`dotnet build` 0 errors), not the LSP index
 - NEEDS-PERMISSION: no

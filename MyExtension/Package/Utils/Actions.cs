@@ -25,6 +25,7 @@ namespace MyExtension.Package
                 ["navigate-up"] = (h, _) => () => h.Navigate(Direction.Up),
                 ["navigate-down"] = (h, _) => () => h.Navigate(Direction.Down),
                 ["toggle-solution-explorer"] = (h, _) => () => h.ToggleSolutionExplorer(),
+                ["close-window"] = (h, _) => () => h.CloseWindow(),
             };
 
             // The telescope entries are derived from TelescopeLauncher.FinderNames (the single

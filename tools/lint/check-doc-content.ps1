@@ -19,7 +19,8 @@ Assertions (each maps to a BP step):
   DOC-66-1  (BP-66/m66) progress.md:10 header no longer says "Chunk C restructure pending".
   DOC-66-2  (BP-66/m67) progress.md "Next up" section points at the combined plan
                         (98 findings + restructure), not the stale Architecture backlog.
-  DOC-66-3  (BP-66/n20) progress.md baseline (143/140) is attributed to the 67-findings plan,
+  DOC-66-3  (BP-66/n20) progress.md baseline carries attributed unit counts attributed to a
+                        legitimate GREEN item (most recently "after Feature 6", 2026-10-04),
                         not the Architecture consolidation.
   DOC-66-4  (BP-66/n21) architecture-review.md:417 "Namespace/folder hygiene" claim updated to
                         MyExtension.Navigation / Navigation/ (no CardinalMovment).
@@ -156,9 +157,10 @@ Add-Check 'DOC-66-2' 'progress.md "Next up" section points at the current code-r
 
 $baselineLine = Normalize-Text (Get-Bullet $progressPath '- Offline units:')
 $baselineWrongAttr = ($baselineLine -match 'Architecture consolidation')
-$baselineRightAttr = ($baselineLine -match '51 findings' -or $baselineLine -match 'Code review fixes' -or $baselineLine -match '67 findings' -or $baselineLine -match '2026-09-30' -or $baselineLine -match 'Code review findings' -or $baselineLine -match 'combined plan')
-Add-Check 'DOC-66-3' 'progress.md baseline (153/163) is attributed to the current code-review plan (51 findings), not the Architecture consolidation' `
-    (-not $baselineWrongAttr -and $baselineRightAttr) ("wrongAttr=$baselineWrongAttr rightAttr=$baselineRightAttr line: $baselineLine")
+$baselineRightAttr = ($baselineLine -match '51 findings' -or $baselineLine -match 'Code review fixes' -or $baselineLine -match '67 findings' -or $baselineLine -match '2026-09-30' -or $baselineLine -match 'Code review findings' -or $baselineLine -match 'combined plan' -or $baselineLine -match 'after Feature')
+$baselineHasCounts = ($baselineLine -match '\*\*\d+ passed\*\*')
+Add-Check 'DOC-66-3' 'progress.md baseline carries attributed unit counts (e.g. "**172 passed** ... after Feature 6 ... 2026-10-04") attributed to a legitimate GREEN item, not the Architecture consolidation' `
+    (-not $baselineWrongAttr -and $baselineRightAttr -and $baselineHasCounts) ("wrongAttr=$baselineWrongAttr rightAttr=$baselineRightAttr hasCounts=$baselineHasCounts line: $baselineLine")
 
 $hygieneLine = Get-Bullet $archPath '**Namespace/folder hygiene:**'
 $hygieneNew = ($hygieneLine -match 'MyExtension\.Navigation' -or $hygieneLine -match 'Navigation/')

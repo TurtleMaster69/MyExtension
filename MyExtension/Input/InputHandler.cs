@@ -19,8 +19,8 @@ namespace MyExtension.Input
     ///
     /// <para/>
     /// <b>Two kinds of bindings</b> (loaded from JSON by <see cref="KeybindingConfig"/>):
-    ///   - <b>Leader sequences</b>: bare keys matched only after the leader key, e.g. <c>w</c> →
-    ///     save, <c>f f</c> → Go To File. These are the LazyVim-style chords.
+    ///   - <b>Leader sequences</b>: bare keys matched only after the leader key, e.g. <c>f,f</c> →
+    ///     Go To File. These are the LazyVim-style chords.
     ///   - <b>Simple shortcuts</b>: a key plus Ctrl/Shift/Alt, matched directly, e.g. <c>Ctrl+H</c>.
     ///     They are distinguished from leader sequences by the <c>+</c> in their key string.
     ///
@@ -110,7 +110,7 @@ namespace MyExtension.Input
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
 
-        // Leader sequences (matched only after the leader key): "W", "F,F", "B,D"...
+        // Leader sequences (matched only after the leader key): "w", "f,f", "b,d"...
         private readonly Dictionary<string, Action> _leaderBindings;
 
         // Simple modifier shortcuts (matched directly): "Ctrl+H", "Alt+X"...
@@ -162,10 +162,13 @@ namespace MyExtension.Input
         /// ready-to-run delegates, split by whether the key is a modifier shortcut (contains "+")
         /// or a leader sequence (everything else). This split is what keeps a bare <c>e</c> from
         /// firing the <c>e</c>-after-leader binding without the leader key being pressed first.
+        /// The leader dictionary is case-sensitive (Ordinal) so leader combos distinguish "s,g"
+        /// from "s,G" (a capital letter in the config means Shift+letter); the simple dictionary
+        /// stays case-insensitive (KeyNameBuilder's "Ctrl+H" format is case-canonical).
         /// </summary>
         private (Dictionary<string, Action> leader, Dictionary<string, Action> simple) BuildBindings(Dictionary<string, string> namedBindings)
         {
-            var leader = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
+            var leader = new Dictionary<string, Action>(StringComparer.Ordinal);
             var simple = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var pair in namedBindings)
@@ -194,7 +197,7 @@ namespace MyExtension.Input
         /// Maps a named action string to a delegate. Built-in actions (cardinal navigation,
         /// telescope finders, solution-explorer toggle) resolve through the <see cref="Actions"/>
         /// registry; the generic <c>"command:Name"</c> form runs any VS command by name, which is
-        /// how the LazyVim-style leader bindings (<c>w</c> -> save, etc.) are wired into the
+        /// how the LazyVim-style leader bindings (<c>w,-</c> -> split below, etc.) are wired into the
         /// extension without a code change per command.
         /// </summary>
         private Action? ResolveAction(string name)
@@ -553,6 +556,17 @@ namespace MyExtension.Input
             {
                 NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}ToggleSolutionExplorer failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Focus-aware "delete window": closes the active tool window when a tool window holds
+        /// focus, else the active document. Runs the native VS command by name via DTE; the
+        /// surface choice is the pure <see cref="CloseWindowCommand"/> seam.
+        /// </summary>
+        internal void CloseWindow()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            ExecuteVsCommand(CloseWindowCommand.For(_windowManager.IsToolWindow));
         }
     }
 }

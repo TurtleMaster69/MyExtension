@@ -39,14 +39,14 @@ namespace MyExtension.Input
     ///   "leader": "Space",
     ///   "bindings": {
     ///     "Ctrl+H": "navigate-left",
-    ///     "F,F":   "command:Edit.GoToFile",
+    ///     "f,f":   "command:Edit.GoToFile",
     ///     ...
     ///   }
     /// }
     ///
     /// The "bindings" map uses the same sequence syntax as the built-in defaults:
     ///   - "Ctrl+H"            -> Ctrl modifier + H
-    ///   - "F,F"               -> leader (Space) followed by F then F
+    ///   - "f,f"               -> leader (Space) followed by f then f
     /// A value of null removes the binding so it falls through to the editor.
     ///
     /// Action names:
@@ -125,14 +125,16 @@ namespace MyExtension.Input
         }
 
         /// <summary>
-        /// N56: the shared merge prologue — creates the case-insensitive bindings map + default
-        /// leader, applies each JSON source in order (later sources override earlier ones), and
-        /// returns the config. A source that fails to parse is logged and skipped so one bad
-        /// source never discards the others.
+        /// N56: the shared merge prologue — creates the case-sensitive (Ordinal) bindings map —
+        /// leader combos distinguish <c>s,g</c> from <c>s,G</c>; a user <c>%APPDATA%</c> override
+        /// must match the default's case to override or unbind it (a case-mismatched <c>null</c>
+        /// no longer removes a default) — plus the default leader, then applies each JSON source
+        /// in order (later sources override earlier ones), and returns the config. A source that
+        /// fails to parse is logged and skipped so one bad source never discards the others.
         /// </summary>
         private static KeybindingConfig Merge(IReadOnlyList<(string Json, string ErrorMessage)> sources)
         {
-            var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var bindings = new Dictionary<string, string>(StringComparer.Ordinal);
             var leaderKey = Keys.Space;
             foreach (var (json, errorMessage) in sources)
             {

@@ -65,7 +65,7 @@ namespace MyExtension.Input
                 {
                     _sequenceBuilder.Append(',');
                 }
-                _sequenceBuilder.Append(KeyNames.ToString(key));
+                _sequenceBuilder.Append(KeyNames.ToString(key, shift));
 
                 string sequence = _sequenceBuilder.ToString();
 
@@ -108,12 +108,12 @@ namespace MyExtension.Input
 
         /// <summary>
         /// Builds the set of every proper prefix of every binding sequence (at key boundaries),
-        /// e.g. <c>"F"</c> for the binding <c>"F,F"</c>. A sequence is a live prefix iff it is in
+        /// e.g. <c>"f"</c> for the binding <c>"f,f"</c>. A sequence is a live prefix iff it is in
         /// this set — equivalent to the old <c>_bindings.Keys.Any(k => k.StartsWith(sequence + ","))</c>.
         /// </summary>
         private static HashSet<string> BuildPrefixSet(IReadOnlyDictionary<string, Action> bindings)
         {
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var set = new HashSet<string>(StringComparer.Ordinal);
             foreach (string binding in bindings.Keys)
             {
                 string[] keys = binding.Split(',');

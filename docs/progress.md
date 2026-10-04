@@ -7,15 +7,16 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Feature 6 — Solution Explorer search-box vim motions (j/k/0/$) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 37-scenario suite + both unit suites GREEN)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 1 — window-management leader bindings (`w` prefix) + case-sensitive leader combos — GREEN 2026-10-04 (feature lane, **unit-only, e2e deferred**; both unit suites GREEN; e2e gates queued E2E-GAP1-1..5)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
-> **Where we left off:** the build loop is **PAUSED by the user**. The last GREEN item is
-> **Feature 6** (commit `d5927e5`, hash recorded in `13c7098`). The next item is **Gap 1
-> (window-management leader bindings)** — its initial plan was NOT written (the
-> `implementation-planner` subagent returned an empty result twice; the user then changed
-> the planning tactic, below). Nothing is in flight; the working tree is clean.
+> **Where we left off:** the build loop RESUMED and **Gap 1 (window-management leader
+> bindings + case-sensitive leader combos) is GREEN 2026-10-04** — executed in the
+> **unit-only lane** (e2e deferred; gates queued as E2E-GAP1-1..5 in `docs/e2e-queue.md`)
+> per the plan in `docs/implementation_plan.md` (6 phases, 46 BP steps, gate-APPROVED).
+> The next item is **Gap 3 (diagnostics navigation)**. Nothing is in flight; the working
+> tree is clean after the GREEN commit.
 
 ### User instructions that override the default loop (2026-10-04)
 
@@ -75,8 +76,11 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ### Completed this session
 
+- **Gap 1 — window-management leader bindings (`w` prefix) + case-sensitive leader
+  combos** — GREEN 2026-10-04 (unit-only lane, e2e deferred; gates queued E2E-GAP1-1..5).
+  NeoVisual 177 / Telescope 172. See the Done section.
 - **Telescope `fzf` finder** — GREEN 2026-10-03 (commit `deebeb2`; bookkeeping `08d31c8`).
-  Full 36-scenario e2e + Telescope 172 / NeoVisual 168. See the Done section.
+   Full 36-scenario e2e + Telescope 172 / NeoVisual 168. See the Done section.
 - **Feature 6 — Solution Explorer search-box vim motions (`j`/`k`/`0`/`$`)** — GREEN
   2026-10-04 (commit `d5927e5`; hash recorded `13c7098`). Full 37-scenario e2e + NeoVisual
   171 / Telescope 172. See the Done section.
@@ -87,21 +91,26 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 ### Next session — first actions
 
 1. Re-read this handoff + the `[2026-10-03]`/`[2026-10-04]` Decisions entries.
-2. Start **Gap 1** using the **new two-stage fan-out tactic** (general plan → split →
-   parallel detail planners → aggregate). **Unit-only lane; queue the e2e gate; do NOT run
-   e2e.**
+2. Start **Gap 3 (diagnostics navigation)** — leader bindings for next/prev error via the
+   native `Edit.NextError` / `Edit.PreviousError` commands (triage EXTEND/REUSE native
+   2026-09-28; small feature; plan in `docs/plans/backlog-plans.md`). **Unit-only lane;
+   queue the e2e gate; do NOT run e2e.**
 3. Continue down the run order.
 
 ## Current state
 
-- **In progress:** (none — **PAUSED by the user** after Feature 6 GREEN 2026-10-04; see the
-  SESSION HANDOFF block at the top of this file).
-- **Next up:** **Gap 1 (window-management leader bindings)** — use the **two-stage fan-out
-  planning tactic** and the **unit-only lane** (e2e deferred; queue the gate). Then the rest
+- **In progress:** (none — **Gap 1 reached GREEN 2026-10-04** in the unit-only lane; see the
+  Done section. Nothing is in flight.)
+- **Next up:** **Gap 3 (diagnostics navigation)** — leader bindings for next/prev error via
+  the native `Edit.NextError` / `Edit.PreviousError` commands (triage EXTEND/REUSE native
+  2026-09-28; small feature; plan in `docs/plans/backlog-plans.md`). **Unit-only lane; queue
+  the e2e gate; do NOT run e2e.** Then the rest
   of the user-chosen **"smallest first"** run order (2026-10-03):
-  gap 1 → gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
+  gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
-  gaps 8-11 triaged 2026-10-03). Feature 6 (Solution Explorer search-box vim motions)
+  gaps 8-11 triaged 2026-10-03). Gap 1 (window-management leader bindings + case-sensitive
+  leader combos) is **DONE** (GREEN 2026-10-04, unit-only; e2e gates queued E2E-GAP1-1..5 —
+  see the Done section). Feature 6 (Solution Explorer search-box vim motions)
   is **DONE** (GREEN 2026-10-04; see the Done section). The Telescope `fzf` finder
   (item 5) is **DONE** (GREEN 2026-10-03; see the Done section). The Architecture
   backlog is now **CLOSED** — F13 and F43 were verified already-fixed and annotated
@@ -109,6 +118,14 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Decisions (append-only; newest on top)
 
+- [2026-10-04] DECIDED: **Gap 1 scope (user instruction).** Window-management leader
+  bindings: **skip zoom, skip resize**, **REMOVE the `Space+W` save binding** (the user
+  saves with Ctrl+S), `w` becomes the **window-management prefix** (`w,-` split below via
+  `command:Window.NewHorizontalTabGroup`, `w,|` split right via
+  `command:Window.NewVerticalTabGroup`, `w,d` focus-aware `close-window`), and leader
+  combos are **CASE-SENSITIVE** (a capital letter in the config = Shift+letter; `s,g` ≠
+  `s,G`). Executed in the unit-only lane (e2e deferred; gates queued E2E-GAP1-1..5). —
+  status: DONE (GREEN 2026-10-04).
 - [2026-10-04] DECIDED: **E2E TESTS DEFERRED (user instruction).** Do NOT run the e2e
   harness (`tools/harness/test-e2e.ps1`, incl. `-Tests <subset>`) until the user explicitly
   says so. All items from now on use the **unit-only lane**: RED at the unit level only;
@@ -190,12 +207,15 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **172 passed**; `tests/NeoVisual.Tests`
-  **171 passed** (after Feature 6 — Solution Explorer search-box vim motions, 2026-10-04).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **37 scenarios** (incl. `seed-reset`,
+  **177 passed** (after Feature 6 + Gap 1 — window-management leader bindings +
+  case-sensitive leader combos, 2026-10-04).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **38 scenarios** (incl. `seed-reset`,
   `seed-leak`, `neovisual-explorer-move-editor-focus`, `telescope-fzf`,
-  `explorer-searchbox-motions`). **No known-RED remains** —
+  `explorer-searchbox-motions`, and the NEW `neovisual-window-management` — registered but
+  never executed, queued as E2E-GAP1-1). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 37-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the 37 executed scenarios are GREEN; the 38th
+  (`neovisual-window-management`) is queued (E2E-GAP1-1).
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -266,7 +286,7 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## In-progress
 
-- (none — the tree-select capability item reached GREEN 2026-09-19 and
+- (none — Gap 1 reached GREEN 2026-10-04 in the unit-only lane and
   `explorer-open-searchbox` reached GREEN 2026-09-27; see the Done section. No
   known-RED remains.)
 
@@ -315,12 +335,23 @@ were known-backlog assertion bugs, not regressions).
 Top of the queue, in priority order:
 
 > **RUN ORDER (user-chosen 2026-10-03, "smallest first"):** ~~feature 6~~ (**DONE** GREEN
-> 2026-10-04) → **gap 1 (next)** → gap 3 →
+> 2026-10-04) → ~~gap 1~~ (**DONE** GREEN 2026-10-04) → **gap 3 (next)** →
 > gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
 > feature 9 → which-key last. Gaps 8/9/10 are **custom-view builds** (feature lane); gap 11
 > is **native bindings** (small); gap 8 is **folded into feature 8**. The which-key item is
 > built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
 > (LazyVim-style) AND an inline popup variant, so both can be tested.
+
+> **FIRST ITEM (2026-10-04):** ~~the **Gap 1 — window-management leader bindings (`w` prefix)
+> + case-sensitive leader combos** plan~~ — **DONE** (GREEN 2026-10-04, feature lane,
+> unit-only; see the Done section). Executed A → B → C → D → E in one pass per the plan's
+> binding execution-order warning; the documented transient-RED set was owned by its Phase 3
+> (not regressions). e2e gates **QUEUED: E2E-GAP1-1..5** (`docs/e2e-queue.md`) — run them on
+> a VS-capable machine when the user says so. The known pre-existing DOC-66-3 lint failure
+> was reconciled as part of BP-E7 (the lint expectation in `tools/lint/check-doc-content.ps1`
+> now accepts the current Baseline attribution; lint PASS 12/12). Scope shipped per the user
+> (2026-10-04): zoom/resize skipped, `Space+W` save removed, `w` window prefix (`w,-`/`w,|`/
+> `w,d` focus-aware `close-window`), leader combos CASE-SENSITIVE, no new diagnostic literal.
 
 > **FIRST ITEM (2026-10-02):** ~~the **Code review fixes (72 findings)** plan~~ —
 > **DONE** (GREEN 2026-10-02, bugfix lane, **e2e ENABLED**; see the Done section). Source:
@@ -447,10 +478,10 @@ Top of the queue, in priority order:
     title `Telescope`); `telescope-implementation` now passes 3/3 sequential runs. (The
     original "no `[Hook] key=Return`" clue was a red herring — `Keys.Return` is not in
     `IsInteresting`; the real line is `[Telescope] key=Return … handled=True`.)
-6. **Gap 1: Window management** (LazyVim gap-analysis, triage=EXTEND/REUSE native
-   2026-09-28) — leader bindings for split below/right, delete window, toggle zoom via
-   `Window.Split` / `Window.CloseToolWindow` / `View.Zoom`. Small feature. Plan in
-   `docs/plans/backlog-plans.md`.
+6. ~~**Gap 1: Window management**~~ — **DONE** (GREEN 2026-10-04, unit-only; see the Done
+   section): `w,-` split below, `w,|` split right, `w,d` focus-aware `close-window`;
+   zoom/resize skipped per the user; `Space+W` save removed; leader combos case-sensitive.
+   e2e gates queued (E2E-GAP1-1..5).
 7. **Gap 3: Diagnostics navigation** (LazyVim gap-analysis, triage=EXTEND/REUSE native
    2026-09-28) — next/prev error bindings via `Edit.NextError` / `Edit.PreviousError`.
    Small feature. Plan in `docs/plans/backlog-plans.md`.
@@ -587,6 +618,50 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Gap 1: Window-management leader bindings (`w` prefix) + case-sensitive
+  leader combos** (Lane: `feature`, unit-only, e2e deferred; 3 delegations, 0 VS boots,
+  0 iterations). `w` is now the window-management prefix: `w,-` →
+  `command:Window.NewHorizontalTabGroup` (split below), `w,|` →
+  `command:Window.NewVerticalTabGroup` (split right), `w,d` → the new focus-aware
+  `close-window` built-in action (tool window → `Window.CloseToolWindow`, else
+  `Window.CloseDocumentWindow`, via the pure `CloseWindowCommand` seam +
+  `InputHandler.CloseWindow`). The `Space+W` save binding is REMOVED (the user saves with
+  Ctrl+S) — a lone Space+W consumes and waits, firing nothing. Leader combos are now
+  **CASE-SENSITIVE**: `KeyNames.ToString(Keys, bool shift)` encodes a letter's case
+  (lowercase = unshifted, uppercase = Shift+letter; non-letters shift-insensitive),
+  `LeaderSequenceMatcher` appends shift-aware names + an Ordinal prefix set,
+  `InputHandler.BuildBindings`' leader dict and `KeybindingConfig.Merge`'s bindings map are
+  Ordinal (the simple-shortcut path stays case-insensitive `Ctrl+H`), and all 24 existing
+  leader keys migrated to lowercase in `default-keybindings.json` (28 → 30 bindings).
+  `KeyNames.ToString` gained `OemPipe` → `|`. Actions registry 11 → 12 (`close-window`).
+  New/updated unit tests (NeoVisual 171 → 177): 6 new
+  (`Run_Keybinding_DefaultFileHasWindowManagement`, `Run_KeyNames_CaseEncodesShift`,
+  `Run_KeyNames_RoundTrip_WindowPrefix`, `Run_LeaderSequenceMatcher_CaseSensitive`,
+  `Run_LeaderSequenceMatcher_PrefixWaits`, `Run_CloseWindowCommand_For`),
+  the former CaseInsensitive keybinding test renamed to `Run_Keybinding_CaseSensitive`,
+  registry count 11 → 12,
+  17 fixture migrations to lowercase Ordinal fixtures. Harness updated in place (NOT
+  executed — e2e deferred): `neovisual-leader` reworked (Space w - + Space+e), NEW
+  `neovisual-window-management` scenario registered (38th, queued E2E-GAP1-1),
+  `neovisual-explorer-move-editor-focus` positive bound → Space+B,D (`b,d`),
+  `neovisual-editor-insert` saves via Ctrl+S. Final gates: `dotnet build` 0 errors;
+  NeoVisual.Tests **177 passed, 0 failed**; Telescope.Tests **172 passed, 0 failed**
+  (staggered); `-SelfCheck` PASS; `-List` 38 scenarios; check-doc-refs 0 unresolved;
+  check-doc-content PASS (12 assertions; the DOC-66-3 expectation was reconciled in
+  `tools/lint/check-doc-content.ps1` — the lint was stale, not the Baseline). NO e2e run
+  (user mandate); e2e gates QUEUED: E2E-GAP1-1..5 (`docs/e2e-queue.md`).
+  **Change summary:** modified `MyExtension/Input/Utils/KeyNames.cs`,
+  `MyExtension/Input/Utils/LeaderSequenceMatcher.cs`, `MyExtension/Input/InputHandler.cs`,
+  `MyExtension/Input/Utils/KeybindingConfig.cs`,
+  `MyExtension/Resources/default-keybindings.json`, `MyExtension/Package/Utils/Actions.cs`,
+  `tools/harness/test-e2e.ps1`, `tools/lint/check-doc-content.ps1`,
+  `tests/NeoVisual.Tests/Program.cs`, docs (spec.md / AGENTS.md / SKILL.md / progress.md /
+  e2e-queue.md); created `MyExtension/Input/Utils/CloseWindowCommand.cs`. **If this
+  regresses, look first at the case-sensitivity seam (`KeyNames.ToString(Keys, bool)` +
+  `LeaderSequenceMatcher`'s Ordinal prefix set — a wrong comparer makes every leader
+  binding abort) and the `w`-prefix group in `default-keybindings.json` (BP-B4's atomic
+  rewrite) — the two highest-risk changes.**
 
 - **2026-10-04 — Feature 6: Solution Explorer search-box vim motions** (Lane: `feature`;
   16 delegations, 2 VS boots, 0 iterations). Extended the Solution Explorer search box's

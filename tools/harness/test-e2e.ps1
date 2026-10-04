@@ -24,7 +24,8 @@
 #   telescope-open-file-navigation  type a multi-match query, j to index 1, Enter opens the moved-to row
 #   telescope-no-selection  j/k on an empty result list is a no-op (selection stays 0)
 #   neovisual-window-nav  Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
-#   neovisual-leader      Space+W fires a leader binding (leader-binding executed: W)
+#   neovisual-leader      Space w - + Space+E fire leader bindings (leader-binding executed: w,- / e)
+#   neovisual-window-management  Space w - / w | / w d split + close (leader-binding executed: w,*)
 #   neovisual-toolwindow  Solution Explorer: hjkl navigation + i/Esc input-mode (search box)
 #   neovisual-explorer-toggle  Space+E opens, then closes, then reopens Solution Explorer
 #   neovisual-explorer-open    l expands the fold, j/k navigate, Enter opens a file
@@ -60,7 +61,7 @@
 #
 # Exit code: 0 = all selected scenarios passed, 1 = any failed.
 #
-# Usage:
+# Usage (-Tests accepts ANY form: comma-joined, a real array, or repeated flags):
 #   pwsh tools/harness/test-e2e.ps1                       # all scenarios
 #   pwsh tools/harness/test-e2e.ps1 -Tests telescope-open # a single scenario
 #   pwsh tools/harness/test-e2e.ps1 -Tests telescope-navigate,telescope-mode
@@ -91,6 +92,14 @@ param(
     [switch]$SelfCheck,
     [int]$TimeoutSec = 300
 )
+
+# Normalize -Tests so the harness accepts ANY invocation form. The native `pwsh` boundary can
+# deliver a comma-joined string where the call operator delivers a real array, so split every
+# element on commas and trim; empty entries are dropped.
+#   pwsh tools/harness/test-e2e.ps1 -Tests a,b,c        # one comma-joined string
+#   & tools/harness/test-e2e.ps1 -Tests a,b,c           # a real array (call operator)
+#   pwsh tools/harness/test-e2e.ps1 -Tests a -Tests b   # repeated flags
+$Tests = @($Tests | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -675,17 +684,87 @@ Send-Ctrl 0x48                                              # Ctrl+H -> navigate
 }
 
 # --- neovisual-leader -----------------------------------------------------
+# Gap 1: the leader system still fires after the case-sensitive lowercase migration.
+# Space w - fires the new window-management prefix binding (`w,-` ->
+# Window.NewHorizontalTabGroup) with the editor focused; Space+E fires the migrated `e`
+# binding. The old Space+W save binding is REMOVED (the user saves with Ctrl+S): `w` is
+# now a PREFIX — a lone Space+W consumes and fires nothing (unit-pinned by
+# Run_LeaderSequenceMatcher_PrefixWaits, not asserted here). `w,-` splits the editor
+# (a layout side effect later scenarios tolerate: they toggle Solution Explorer
+# statelessly and use the modal overlay); the split is NOT undone here —
+# neovisual-window-management's own w,d steps collapse the groups it creates.
 Register-Scenario 'neovisual-leader' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
     Enter-NormalContext $vs
     Assert-VsFocused $vs 'leader key bindings'
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
-    Send-Tap $script:VkW                                               # W -> File.SaveSelectedItems
-    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: W" 'Space+W fired the W leader binding'
-    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150
-    Send-Tap $script:VkE                                               # E -> View.SolutionExplorer
-    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: E" 'Space+E fired the E leader binding'
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix — consumes, fires nothing)
+    Send-Text '-'; Start-Sleep -Milliseconds 800                       # - -> Window.NewHorizontalTabGroup (w,-)
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,-" 'Space+w+- fired the w,- leader binding'
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkE                                               # e -> toggle-solution-explorer
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: e" 'Space+E fired the e leader binding'
+}
+
+# --- neovisual-window-management -----------------------------------------
+# Gap 1 window-management leader bindings (the `w` prefix): Space w - splits below
+# (Window.NewHorizontalTabGroup), Space w | splits right (Window.NewVerticalTabGroup),
+# Space w d closes the focused surface (editor -> Window.CloseDocumentWindow, tool
+# window -> Window.CloseToolWindow — the focus-aware close-window action). QUEUED
+# (e2e deferred): registered but the live gate runs later (E2E-GAP1-1). Assertions
+# depend only on the EXISTING [NeoVisual] leader-binding executed: diagnostic — no
+# new log literal. Tab-group GEOMETRY is deliberately never asserted (VS moves the
+# active tab rather than duplicating it, and horizontal+vertical groups cannot mix —
+# the diagnostic is the contract).
+Register-Scenario 'neovisual-window-management' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'window management bindings'
+
+    # 1. Space w - -> split below (native Window.NewHorizontalTabGroup). A document is
+    #    open even in a subset run (Program.cs is auto-opened at bootstrap).
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix — consumes, fires nothing)
+    Send-Text '-'; Start-Sleep -Milliseconds 800                       # - -> Window.NewHorizontalTabGroup
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,-" 'Space w - fired split-below'
+
+    # 2. Space w | -> split right (native Window.NewVerticalTabGroup). '|' is Shift+0xDC:
+    #    Send-Text maps '|' -> @(0xDC, $true) (harness-common.ps1:116); the matcher's
+    #    non-letter path is shift-insensitive, so the sequence name is w,|.
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix)
+    Send-Text '|'; Start-Sleep -Milliseconds 800                       # | -> Window.NewVerticalTabGroup
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,\|" 'Space w | fired split-right'
+
+    # 3. Space w d with an EDITOR focused -> close-window runs Window.CloseDocumentWindow.
+    #    Capture the active document BEFORE the close, then bounded-poll until it is no
+    #    longer active (a closed document activates another document or none — both
+    #    satisfy "changed"; this is the E2E-GAP1-1 "the active document closes" check).
+    $beforeClose = Get-ActiveDocumentPath $vs.Id
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix)
+    Send-Tap $script:VkD; Start-Sleep -Milliseconds 800                # d -> close-window
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,d" 'Space w d fired close-window (editor focused)'
+    $closedDoc = $false
+    $swClose = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($swClose.Elapsed.TotalMilliseconds -lt 3000) {
+        $now = Get-ActiveDocumentPath $vs.Id
+        if ($now -ne $beforeClose) { $closedDoc = $true; break }
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not $closedDoc) { throw "w,d did not close the active document (still: $beforeClose)" }
+
+    # 4. Space w d with a TOOL WINDOW focused -> close-window runs Window.CloseToolWindow.
+    #    Ensure Solution Explorer is open first (toggle until the open log appears), then
+    #    close it. The close is a native VS command with no extension window-state
+    #    diagnostic; the leader-binding line is the contract here (E2E-GAP1-1).
+    Ensure-SolutionExplorerOpen $vs $logPath
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix)
+    Send-Tap $script:VkD; Start-Sleep -Milliseconds 800                # d -> close-window
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,d" 'Space w d fired close-window (tool window focused)'
 }
 
 # --- neovisual-toolwindow ------------------------------------------------
@@ -699,7 +778,7 @@ Register-Scenario 'neovisual-toolwindow' {
     # Ensure Solution Explorer is OPEN and focused (Space+E toggles it; the persisted
     # experimental-instance layout may leave it open or closed from a previous run).
     Ensure-SolutionExplorerOpen $vs $logPath
-    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: E" 'Space+E opened Solution Explorer'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: e" 'Space+E opened Solution Explorer'
     # j/k navigate the tree (injected arrows).
     Send-Tap $script:VkJ
     Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-move key=J" 'j in Solution Explorer injected a Down arrow'
@@ -865,7 +944,7 @@ Register-Scenario 'neovisual-explorer-move' {
 # Negative half of the regression pair: with an EDITOR focused and the stale-frame fault injected
 # (a 'stale-toolwindow' sentinel makes WindowManager report the SE frame as current), m must fall
 # through to VS — it must NOT fire a solution-explorer action. Deterministic: the fault is a file
-# presence toggle, and the post-baseline absence scan is bounded by the Space+W leader line, which
+# presence toggle, and the post-baseline absence scan is bounded by the Space+B,D leader line, which
 # is written only after m was handled on the same UI thread.
 Register-Scenario 'neovisual-explorer-move-editor-focus' {
     param($vs, $logPath)
@@ -898,13 +977,16 @@ Register-Scenario 'neovisual-explorer-move-editor-focus' {
     New-Item -ItemType File -Force -Path $sentinel | Out-Null
     try {
         # 3. m must fall through to the editor (no tree action). Escape dismisses any dialog on the
-        #    old path; then Space+W must still reach the editor and fire the leader binding — the
-        #    positive bound proving focus stayed in the editor.
+        #    old path; then Space+B,D must still reach the editor and fire the leader binding — the
+        #    positive bound proving focus stayed in the editor. `b,d` (File.Close) is deliberately
+        #    NOT a `w` sequence (w is now a prefix) and never moves focus to a tool window; it
+        #    closes the active document (Gamma.cs) as cleanup.
         Send-Tap $script:VkM                                            # m
         Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200 # dismiss any old-path dialog
         Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150  # leader
-        Send-Tap $script:VkW; Start-Sleep -Milliseconds 500             # W -> File.SaveSelectedItems
-        Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: W" 'editor kept focus; m was not a tree action'
+        Send-Tap 0x42; Start-Sleep -Milliseconds 150             # b (first key of the b,d binding)
+        Send-Tap $script:VkD; Start-Sleep -Milliseconds 500      # d -> File.Close (b,d)
+        Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: b,d" 'editor kept focus; m was not a tree action'
     } finally {
         Remove-Item -Force -LiteralPath $sentinel -ErrorAction SilentlyContinue
     }
@@ -1116,16 +1198,18 @@ Register-Scenario 'neovisual-editor-insert' {
     Start-Sleep -Milliseconds 300
 
     # Exit insert mode and save the buffer; the file content is the ground-truth proof the text
-    # reached the editor (a swallowed Space/hjkl/i would have made the marker partial).
+    # reached the editor (a swallowed Space/hjkl/i would have made the marker partial). The
+    # save is VS's native Ctrl+S (File.SaveSelectedItems) — the extension passes it through
+    # unbound (the `w` save binding was removed in Gap 1; `w` is now a window-management
+    # prefix), so the leader-binding assertion is DROPPED: the file-content check below is
+    # the only oracle.
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300         # insert -> normal
     Assert-NewLogLine $logPath "$($script:PfxNeo)vim-mode=Normal" 'Esc switched the editor back to normal mode'
-    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150          # leader
-    Send-Tap $script:VkW; Start-Sleep -Milliseconds 1000                    # W -> File.SaveSelectedItems
-    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: W" 'Space+W saved the file'
+    Send-Ctrl 0x53; Start-Sleep -Milliseconds 1000                   # Ctrl+S -> File.SaveSelectedItems (VS native)
 
     $probeDir = Join-Path (Join-Path $env:TEMP 'telescope_scratch') 'Probe'
     $file = Join-Path $probeDir 'Beta.cs'
-    # This scenario INTENTIONALLY writes Beta.cs (the Space+W save above). N53: record the observed
+    # This scenario INTENTIONALLY writes Beta.cs (the Ctrl+S save above). N53: record the observed
     # post-save content as the expected RESULT ONLY on success — a FAILED marker assertion must NOT
     # record the wrong content as expected (that would mask the failure at seed-leak). On failure the
     # expected copy stays the bootstrap content, so seed-leak still catches the unvalidated write.

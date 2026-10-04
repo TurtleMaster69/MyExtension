@@ -152,24 +152,33 @@ namespace NeoVisual.Tests
 
         public static void Run_Keybinding_BindingsParsed()
         {
-            var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"W\":\"command:File.SaveSelectedItems\",\"Ctrl+H\":\"navigate-left\"}}");
+            var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"w\":\"command:File.SaveSelectedItems\",\"Ctrl+H\":\"navigate-left\"}}");
             Assert.Equal(2, cfg.Bindings.Count);
-            Assert.Equal("command:File.SaveSelectedItems", cfg.Bindings["W"]);
+            Assert.Equal("command:File.SaveSelectedItems", cfg.Bindings["w"]);
             Assert.Equal("navigate-left", cfg.Bindings["Ctrl+H"]);
         }
 
-        public static void Run_Keybinding_CaseInsensitive()
+        public static void Run_Keybinding_CaseSensitive()
         {
-            var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"W\":\"command:File.Save\"}}");
-            Assert.True(cfg.Bindings.ContainsKey("w"), "binding lookup is case-insensitive");
+            // Gap 1 (AC5/D2): the config bindings map is Ordinal — an uppercase leader key no
+            // longer matches its lowercase form (a capital letter in the config = Shift+letter).
+            var upper = KeybindingConfig.LoadFromJson("{\"bindings\":{\"W\":\"command:X\"}}");
+            Assert.False(upper.Bindings.ContainsKey("w"), "leader binding lookup is case-sensitive (W != w)");
+            Assert.True(upper.Bindings.ContainsKey("W"), "the key as written is preserved");
+            // Distinct-case leader sequences coexist in one config (an OrdinalIgnoreCase map
+            // would collapse them into one entry).
+            var both = KeybindingConfig.LoadFromJson("{\"bindings\":{\"s,g\":\"a\",\"s,G\":\"b\"}}");
+            Assert.Equal(2, both.Bindings.Count);
+            Assert.Equal("a", both.Bindings["s,g"]);
+            Assert.Equal("b", both.Bindings["s,G"]);
         }
 
         public static void Run_Keybinding_NullUnbinds()
         {
             // A null binding value must remove the key from the map (falls through to editor).
-            var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"Q\":null,\"W\":\"command:X\"}}");
-            Assert.True(cfg.Bindings.ContainsKey("W"), "non-null binding preserved");
-            Assert.False(cfg.Bindings.ContainsKey("Q"), "null binding removed");
+            var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"q\":null,\"w\":\"command:X\"}}");
+            Assert.True(cfg.Bindings.ContainsKey("w"), "non-null binding preserved");
+            Assert.False(cfg.Bindings.ContainsKey("q"), "null binding removed");
         }
 
         public static void Run_Keybinding_EmptyJsonOk()
@@ -184,12 +193,38 @@ namespace NeoVisual.Tests
             // cardinal nav shortcuts must survive a full Load() (embedded resource present).
             // embedded defaults only (hermetic — never reads the user's %APPDATA% file)
             var cfg = KeybindingConfig.LoadDefaults();
-            Assert.True(cfg.Bindings.ContainsKey("F,T"), "F,T -> telescope binding present");
+            Assert.True(cfg.Bindings.ContainsKey("f,t"), "f,t -> telescope binding present (lowercase leader migration)");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+H"), "Ctrl+H -> navigate-left present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+J"), "Ctrl+J -> navigate-down present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+K"), "Ctrl+K -> navigate-up present");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+L"), "Ctrl+L -> navigate-right present");
             Assert.Equal(Keys.Space, cfg.LeaderKey);
+            // Gap 1 (AC6/D3): EVERY leader binding in the defaults is lowercase under the case-based
+            // contract (simple Ctrl+/Shift+/Alt+ shortcuts keep their canonical form).
+            foreach (var key in cfg.Bindings.Keys)
+            {
+                if (!KeybindingConfig.IsSimpleShortcut(key))
+                {
+                    Assert.True(key.Equals(key.ToLowerInvariant(), StringComparison.Ordinal),
+                        $"leader binding '{key}' must be lowercase after the migration (D3)");
+                }
+            }
+        }
+
+        public static void Run_Keybinding_DefaultFileHasWindowManagement()
+        {
+            // Gap 1 (AC1/AC2/AC3/AC4): the shipped defaults gain the LazyVim-style w prefix
+            // (split below / split right / close window) and lose the W save binding (the user
+            // saves with Ctrl+S). LoadDefaults reads ONLY the embedded resource (hermetic).
+            var cfg = KeybindingConfig.LoadDefaults();
+            Assert.True(cfg.Bindings.ContainsKey("w,-"), "w,- -> split-below binding present");
+            Assert.Equal("command:Window.NewHorizontalTabGroup", cfg.Bindings["w,-"]);
+            Assert.True(cfg.Bindings.ContainsKey("w,|"), "w,| -> split-right binding present");
+            Assert.Equal("command:Window.NewVerticalTabGroup", cfg.Bindings["w,|"]);
+            Assert.True(cfg.Bindings.ContainsKey("w,d"), "w,d -> close-window binding present");
+            Assert.Equal("close-window", cfg.Bindings["w,d"]);
+            Assert.False(cfg.Bindings.ContainsKey("w"),
+                "the W save binding is removed (w is a prefix, not a binding)");
         }
 
         public static void Run_KeybindingConfig_IsSimpleShortcut()
@@ -203,8 +238,8 @@ namespace NeoVisual.Tests
             Assert.True(KeybindingConfig.IsSimpleShortcut("Ctrl+H"), "Ctrl+ prefix is a simple shortcut");
             Assert.True(KeybindingConfig.IsSimpleShortcut("Shift+F"), "Shift+ prefix is a simple shortcut");
             Assert.True(KeybindingConfig.IsSimpleShortcut("Alt+X"), "Alt+ prefix is a simple shortcut");
-            Assert.False(KeybindingConfig.IsSimpleShortcut("F,+"), "a leader key containing + is NOT a simple shortcut");
-            Assert.False(KeybindingConfig.IsSimpleShortcut("W"), "a bare leader key is not a simple shortcut");
+            Assert.False(KeybindingConfig.IsSimpleShortcut("f,+"), "a leader key containing + is NOT a simple shortcut");
+            Assert.False(KeybindingConfig.IsSimpleShortcut("w"), "a bare leader key is not a simple shortcut");
         }
 
         // ================================================================
@@ -220,7 +255,21 @@ namespace NeoVisual.Tests
             Assert.Equal("/", KeyNames.ToString(Keys.OemQuestion));
             Assert.Equal("+", KeyNames.ToString(Keys.Oemplus));
             Assert.Equal("-", KeyNames.ToString(Keys.OemMinus));
+            Assert.Equal("|", KeyNames.ToString(Keys.OemPipe));
             Assert.Equal("F", KeyNames.ToString(Keys.F));
+        }
+
+        public static void Run_KeyNames_CaseEncodesShift()
+        {
+            // Gap 1 (AC5/D1): the shift-aware leader-sequence mapping — a letter's case encodes
+            // Shift (lowercase = unshifted, uppercase = Shift+letter). Non-letters delegate to the
+            // printable mapping, shift-insensitive (shift is not noted for non-letters).
+            Assert.Equal("f", KeyNames.ToString(Keys.F, false));
+            Assert.Equal("F", KeyNames.ToString(Keys.F, true));
+            Assert.Equal("g", KeyNames.ToString(Keys.G, false));
+            Assert.Equal("G", KeyNames.ToString(Keys.G, true));
+            Assert.Equal("-", KeyNames.ToString(Keys.OemMinus, false));
+            Assert.Equal("-", KeyNames.ToString(Keys.OemMinus, true));
         }
 
         public static void Run_KeyNames_RoundTrip_LeaderSequence()
@@ -241,6 +290,45 @@ namespace NeoVisual.Tests
             Assert.Equal(LeaderResultKind.Execute, result.Kind);
             Assert.Equal<string?>("/", result.Sequence);
             Assert.Equal(1, executed);
+        }
+
+        public static void Run_KeyNames_RoundTrip_WindowPrefix()
+        {
+            // Gap 1 (AC1/AC2/AC3): the w-prefix window bindings round-trip through the matcher:
+            // Space, w (prefix), then the physical key builds the exact config sequence and fires.
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,-"] = () => executed++,
+                ["w,|"] = () => executed++,
+                ["w,d"] = () => executed++,
+            };
+
+            // Split below: Space, w, OemMinus -> "w,-"
+            var minusMatcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+            Assert.Equal(LeaderResultKind.Consume, minusMatcher.HandleKey(Keys.Space, false, false, false, false).Kind);
+            Assert.Equal(LeaderResultKind.Consume, minusMatcher.HandleKey(Keys.W, false, false, false, false).Kind);
+            var minus = minusMatcher.HandleKey(Keys.OemMinus, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Execute, minus.Kind);
+            Assert.Equal<string?>("w,-", minus.Sequence);
+
+            // Split right: Space, w, Shift+OemPipe -> "w,|" (Shift+OemPipe types '|')
+            var pipeMatcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+            pipeMatcher.HandleKey(Keys.Space, false, false, false, false);
+            pipeMatcher.HandleKey(Keys.W, false, false, false, false);
+            var pipe = pipeMatcher.HandleKey(Keys.OemPipe, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Execute, pipe.Kind);
+            Assert.Equal<string?>("w,|", pipe.Sequence);
+
+            // Close window: Space, w, d -> "w,d"
+            var closeMatcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+            closeMatcher.HandleKey(Keys.Space, false, false, false, false);
+            closeMatcher.HandleKey(Keys.W, false, false, false, false);
+            var close = closeMatcher.HandleKey(Keys.D, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Execute, close.Kind);
+            Assert.Equal<string?>("w,d", close.Sequence);
+
+            Assert.Equal(3, executed);
         }
 
         public static void Run_KeyNames_RoundTrip_SimpleShortcut()
@@ -1660,15 +1748,16 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionsRegistry_ContainsAllBuiltins()
         {
-            // The registry must hold exactly the 11 built-in action names, kept in sync with
-            // default-keybindings.json (the hand-sync bug this seam removes).
-            Assert.Equal(11, Actions.Registry.Count);
+            // The registry must hold exactly the 12 built-in action names, kept in sync with
+            // default-keybindings.json (the hand-sync bug this seam removes). Gap 1 (AC3/D5)
+            // adds the focus-aware "close-window" action.
+            Assert.Equal(12, Actions.Registry.Count);
             var names = new[]
             {
                 "navigate-left", "navigate-right", "navigate-up", "navigate-down",
                 "telescope", "telescope-issues", "telescope-references",
                 "telescope-implementation", "telescope-grep", "telescope-fzf",
-                "toggle-solution-explorer",
+                "toggle-solution-explorer", "close-window",
             };
             foreach (string name in names)
             {
@@ -1711,6 +1800,20 @@ namespace NeoVisual.Tests
                 string finder = TelescopeLauncher.FinderNames[key];
                 Assert.True(!string.IsNullOrEmpty(finder), $"telescope action '{key}' must map to a finder name");
             }
+        }
+
+        // ================================================================
+        // CloseWindowCommand — focus-aware close-window command seam (Gap 1 D5)
+        // RED: `CloseWindowCommand` does not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_CloseWindowCommand_For()
+        {
+            // The pure focus-aware decision InputHandler.CloseWindow delegates to: a focused tool
+            // window closes via Window.CloseToolWindow; anything else (editor/document) via
+            // Window.CloseDocumentWindow.
+            Assert.Equal("Window.CloseToolWindow", CloseWindowCommand.For(true));
+            Assert.Equal("Window.CloseDocumentWindow", CloseWindowCommand.For(false));
         }
 
         // ================================================================
@@ -2032,9 +2135,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_LeaderKeyStartsSequence()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => executed++,
+                ["f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2047,9 +2150,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_LeaderKeyWhileTypingPassesThrough()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => executed++,
+                ["f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2062,9 +2165,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_SingleKeyBindingExecutes()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => executed++,
+                ["f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2072,7 +2175,7 @@ namespace NeoVisual.Tests
             var result = matcher.HandleKey(Keys.F, false, false, false, false);
 
             Assert.Equal(LeaderResultKind.Execute, result.Kind);
-            Assert.Equal<string?>("F", result.Sequence);
+            Assert.Equal<string?>("f", result.Sequence);
             Assert.Equal(1, executed);
             Assert.False(matcher.IsActive, "sequence ends after execution");
         }
@@ -2080,9 +2183,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_MultiKeySequence()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F,F"] = () => executed++,
+                ["f,f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2093,7 +2196,7 @@ namespace NeoVisual.Tests
 
             var second = matcher.HandleKey(Keys.F, false, false, false, false);
             Assert.Equal(LeaderResultKind.Execute, second.Kind);
-            Assert.Equal<string?>("F,F", second.Sequence);
+            Assert.Equal<string?>("f,f", second.Sequence);
             Assert.Equal(1, executed);
             Assert.False(matcher.IsActive, "sequence ends after execution");
         }
@@ -2101,9 +2204,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_UnknownSequenceAborts()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => executed++,
+                ["f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2118,9 +2221,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_ResetClearsState()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => executed++,
+                ["f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2139,9 +2242,9 @@ namespace NeoVisual.Tests
         public static void Run_LeaderMatcher_NonLeaderKeyPassesThrough()
         {
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => executed++,
+                ["f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2158,9 +2261,9 @@ namespace NeoVisual.Tests
             // returns a Failed result carrying the handler's message and clears its state.
             // RED today: `action()` at LeaderSequenceMatcher.cs:63 throws and the exception
             // escapes HandleKey (and this test). The Failed seam does not exist yet.
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F"] = () => throw new KeyNotFoundException("bad finder"),
+                ["f"] = () => throw new KeyNotFoundException("bad finder"),
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2168,7 +2271,7 @@ namespace NeoVisual.Tests
             var result = matcher.HandleKey(Keys.F, false, false, false, false);
 
             Assert.Equal(LeaderResultKind.Failed, result.Kind);
-            Assert.Equal<string?>("F", result.Sequence);
+            Assert.Equal<string?>("f", result.Sequence);
             Assert.True(result.ErrorMessage != null && result.ErrorMessage.Contains("bad finder"),
                 "ErrorMessage carries the handler's message");
             Assert.False(matcher.IsActive, "a failed execution still ends the sequence");
@@ -2180,9 +2283,9 @@ namespace NeoVisual.Tests
             // (consumed), NOT passed through — the InputHandler guard (`!_leaderMatcher.IsActive &&
             // key == Keys.I`) relies on the matcher consuming I as part of the sequence.
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["I,F"] = () => executed++,
+                ["i,f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2201,9 +2304,9 @@ namespace NeoVisual.Tests
             // proper prefix of a longer binding) — the matcher keeps waiting (Consume). Then "F"
             // again executes "F,F". If the prefix set were absent/broken, the first "F" would Abort.
             var executed = 0;
-            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
-                ["F,F"] = () => executed++,
+                ["f,f"] = () => executed++,
             };
             var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
 
@@ -2216,6 +2319,64 @@ namespace NeoVisual.Tests
             var second = matcher.HandleKey(Keys.F, false, false, false, false);
             Assert.Equal(LeaderResultKind.Execute, second.Kind);
             Assert.Equal(1, executed);
+        }
+
+        public static void Run_LeaderSequenceMatcher_CaseSensitive()
+        {
+            // Gap 1 (AC5/D2): leader combos are CASE-SENSITIVE — s,g and s,G are distinct
+            // sequences (a capital letter in the config means Shift+letter). The fixture dict is
+            // Ordinal, matching production's BuildBindings leader dictionary.
+            var executedLower = 0;
+            var executedUpper = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["s,g"] = () => executedLower++,
+                ["s,G"] = () => executedUpper++,
+            };
+
+            // Space, s, g -> "s,g"
+            var lowerMatcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+            lowerMatcher.HandleKey(Keys.Space, false, false, false, false);
+            lowerMatcher.HandleKey(Keys.S, false, false, false, false);
+            var lower = lowerMatcher.HandleKey(Keys.G, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Execute, lower.Kind);
+            Assert.Equal<string?>("s,g", lower.Sequence);
+            Assert.Equal(1, executedLower);
+            Assert.Equal(0, executedUpper);
+
+            // Space, s, Shift+g -> "s,G" (fresh matcher: the first sequence ended on Execute)
+            var upperMatcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+            upperMatcher.HandleKey(Keys.Space, false, false, false, false);
+            upperMatcher.HandleKey(Keys.S, false, false, false, false);
+            var upper = upperMatcher.HandleKey(Keys.G, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Execute, upper.Kind);
+            Assert.Equal<string?>("s,G", upper.Sequence);
+            Assert.Equal(1, executedUpper);
+        }
+
+        public static void Run_LeaderSequenceMatcher_PrefixWaits()
+        {
+            // Gap 1 (AC4, matcher half): with only "w,-" bound, Space+W alone is a live PREFIX —
+            // the matcher consumes and waits, fires nothing. An unrelated next key aborts.
+            // (GREEN today as well — this pins the contract so a regression that executes or
+            // drops a prefix fails here.)
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,-"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var w = matcher.HandleKey(Keys.W, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Consume, w.Kind);
+            Assert.True(matcher.IsActive, "w is a prefix: the sequence stays active");
+            Assert.Equal(0, executed);
+
+            var abort = matcher.HandleKey(Keys.X, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Abort, abort.Kind);
+            Assert.False(matcher.IsActive, "an unrelated key after the prefix aborts");
+            Assert.Equal(0, executed);
         }
 
         // ================================================================

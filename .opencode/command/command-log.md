@@ -327,3 +327,39 @@
 - NEEDS-PERMISSION: no
 - AGENT: build-agent
 - DATE: 2026-10-04
+
+### 2026-10-04 — build-agent (preview-buffer BUILD) — the plan-pinned `Document.GetTextBuffer()` does NOT exist on the Roslyn 4.14 compile closure
+- CMD: `dotnet build` with `PreviewEditorHost.TryGetWorkspaceBuffer` calling `document?.GetTextBuffer()` (the plan-preview-buffer pinned call); then metadata decode of the NuGet compile assets (`System.Reflection.Metadata` over `Microsoft.CodeAnalysis.Workspaces.dll` 4.14.0 netstandard2.0, `Microsoft.CodeAnalysis.EditorFeatures.Text.dll` 4.14.0, `Microsoft.VisualStudio.LanguageServices.dll` 4.14.0 net472)
+- RESULT: `error CS1061: 'Document' does not contain a definition for 'GetTextBuffer'` — REAL (the compiler, not a stale LSP index; the LSP reported the identical error first and was RIGHT). Metadata proof: Workspaces.dll has NO `GetTextBuffer*` name at all; the only `GetTextBuffer` in the closure is `Microsoft.CodeAnalysis.Text.Extensions.GetTextBuffer(this SourceTextContainer) -> ITextBuffer` (public, `[Extension]`, in `Microsoft.CodeAnalysis.EditorFeatures.Text` — a transitive dep of `Microsoft.VisualStudio.LanguageServices` 4.14.0) plus `IVsTextBufferProvider.GetTextBuffer()` (COM interop). No `Document`-receiver overload exists anywhere in the compile-time reference set.
+- REASON: other — the plan's pinned API name differs on the referenced Roslyn build (the plan's own BP-3 Fails-if STOP condition; the artifact's "NO new using is required" claim was wrong in a way that does not matter — no using fixes it)
+- ALTERNATIVE: STOP and escalate to the hub per the plan (do NOT substitute a `GetTextAsync` + `CreateTextBuffer` text-clone — loses the workspace attachment; do NOT unilaterally substitute `GetTextSynchronously(...).TryGetTextBuffer()` either — that is a pinned-decision change only the hub/planner may make). NOTE: `dotnet run --project tests/Telescope.Tests` still works (it references ONLY Telescope.csproj, not MyExtension.csproj) — usable to isolate MyExtension-only build failures.
+- NEEDS-PERMISSION: no — needs a PLAN DECISION, not a permission
+- AGENT: build-agent
+- DATE: 2026-10-04
+
+### 2026-10-04 — build-agent (preview-buffer BUILD) — temp-script API notes (System.Reflection.Metadata in pwsh 7)
+- CMD: `BlobReader.ReadTypeEntityReferenceToken()` / `ReadTypeEntityHandle()`; a PowerShell function called before its definition line
+- RESULT: `does not contain a method named 'ReadTypeEntityReferenceToken'` / `'ReadTypeEntityHandle'`; `The term 'Read-SigType' is not recognized`
+- REASON: misuse — this runtime's `BlobReader` exposes `ReadTypeHandle()` (returns `EntityHandle` directly, no `TypeHandle` struct); and PowerShell functions must be DEFINED before the runtime call site (top-to-bottom execution)
+- ALTERNATIVE: `$sig.ReadSignatureTypeCode()` → `SignatureTypeCode.TypeHandle` → `$sig.ReadTypeHandle()` → resolve the `EntityHandle` (Kind = TypeReference/TypeDefinition); put helper functions at the TOP of the temp `.ps1`
+- NEEDS-PERMISSION: no
+
+### 2026-10-04 — implementation-planner (preview-buffer RE-PLAN) — NuGet-DLL reflection probe (the EASIER alternative to raw metadata decode)
+- CMD: (1) a temp `.ps1` probe using `[System.Reflection.Assembly]::LoadFile` over the NuGet cache DLLs with an `AppDomain.AssemblyResolve` handler — WORKS and is far simpler than the System.Reflection.Metadata decode above; it verified the whole Roslyn 4.14 chain (`TextDocument.TryGetText(out SourceText)` public + inherited by `Document` (BaseType `TextDocument`), `SourceText.Container` public, `Extensions.GetTextBuffer/TryGetTextBuffer(SourceTextContainer)` public static with NULLABLE return and NO out param). (2) The handler initially referenced `$using:pkgRoot`
+- RESULT: (2) failed — `A Using variable cannot be retrieved. A Using variable can be used only with Invoke-Command, Start-Job, or InlineScript` (repeated per resolution attempt), cascading into `Could not load file or assembly 'Microsoft.VisualStudio.Text.Data...'` when method `ToString()` needed parameter types
+- REASON: misuse — `$using:` is remoting/job syntax only; a plain script-block delegate must close over the variable normally (or inline the literal path)
+- ALTERNATIVE: hard-code the path inside the delegate (or reference the script-scope variable directly); the working probe pattern is in `C:\Users\lojze\AppData\Local\Temp\opencode\probe-roslyn-414-b.ps1` (session temp — recreate if pruned)
+- NEEDS-PERMISSION: no
+- AGENT: implementation-planner
+- DATE: 2026-10-04
+- AGENT: build-agent
+- DATE: 2026-10-04
+
+### 2026-10-04 — docs-reviewer (preview-buffer re-plan gate) — NuGet-cache + Roslyn-source path guesses
+- CMD: (1) `rg -a -c "..." C:\Users\lojze\.nuget\packages\microsoft.codeanalysis.workspaces\4.14.0\lib\netstandard2.0\Microsoft.CodeAnalysis.Workspaces.dll` (guessed package id); (2) `glob` pattern `**/*.dll` with path=`...packages\microsoft.codeanalysis.workspaces\4.14.0` (nonexistent dir); (3) webfetch `raw.githubusercontent.com/dotnet/roslyn/<commit>/src/Workspaces/Core/Portable/TextDocument.cs` and `.../Document.cs`
+- RESULT: (1) rg IO error os error 3 — the Workspaces assembly lives in package `microsoft.codeanalysis.workspaces.common`, not `microsoft.codeanalysis.workspaces`; (2) glob on a nonexistent directory fails with "ripgrep execution failed" (NOT a clean "No files found" — treat that error as "path does not exist"); (3) 404 ×2 — at the Roslyn 17.14 tag the document model lives under `src/Workspaces/Core/Portable/Workspace/Solution/` (`TextDocument.cs`, `Document.cs`, `Solution.cs`), not the Portable root; `Workspace_Editor.cs` is under `.../Portable/Workspace/`. The commit hash itself was valid (root `README.md` fetched fine)
+- REASON: misuse — guessed paths
+- ALTERNATIVE: validate a remote commit with a root file before guessing paths; list the parent dir via `api.github.com/repos/<org>/<repo>/contents/<dir>?ref=<commit>` to find real file paths; binary-presence grep pattern that works: `rg -a -c "<MethodName>" <dll>` (metadata #Strings heap is UTF-8; exit 1 + no output = absent)
+- NEEDS-PERMISSION: no
+- AGENT: docs-reviewer
+- DATE: 2026-10-04

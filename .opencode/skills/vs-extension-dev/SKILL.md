@@ -11,7 +11,8 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 41 registered live E2E scenarios (ALL executed GREEN — no
+> test commands, the 43 registered live E2E scenarios (42 executed GREEN — only
+> `telescope-focus-panes` pending its VERIFY run; no
 > known-RED; a few flake on
 > retry), feature status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
@@ -89,7 +90,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Navigation/Utils/NavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `MyExtension/Navigation/Utils/WindowRect.cs` | Simple int `x, y, width, height` rect value object. |
 | `MyExtension/Navigation/Utils/NavigationSnapshot.cs` | Single-pass snapshot of navigation candidates (active rect derived from the candidate list — no N+1 COM rect calls). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `DefinitionFinder` + `DefinitionHit` symbol-at-caret definition locations via `DeclaringSyntaxReferences` (finder-side deterministic ordering), `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `Panes/` (`IPane` + `PaneHost` — the modular pane host: ordered registry, focused-pane tracking, GEOMETRIC directional Ctrl+H/J/K/L movement (LEFT/DOWN/UP/RIGHT via `PaneNavigationEngine`, logged no-op edges), left-click normalization; `PromptPane`/`ListPane`/`PreviewPane` — the reusable core the deferred lazygit overlay builds on), `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `DefinitionFinder` + `DefinitionHit` symbol-at-caret definition locations via `DeclaringSyntaxReferences` (finder-side deterministic ordering), `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
 | `Telescope/Finders/Utils/HitOpener.cs` | Shared null/missing-file guard + open-at-line for the finders. |
 | `Telescope/Finders/Utils/FileContentCache.cs` | mtime-keyed file-content cache (LRU-capped). |
 | `Telescope/Finders/Utils/ProjectFileCache.cs` | Cached `ProjectFiles.Enumerate` enumeration. |
@@ -98,7 +99,8 @@ GlobalKeyboardHook (Win32 LL hook)
 | `Telescope/Finders/Utils/DteFileOpener.cs` | DTE-based file opener (host-injected seam). |
 | `Telescope/Finders/FinderBase.cs` | `FinderBase<THit>` — shared gather/open pipeline for the finders (UI-thread assert, try/catch gather, hit→entry mapping, open-with-error-handling). |
 | `Telescope/Logging/Utils/PaneFailureTracker.cs` | Pure one-time fallback for the NeoVisual Output pane (`[NeoVisual] output pane unavailable: ...` written to the log file, never re-entering the pane path). |
-| `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure focus-target state machine (List/Preview) — the `[Telescope] focus target=List|Preview` diagnostic contract. |
+| `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure pane-focus state machine — the GEOMETRIC directional move (Ctrl+H/J/K/L = left/down/up/right via `PaneNavigationEngine`), the logged no-op edges, and the click normalization — the `[Telescope] focus target=Input|List|Preview` diagnostic contract. |
+| `Telescope/Overlay/Utils/Panes/*.cs` | The pane host: `IPane` (Id token `Input|List|Preview`, content, `Activate`/`Deactivate`) + `PaneHost` (ordered registry, focused-pane tracking, click normalization) + `PaneNavigationEngine` (the pure geometric directional decision — the `WindowNavigationEngine` pipeline over the pane rects) + `PromptPane`/`ListPane`/`PreviewPane` + `PaneSelectionSync`. |
 | `Telescope/Overlay/Utils/LineIndex.cs` | Pure (line, offset) index over text (binary-search 1-based line lookups); shared by preview caret placement + blank-line fallback. |
 | `Telescope/Overlay/Utils/TryDispatch.cs` | Comment-only stub (n11/BP-46: merged into `TextMotionDispatcher.Handle`; file retained as the seam marker). |
 
@@ -140,11 +142,24 @@ path-like columns (`file`/`dir`/`path`) shorten by removing the FRONT
 at the END (`EndTruncate`); the horizontal scrollbar is Disabled; the overlay width =
 max(760, sum(visibleMinWidths) + scrollbar + preview(480) + chrome), recomputed at
 open + on every chooser toggle, capped by `WorkArea`; the selected row pins a
-dark-blue highlight (#2d4a75) + white text (active + inactive). Keys route via
-`OverlayKeyHandler` (list navigation/modes) when focus is on the list, or
-`TextMotionNavigator` (vim motions h/l/j/k/w/b/e/0/$/gg/G) when
-focus is on the preview. **Ctrl+H / Ctrl+L switch `_focusTarget` between List and
-Preview.** The overlay **closes on focus loss** (`Deactivated` → `CloseOverlay`).
+dark-blue highlight (#2d4a75) + white text (active + inactive). The overlay is a
+**modular pane host** (`Telescope/Overlay/Utils/Panes/`): the prompt (Input), the
+results list (List), and the preview (Preview) are panes behind one composable
+contract (`IPane` + `PaneHost`), each focusable with REAL WPF focus — **left-click
+focuses a pane**, and **Ctrl+H/J/K/L move focus GEOMETRICALLY — LEFT/DOWN/UP/RIGHT**
+(the Cardinal spatial mapping; the pure `PaneNavigationEngine` runs the
+`WindowNavigationEngine` pipeline over the pane rects; Ctrl+K from the Input
+focuses the Preview — the larger adjacency, the last-in-list tie-break as the
+equal-width net; a direction with no pane is a logged no-op — no wrap). The
+initial pane on open is Input (the prompt focused in insert mode). Keys route by
+the FOCUSED pane: Input → the prompt/insert-mode keys (`OverlayKeyHandler` —
+untouched), List → the selection keys (j/k/gg/G/Enter; the native arrows stay
+live), Preview → the vim motions (`TextMotionNavigator`
+h/l/j/k/w/b/e/0/$/gg/G). The overlay **closes on focus loss** (`Deactivated` →
+`CloseOverlay` unchanged — pane focus never escapes the overlay's own visual
+tree). The pane host is the reusable core the deferred lazygit overlay
+(user-decided bonus feature) builds on — adding a surface = implementing
+`IPane` + registering it.
 
 ## Non-obvious facts & gotchas
 
@@ -282,11 +297,11 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (224) and
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (258) and
   `dotnet run --project tests/NeoVisual.Tests` (191), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — ALL executed GREEN
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (43 registered — 42 executed GREEN
   against the experimental
-  instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
+  instance; only `telescope-focus-panes` pending its VERIFY run), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

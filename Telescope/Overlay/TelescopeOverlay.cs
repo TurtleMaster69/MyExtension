@@ -123,6 +123,14 @@ namespace Telescope.Overlay
         // Pure state machine (unit-tested); the overlay only applies the resulting focus.
         private readonly FocusTargetModel _focusTargetModel = new();
 
+        // Feature 7: the three panes (the contract + host under Overlay/Utils/Panes/). The machine
+        // (_focusTargetModel) stays the SINGLE focus decision source; the panes only apply it.
+        private readonly PromptPane _promptPane;
+        private readonly ListPane _listPane;
+        private readonly PreviewPane _previewPane;
+        private readonly PaneHost _paneHost;
+        private bool _applyingSelection;   // the SelectionChanged re-entrancy guard (the native-arrow sync)
+
         public TelescopeOverlay(FzfFilter fzf, Func<IPreviewEditor>? previewEditorFactory = null)
         {
             _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
@@ -169,13 +177,15 @@ namespace Telescope.Overlay
             DockPanel.SetDock(titleBar, Dock.Top);
             _layout.Children.Add(titleBar);
 
-            // Prompt TextBox — the query input. It is editable in insert mode and read-only in
-            // normal mode (normal-mode keys are intercepted at the window level).
+            // Prompt TextBox — the query input, docked BOTTOM (full width; the plan-D1 geometry:
+            // the Input strip at the bottom, the List|Preview region above it). It is editable in
+            // insert mode and read-only in normal mode (normal-mode keys are intercepted at the
+            // window level).
             var promptHost = new Border
             {
                 Padding = new Thickness(10, 6, 10, 6),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x41)),
-                BorderThickness = new Thickness(0, 0, 0, 1),
+                BorderThickness = new Thickness(0, 1, 0, 0),
             };
             _promptBox = new TextBox
             {
@@ -190,11 +200,13 @@ namespace Telescope.Overlay
             };
             _promptBox.TextChanged += OnPromptTextChanged;
             promptHost.Child = _promptBox;
-            DockPanel.SetDock(promptHost, Dock.Top);
-            _layout.Children.Add(promptHost);
+            _promptPane = new PromptPane(promptHost, FocusPrompt);   // Feature 7: the Input pane (FocusPrompt = its focus-entry)
+            DockPanel.SetDock(_promptPane.Content, Dock.Bottom);
+            _layout.Children.Add(_promptPane.Content);
 
             // Results list (the columned list) and the editor-view file preview beside it. The
-            // bottom area is a Grid: results on the left (narrower), preview on the right.
+            // MIDDLE region is a Grid: the List (col 0, the existing 260 fixed) + the Preview
+            // (col 1, star) sit ABOVE the full-width Input (the bottom-docked prompt).
             var bottom = new Grid
             {
                 Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1f, 0x24)),
@@ -205,7 +217,6 @@ namespace Telescope.Overlay
 
             _resultsList = new ListView
             {
-                Focusable = false,   // the overlay's key routing is unchanged: the prompt owns focus
                 IsTabStop = false,
                 Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1f, 0x24)),
                 BorderThickness = new Thickness(0),
@@ -266,8 +277,16 @@ namespace Telescope.Overlay
             _resultsList.AddHandler(UIElement.MouseRightButtonUpEvent,
                 new MouseButtonEventHandler(OnHeaderRightClick), handledEventsToo: true);
 
-            Grid.SetColumn(_resultsList, 0);
-            bottom.Children.Add(_resultsList);
+            // Feature 7: the native-arrow sync. The ListView's own Up/Down/PageUp/... handling moves its
+            // SelectedIndex (the overlay does NOT claim the arrows — ListKeyMap); this handler adopts the
+            // native index into the untouched OverlayKeyHandler by replaying the delta through the
+            // machine's own Up/Down gestures (PaneSelectionSync). Guarded: programmatic selections
+            // (ApplySelection) must not re-enter.
+            _resultsList.SelectionChanged += (_, _) => OnListNativeSelectionChanged();
+
+            _listPane = new ListPane(_resultsList);   // Feature 7: Focusable=true + the accent-line chrome (inside the pane)
+            Grid.SetColumn(_listPane.Content, 0);
+            bottom.Children.Add(_listPane.Content);
 
             // Read-only file preview beside the results list: a REAL VS editor view (IWpfTextView,
             // read-only — roles Document+Interactive+Zoomable, no Editable, so VsVim never
@@ -282,8 +301,13 @@ namespace Telescope.Overlay
                 BorderThickness = new Thickness(1, 0, 0, 0),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x41)),
             };
-            Grid.SetColumn(_previewHost, 1);
-            bottom.Children.Add(_previewHost);
+            _previewPane = new PreviewPane(_previewHost, ActivatePreviewEditor);   // Feature 7: the pane wraps the host (Focusable=false stays on the slot)
+            Grid.SetColumn(_previewPane.Content, 1);
+            bottom.Children.Add(_previewPane.Content);
+
+            _paneHost = new PaneHost(_promptPane, _listPane, _previewPane);   // the registry order is PINNED: Input, List, Preview
+            _paneHost.PaneClicked += OnPaneClicked;   // left-click normalization (the machine decides)
+            SizeChanged += (_, _) => RefreshPaneLayout();   // rev 1: the geometric focus needs current rects (§1.2)
 
             _layout.Children.Add(bottom);
 
@@ -307,11 +331,17 @@ namespace Telescope.Overlay
                     return;
                 }
                 _activationHandled = true;
-                FocusPrompt();
+                FocusInitialPane();
             };
 
             ContentRendered += (_, _) =>
-                Dispatcher.BeginInvoke(new Action(FocusPrompt), DispatcherPriority.ApplicationIdle);
+                Dispatcher.BeginInvoke(
+                    new Action(() =>
+                    {
+                        FocusInitialPane();   // the initial pane is Input (plan §1.5 — no focus target= line at open)
+                        RefreshPaneLayout();  // the rects must exist BEFORE the first key can land (§1.2)
+                    }),
+                    DispatcherPriority.ApplicationIdle);
 
             // If the overlay ever loses focus while open, close it. A modal overlay that lost
             // focus to the window underneath is broken (keystrokes would go to the wrong surface),
@@ -713,16 +743,56 @@ namespace Telescope.Overlay
 
         private void ApplySelection()
         {
-            if (_selectedIndex < 0 || _selectedIndex >= _resultsList.Items.Count)
+            _applyingSelection = true;
+            try
             {
-                _resultsList.SelectedIndex = -1;
+                if (_selectedIndex < 0 || _selectedIndex >= _resultsList.Items.Count)
+                {
+                    _resultsList.SelectedIndex = -1;
+                    return;
+                }
+                _resultsList.SelectedIndex = _selectedIndex;
+                if (_resultsList.SelectedItem != null)
+                {
+                    _resultsList.ScrollIntoView(_resultsList.SelectedItem);
+                }
+            }
+            finally
+            {
+                _applyingSelection = false;
+            }
+        }
+
+        /// <summary>Adopts a NATIVE ListView selection move (the live arrows) into the overlay's
+        /// model: replays the index delta through the untouched OverlayKeyHandler (normal mode — the
+        /// pane invariant guarantees the List pane is never focused in insert mode) and re-renders.
+        /// The _applyingSelection guard keeps programmatic selections (ApplySelection, ItemsSource
+        /// resets) out.</summary>
+        private void OnListNativeSelectionChanged()
+        {
+            if (_applyingSelection || !IsOpen)
+            {
                 return;
             }
-            _resultsList.SelectedIndex = _selectedIndex;
-            if (_resultsList.SelectedItem != null)
+            if (_focusTargetModel.Current != FocusTarget.List)
             {
-                _resultsList.ScrollIntoView(_resultsList.SelectedItem);
+                return;   // only the native-list path
             }
+            int to = _resultsList.SelectedIndex;
+            if (to < 0)
+            {
+                return;   // an ItemsSource reset / cleared selection — nothing to adopt
+            }
+            int steps = PaneSelectionSync.Steps(_selectedIndex, to);
+            if (steps == 0)
+            {
+                return;
+            }
+            for (int i = 0; i < Math.Abs(steps); i++)
+            {
+                _keyHandler.Handle(steps > 0 ? OverlayKey.Down : OverlayKey.Up);
+            }
+            RenderResults();   // re-reads the machine's synced index; the guarded ApplySelection no-ops
         }
 
         private void RenderResults()
@@ -880,7 +950,7 @@ namespace Telescope.Overlay
             _keyHandler.EnterInsertMode(placement);
             _promptBox.IsReadOnly = false;
             UpdateModeLabel();
-            FocusPrompt();
+            FocusPane(FocusTarget.Input);   // Feature 7: the machine moves to Input + the pane focuses the prompt
             ApplyInsertCaret(placement);
         }
 
@@ -893,35 +963,71 @@ namespace Telescope.Overlay
                 return;
             }
 
-            string mode = _keyHandler.IsNormalMode ? "normal" : "insert";
+            // No tab semantics: Tab would move WPF focus without the pane machine knowing (the
+            // machine and the real focus would desync). Swallowed on every pane (plan §1.3 R5).
+            if (e.Key == Key.Tab)
+            {
+                e.Handled = true;
+                return;
+            }
 
-            // Ctrl+H / Ctrl+L move focus between the results list and the file preview; Escape in
-            // the preview returns to the list. Delegated to the pure focus-target state machine.
-            var focusAction = _focusTargetModel.Handle(MapKey(e.Key));
+            string mode = _keyHandler.IsNormalMode ? "normal" : "insert";
+            bool hasCtrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+            // 1. The pane-focus machine FIRST (the tunneling interceptor dispatches before the
+            //    focused control's own handling): Ctrl+H/J/K/L move focus GEOMETRICALLY —
+            //    left/down/up/right (the PaneNavigationEngine over the pane rects, plan §1.2);
+            //    Escape in the preview returns to the list. Delegated to the pure focus-target
+            //    state machine.
+            PaneFocusKey gesture = FocusTargetModel.MapKey(e.Key, hasCtrl);
+            var focusAction = _focusTargetModel.Handle(gesture);
             if (focusAction != FocusTargetAction.None)
             {
                 e.Handled = true;
-                TelescopeLog.Log($"focus target={_focusTargetModel.Current}");
-                FocusTargetUi();
-                return;
-            }
-
-            if (_focusTargetModel.Current == FocusTarget.Preview)
-            {
-                // Preview: vim motions navigate the code read-only; Escape returns to the list.
-                bool handled = HandlePreviewKey(e.Key);
-                if (handled)
+                if (focusAction == FocusTargetAction.NoOp)
                 {
-                    e.Handled = true;
-                    ApplyPreviewCaret();
-                    TelescopeLog.Log(PreviewDiagnostics.Caret(_previewNavigator.Caret, _previewNavigator.LineNumber));
+                    // A direction with no pane: consumed, nothing moves, NO wrap — the m47-style
+                    // outcome diagnostic makes the no-op traceable (and e2e-assertable, plan §1.2).
+                    TelescopeLog.Log($"focus no-op: no pane {FocusTargetModel.DirectionName(gesture)} from {_focusTargetModel.Current}");
                 }
-                base.OnPreviewKeyDown(e);
+                else
+                {
+                    FocusPane(_focusTargetModel.Current);
+                }
                 return;
             }
 
-            // Prompt box has focus (List target). In normal mode, h/l/w/b/e/0/$ move the prompt
-            // caret; everything else routes through the list/mode state machine.
+            // 2. Dispatch by the FOCUSED pane (the pinned consume-vs-fallthrough contract, plan §1.3).
+            switch (_focusTargetModel.Current)
+            {
+                case FocusTarget.Preview:
+                    // Preview: vim motions navigate the code read-only; unconsumed keys fall through
+                    // to the editor's own handling (arrows scroll, Ctrl+scroll zooms).
+                    bool handled = HandlePreviewKey(e.Key);
+                    if (handled)
+                    {
+                        e.Handled = true;
+                        ApplyPreviewCaret();
+                        TelescopeLog.Log(PreviewDiagnostics.Caret(_previewNavigator.Caret, _previewNavigator.LineNumber));
+                    }
+                    base.OnPreviewKeyDown(e);
+                    return;
+
+                case FocusTarget.List:
+                    RouteListKey(e, mode);
+                    return;
+
+                default: // FocusTarget.Input — the prompt (the pre-pane behavior, unchanged)
+                    RouteInputKey(e, mode);
+                    return;
+            }
+        }
+
+        /// <summary>The Input pane's key path (the pre-pane prompt path, verbatim): normal-mode
+        /// prompt motions, then the overlay state machine; unhandled keys reach the TextBox beneath
+        /// (R1/R2 — typing in insert mode is NEVER consumed).</summary>
+        private void RouteInputKey(KeyEventArgs e, string mode)
+        {
             if (_keyHandler.IsNormalMode && TryPromptMotion(e.Key))
             {
                 e.Handled = true;
@@ -929,13 +1035,22 @@ namespace Telescope.Overlay
                 return;
             }
 
-            // Translate the WPF key into the logic's normalized gesture, run the state machine,
-            // then apply whatever UI action the logic requests.
             var action = _keyHandler.Handle(MapKey(e.Key));
             ApplyAction(action, mode, e);
 
             // Always continue routing: handled keys were swallowed above (e.Handled = true), but
             // unhandled keys (e.g. typing in insert mode) must reach the TextBox beneath.
+            base.OnPreviewKeyDown(e);
+        }
+
+        /// <summary>The List pane's key path (Feature 7, R3): the SAME untouched OverlayKeyHandler
+        /// via ListKeyMap — the selection gestures claimed; the native arrows NOT claimed (they fall
+        /// through to the ListView, whose SelectionChanged the sync adopts).</summary>
+        private void RouteListKey(KeyEventArgs e, string mode)
+        {
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            var action = _keyHandler.Handle(ListKeyMap.Map(e.Key, shift));
+            ApplyAction(action, mode, e);
             base.OnPreviewKeyDown(e);
         }
 
@@ -1006,26 +1121,84 @@ namespace Telescope.Overlay
             _previewEditor?.ApplyCaret(_previewNavigator.Caret);
         }
 
-        private void FocusTargetUi()
+        /// <summary>One focus change: the machine's decision + the M-M7 diagnostic + the UI apply.
+        /// The SINGLE path for key-driven AND click-driven AND restore-driven focus changes. Logs
+        /// exactly one <c>focus target=&lt;token&gt;</c> line per change (never at open — plan §1.5).</summary>
+        private void FocusPane(FocusTarget target)
         {
-            if (_focusTargetModel.Current == FocusTarget.Preview)
+            _focusTargetModel.Focus(target);
+            TelescopeLog.Log($"focus target={target}");
+            ApplyFocusTarget(target);
+        }
+
+        /// <summary>Applies a focus decision to the UI: the pinned mode-exit rule (plan §1.4) + the
+        /// pane activation. The machine decided; this only applies.</summary>
+        private void ApplyFocusTarget(FocusTarget target)
+        {
+            if (FocusTargetModel.ExitsInsert(target) && !_keyHandler.IsNormalMode)
             {
-                if (_previewHost.Content != null)
-                {
-                    _previewEditor?.Focus();   // the editor's VisualElement takes keyboard focus
-                    ApplyPreviewCaret();
-                }
-                else
-                {
-                    // Nothing to preview: keep the prompt focused. The model's Preview target makes
-                    // the preview motions no-ops over the empty navigator; Escape returns to List.
-                    FocusPrompt();
-                }
+                // Insert mode owns the keyboard only on the Input pane; leaving the prompt mid-insert
+                // would strand typing — exit insert via the mode machine's own path (the synthetic
+                // Escape is NOT logged as a key= line).
+                _keyHandler.Handle(OverlayKey.Escape);
+                UpdateModeLabel();
+                _promptBox.IsReadOnly = true;
+                ApplyPromptCaretStyle();
+            }
+            _paneHost.Activate(target);
+        }
+
+        /// <summary>The Preview pane's focus-entry (the old FocusTargetUi preview branch, unchanged):
+        /// the editor's VisualElement takes keyboard focus; with nothing to preview the prompt stays
+        /// focused (the machine stays Preview — the preview motions no-op; Escape returns to List).</summary>
+        private void ActivatePreviewEditor()
+        {
+            if (_previewHost.Content != null)
+            {
+                _previewEditor?.Focus();
+                ApplyPreviewCaret();
             }
             else
             {
                 FocusPrompt();
             }
+        }
+
+        /// <summary>The open-time pane activation: the initial pane is Input (the machine's default —
+        /// pinned by the unit tests). NO focus target= line at open (plan §1.5): the machine is AT
+        /// Input, no transition happened; the first key/click logs. The prompt focus itself logs the
+        /// unchanged <c>Focus prompt => ...</c> line.</summary>
+        private void FocusInitialPane() => _paneHost.Activate(FocusTarget.Input);
+
+        /// <summary>Measures the panes' layout rects (overlay DIP coordinates) and pushes them into
+        /// the focus machine — the GEOMETRIC directional move's input (rev 1, plan §1.2). The pane's
+        /// visual-tree position is the single source of truth; the machine never reads WPF. Runs on
+        /// SizeChanged + ContentRendered, BEFORE the first key can land; until then an empty layout
+        /// makes every directional move a safe no-op. The registry order is preserved (the
+        /// tie-break's iteration order).</summary>
+        private void RefreshPaneLayout()
+        {
+            var rects = new List<KeyValuePair<FocusTarget, PaneRect>>();
+            foreach (IPane pane in _paneHost.Panes)
+            {
+                Rect bounds = pane.Content.TransformToVisual(this)
+                    .TransformBounds(new Rect(pane.Content.RenderSize));
+                rects.Add(new KeyValuePair<FocusTarget, PaneRect>(
+                    pane.Id,
+                    new PaneRect((int)bounds.X, (int)bounds.Y, (int)bounds.Width, (int)bounds.Height)));
+            }
+            _focusTargetModel.SetLayout(rects);
+        }
+
+        /// <summary>The left-click normalization (plan §1.3 R0 + AC4): the pane host reports the
+        /// click; the machine decides; the same diagnostic + apply as the key path.</summary>
+        private void OnPaneClicked(FocusTarget id)
+        {
+            if (!IsOpen)
+            {
+                return;
+            }
+            FocusPane(id);
         }
 
         private static OverlayKey MapKey(Key key)
@@ -1179,7 +1352,7 @@ namespace Telescope.Overlay
                 }
                 else
                 {
-                    FocusPrompt();    // keys must land back in the prompt
+                    FocusPane(FocusTarget.Input);    // keys must land back in the prompt (the machine's Current must match the focused pane)
                 }
             };
             _chooserMenu = menu;

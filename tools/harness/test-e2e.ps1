@@ -42,7 +42,8 @@
 #   explorer-open-navigation   g selects the first source file programmatically (UIHierarchy), o opens it
 #   explorer-open-searchbox    i focuses the search box, type a query, o opens the filtered result
 #   explorer-searchbox-motions search box focused: j/k/0/$ are consumed as vim text motions
-#   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview
+#   telescope-preview   preview shows selected file; Ctrl+L/Ctrl+H switch focus (3-pane contract); vim motions in preview
+#   telescope-focus-panes  Ctrl+H/J/K/L move focus between the Input/List/Preview panes (modal; left-click is unit-pinned)
 #   neovisual-editor-insert  insert-mode typing reaches the editor (hook must not swallow text)
 #   neovisual-textinput-motions  Command Window: h/l/w/b/e/a/A/I caret/insert motions + block caret
 #   seed-reset    filesystem-only: scratch seeding always resets (stale edits removed) + uniform EOL
@@ -1426,15 +1427,26 @@ Register-Scenario 'telescope-preview' {
     # reads 0 (no semantic highlighting) until the workspace-attach fix lands (in flight in the
     # planning hub); the assertion pins the line's PRESENCE, not a non-zero count.
     Assert-NewLogLine $logPath "$($script:PfxTel)preview tokens=\d+" 'preview rendered syntax-highlighted tokens'
-    # Ctrl+L moves focus to the preview.
+    # M-M7 FOCUS PREAMBLE: the overlay opens on the INPUT pane, where Ctrl+L (RIGHT) is a
+    # pinned no-op edge (nothing right of the full-width Input). Land on the LIST first:
+    # Ctrl+K (Input -> Preview, the pinned UP target) then Ctrl+H (Preview -> List).
+    Send-Ctrl $script:VkK; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+K moved focus UP to the Preview (preamble)'
+    Send-Ctrl $script:VkH; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=List' 'Ctrl+H moved focus LEFT to the List (preamble)'
+    # Ctrl+L moves focus to the preview (RIGHT from the List; snapshot-attributed so the
+    # preamble's own Preview line cannot satisfy the assertion).
+    $idxBeforeL = Get-LogCacheIndex $logPath
     Send-Ctrl 0x4C
-    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+L moved focus to the preview'
+    Assert-NewLogLineAfter $logPath $idxBeforeL 'focus target=Preview' 'Ctrl+L moved focus to the preview'
     # j moves the preview caret down a line (vim motion over the code).
     Send-Tap $script:VkJ
     Assert-NewLogLine $logPath "$($script:PfxTel)preview caret=\d+ line=2" 'j moved the preview caret to line 2'
-    # Escape returns to the list.
+    # Escape returns to the list (M-M7: the Escape-in-preview -> List transition is
+    # unchanged; snapshot-attributed — the preamble's Ctrl+H List line must not satisfy this).
+    $idxBeforeEsc = Get-LogCacheIndex $logPath
     Send-Tap $script:VkEscape
-    Assert-NewLogLine $logPath 'focus target=List' 'Escape returned focus to the list'
+    Assert-NewLogLineAfter $logPath $idxBeforeEsc 'focus target=List' 'Escape returned focus to the list'
     Close-Telescope $vs $logPath
 }
 
@@ -2059,8 +2071,18 @@ Register-Scenario 'telescope-preview-motions' {
     Assert-NewLogLine $logPath "promptChanged query='Motions'" 'typed query reached prompt'
     Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Motions.cs match'
     Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Motions\.cs" 'preview shows the Motions.cs match'
+    # M-M7 FOCUS PREAMBLE: the overlay opens on the INPUT pane, where Ctrl+L (RIGHT) is a
+    # pinned no-op edge (nothing right of the full-width Input). Land on the LIST first:
+    # Ctrl+K (Input -> Preview, the pinned UP target) then Ctrl+H (Preview -> List).
+    Send-Ctrl $script:VkK; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+K moved focus UP to the Preview (preamble)'
+    Send-Ctrl $script:VkH; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=List' 'Ctrl+H moved focus LEFT to the List (preamble)'
+    # Ctrl+L moves focus to the preview (RIGHT from the List; snapshot-attributed so the
+    # preamble's own Preview line cannot satisfy the assertion).
+    $idxBeforeL = Get-LogCacheIndex $logPath
     Send-Ctrl 0x4C
-    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+L moved focus to the preview'
+    Assert-NewLogLineAfter $logPath $idxBeforeL 'focus target=Preview' 'Ctrl+L moved focus to the preview'
 
     # j/k step down/up a line at a time over the 5-line file.
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j
@@ -2103,8 +2125,57 @@ Register-Scenario 'telescope-preview-motions' {
     Assert-NewLogLine $logPath 'preview caret=35 line=4' '0 moved to the line start'
     Send-Shift 0x34; Start-Sleep -Milliseconds 200  # $
     Assert-NewLogLine $logPath 'preview caret=61 line=4' '$ moved to the line end'
+    $idxBeforeEsc = Get-LogCacheIndex $logPath
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 200
-    Assert-NewLogLine $logPath 'focus target=List' 'Escape returned focus to the list'
+    Assert-NewLogLineAfter $logPath $idxBeforeEsc 'focus target=List' 'Escape returned focus to the list'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-focus-panes ------------------------------------------------
+# Feature 7 rev 1 (M-M7): the 3-pane focus contract. Ctrl+H/J/K/L move REAL WPF focus
+# GEOMETRICALLY — focus LEFT/DOWN/UP/RIGHT (the Cardinal spatial mapping, one level down):
+# the machine picks the pane in the requested direction of the focused pane's rect (the
+# WindowNavigationEngine pipeline over the pane rects). Pinned layout: Input bottom (full
+# width), List left (1*), Preview right (2*). NO wrap — an edge direction is a logged no-op
+# (`focus no-op: no pane <direction> from <pane>`). The initial pane on open is Input (the
+# prompt focused in insert mode); the K-up probe from the open (Input -> Preview: the
+# Preview's larger adjacency, the last-in-list tie-break as the equal-width net) proves the
+# initial target deterministically. The LEFT-CLICK focus path is NOT keyboard-injectable
+# (the harness injects keys, not mouse) — it is unit-pinned (the pane-focus machine's click
+# normalization) + manually verified; this gate covers the KEY path only.
+Register-Scenario 'telescope-focus-panes' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath            # initial pane = Input (prompt focused, insert)
+    Assert-OverlayFocused $vs
+    # Ctrl+K from the fresh open: the UP move from the full-width Input — both panes are
+    # above; the Preview wins (largest adjacency 2/3 of the width; the last-in-list
+    # tie-break is the equal-width net). Proves the initial target is Input (under the old
+    # List-initial model this would NOT emit Preview).
+    Send-Ctrl $script:VkK; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+K from open moved UP to the Preview (initial pane is Input)'
+    Assert-OverlayFocused $vs              # AC5: the pane switch never deactivated the overlay
+    # Ctrl+H -> List (LEFT from the Preview).
+    Send-Ctrl $script:VkH; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=List' 'Ctrl+H moved focus LEFT to the List pane'
+    Assert-OverlayFocused $vs
+    # Ctrl+K from the List: NOTHING above the top row — the pinned logged no-op; the focus
+    # STAYS List (the next assertion proves it did not wrap or move).
+    Send-Ctrl $script:VkK; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus no-op: no pane up from List' 'Ctrl+K at the top edge logged the no-op (no wrap)'
+    # Ctrl+L -> Preview (RIGHT from the List — also proves the no-op left the focus on List).
+    Send-Ctrl $script:VkL; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=Preview' 'Ctrl+L moved focus RIGHT to the Preview pane'
+    Assert-OverlayFocused $vs
+    # Ctrl+J -> Input (DOWN from the Preview).
+    Send-Ctrl $script:VkJ; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus target=Input' 'Ctrl+J moved focus DOWN to the Input pane'
+    Assert-OverlayFocused $vs
+    # Ctrl+H from the Input: NOTHING left of the full-width bottom pane — the second pinned
+    # no-op edge (AC3's no-wrap, bottom edge).
+    Send-Ctrl $script:VkH; Start-Sleep -Milliseconds 300
+    Assert-NewLogLine $logPath 'focus no-op: no pane left from Input' 'Ctrl+H at the left edge logged the no-op (no wrap)'
+    Write-Pass 'focus-panes: Ctrl+H/J/K/L moved focus directionally across Input/List/Preview, edges no-opped, overlay stayed modal'
     Close-Telescope $vs $logPath
 }
 

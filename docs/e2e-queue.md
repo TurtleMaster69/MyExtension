@@ -76,6 +76,16 @@ in run 155/157)** — every gate was exercised and passed on the VS-capable mach
   224 / NeoVisual 191. (The first VERIFY — run 172/173 — FAILED on the
   `CompareWithUnmodified` clean-file refusal, fail-twice → the RE-PLAN fixed it scenario-side;
   zero C# changes.)
+- **Feature 7 — the pane architecture (2026-10-05):** `E2E-PANES-1` — discharged by the item's
+  final gate (the full 43-scenario fresh-boot suite, run 179, `-TimeoutSec 2400`): 43/43
+  GREEN; `telescope-focus-panes` FIRST-RUN PASS — the directional sequences live (Ctrl+K from
+  open → `focus target=Preview` the pinned tie-break; Ctrl+H→List; Ctrl+L→Preview; Ctrl+J→
+  Input), the two pinned no-op edges the only no-ops, the modal guarantee RE-VERIFIED (the
+  overlay never deactivated); the M-M7 three-state sites (`telescope-preview`/
+  `telescope-preview-motions`) GREEN; Telescope 258 / NeoVisual 191. (The first VERIFY — runs
+  176/177 — FAILED on the layout inversion: the composition kept the prompt docked TOP vs the
+  pinned bottom-Input geometry, fail-twice → the RE-PLAN's BP-A5 rev 2 one-line dock flip
+  fixed it.)
 
 ## Queued gates — Telescope columns + preview (2026-10-04)
 
@@ -137,8 +147,11 @@ e2e is ENABLED - the gates drain at each plan's VERIFY.
   the three `leader-binding executed:` lines + the POST-retry absence gate clean; the
   dirty-on-disk fix for the `CompareWithUnmodified` clean-file refusal landed via the
   RE-PLAN; see the What ran GREEN section).
-- **E2E-PANES-1** - Feature 7 (fourth): the NEW `telescope-focus-panes` scenario: Ctrl+J/H/L/K ->
-  `focus target=Input|List|Preview` + the modal guarantee; the M-M7 migration of the 4 two-state
-  sites; the left-click path is unit-pinned + manual.
+- ~~**E2E-PANES-1** - Feature 7 (fourth)~~ — **DISCHARGED GREEN 2026-10-05** (the item's final
+  gate: the full 43-scenario fresh-boot suite, run 179; `telescope-focus-panes` FIRST-RUN PASS
+  after the BP-A5 rev 2 layout re-compose fixed the run-176/177 layout-inversion regression —
+  the directional sequences live, the pinned no-op edges, the modal guarantee re-verified; the
+  M-M7 three-state sites GREEN; see the What ran GREEN section). The left-click path is
+  unit-pinned + manual.
 - **E2E-RECENT-1** - Gap 4 (fifth): the NEW `telescope-recent` scenario: `Space+f,e` opens the
   Recent overlay; `Models/Order.cs` opened first is the TOP match (per-key snapshots); Enter opens.

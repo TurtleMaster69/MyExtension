@@ -7,10 +7,11 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 11 — the git leader
-bindings (`g,d` diff / `g,b` blame / `g,h` history; the branches binding dropped) — GREEN
-2026-10-04 (feature lane, e2e ENABLED; one iteration: the `CompareWithUnmodified` clean-file
-refusal fixed scenario-side via the RE-PLAN; full 42-scenario suite + both unit suites GREEN)
+> **Status:** ACTIVE · **Updated:** 2026-10-05 · **Last item:** Feature 7 — the overlay PANE
+architecture + 3-pane focus (Ctrl+H/J/K/L GEOMETRIC + left-click; the IPane/PaneHost modular
+core the lazygit overlay reuses) — GREEN 2026-10-05 (feature lane, M-M7; one iteration: the
+layout-inversion regression fixed by the BP-A5 rev 2 dock flip; full 43-scenario suite + both
+unit suites GREEN)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -111,15 +112,14 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **Gap 11 (the git bindings) reached GREEN 2026-10-04** with e2e
-  enabled; see the Done section. Nothing is in flight.)
-- **Next up:** **Feature 7 — the overlay PANE architecture** (`plan-feature7.md`,
-  gate-APPROVED): the user's directive — REAL focus (not logical), left-click focusable panes,
-  one modular overlay (an IPane contract + a PaneHost registry) the deferred lazygit overlay
-  reuses; Ctrl+H=List, Ctrl+L=Preview, Ctrl+J=Input, Ctrl+K=cycle (the wrap pinned); M-M7
-  (`focus target=Input|List|Preview` — the 4 harness sites update); the e2e scenario
-  `telescope-focus-panes` (E2E-PANES-1). **Then:** Gap 4 (the recent-files finder —
-  WRITTEN + APPROVED; `f,e` PROPOSED — confirm at handoff). All plans live in
+- **In progress:** (none — **Feature 7 (the pane architecture) reached GREEN 2026-10-05** with
+  e2e enabled; see the Done section. Nothing is in flight.)
+- **Next up:** **Gap 4 — the recent-files finder** (`plan-gap4.md`, gate-APPROVED):
+  `Name="Recent"`, the leader `f,e` (PROPOSED — confirm at handoff); CRITICAL:
+  `EnvDTE.RecentFiles` does NOT exist in the 17.x interop → the reflection probe + the
+  session-MRU fallback behind the unchanged seam; the e2e scenario `telescope-recent`
+  (E2E-RECENT-1). **Then:** the remaining "smallest first" order — gap 5 (symbols; the next
+  planning batch), gap 10, gap 9, feature 8 (+gap 8), feature 9, which-key last. Plans live in
   `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/`
   and are handed off progressively (each written to `docs/implementation_plan.md` when it
   becomes the first item). Then the rest
@@ -251,14 +251,14 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **224 passed**; `tests/NeoVisual.Tests`
-  **191 passed** (after Gap 11 — the git bindings, 2026-10-04).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **42 scenarios** — ALL executed GREEN
-  (full-suite fresh boot with `-TimeoutSec 2400`, run 174, 2026-10-04; Gap 11's final gate —
-  `neovisual-git-bindings` first-run PASS, zero new flakes; `telescope-goto` carries a flaky
+- Offline units: `tests/Telescope.Tests` **258 passed**; `tests/NeoVisual.Tests`
+  **191 passed** (after Feature 7 — the pane architecture, 2026-10-05).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **43 scenarios** — ALL executed GREEN
+  (full-suite fresh boot with `-TimeoutSec 2400`, run 179, 2026-10-05; Feature 7's final gate —
+  `telescope-focus-panes` first-run PASS, zero new flakes; `telescope-goto` carries a flaky
   count of 1 from run 172 — pass-on-retry, no 3rd strike). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 42-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the full 43-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -414,12 +414,16 @@ Top of the queue, in priority order:
 >    seed-leak set; the e2e scenario `neovisual-git-bindings` (42nd) — first-run PASS after the
 >    RE-PLAN fixed the `CompareWithUnmodified` clean-file refusal scenario-side. NeoVisual
 >    190 → 191; Telescope 224 unchanged.
-> 4. **Feature 7 — the overlay PANE architecture** (`plan-feature7.md`): the user's directive —
->    REAL focus (not logical), left-click focusable panes, one modular overlay (an IPane
->    contract + a PaneHost registry — the types land with the plan) the deferred lazygit
->    overlay reuses; Ctrl+H=List, Ctrl+L=Preview, Ctrl+J=Input,
->    Ctrl+K=cycle (the wrap pinned); M-M7 (`focus target=Input|List|Preview` — the 4 harness
->    sites update); the e2e scenario `telescope-focus-panes`.
+> 4. ~~**Feature 7 — the overlay PANE architecture** (`plan-feature7.md`)~~ — **DONE** (GREEN
+>    2026-10-05, feature lane, M-M7, e2e ENABLED; see the Done section). The modular pane host
+>    (IPane + PaneHost + the pure PaneNavigationEngine — the lazygit reuse core); REAL WPF
+>    focus per pane; left-click focuses; Ctrl+H/J/K/L = the Cardinal GEOMETRIC mapping over
+>    the pane rects (no wrap — the logged no-op edges); the pinned tie-break (Ctrl+K from
+>    Input → Preview, the larger adjacency); the initial pane = Input; the M-M7 three-state
+>    migration (`focus target=Input|List|Preview` + the NEW `focus no-op:` literal — the 4
+>    harness sites updated); the e2e scenario `telescope-focus-panes` (43rd) — first-run PASS
+>    after the BP-A5 rev 2 dock flip fixed the layout-inversion regression. Telescope.Tests
+>    224 → **258**; NeoVisual 191.
 > 5. **Gap 4 — the recent-files finder** (`plan-gap4.md`): `Name="Recent"`, the leader `f,e`
 >    (PROPOSED — confirm at handoff); CRITICAL: `EnvDTE.RecentFiles` does NOT exist in the 17.x
 >    interop → the reflection probe + the session-MRU fallback behind the unchanged seam; the
@@ -801,6 +805,67 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-05 — Feature 7: the overlay PANE architecture + 3-pane focus (Ctrl+H/J/K/L
+  GEOMETRIC + left-click)** (Lane: `feature`, e2e ENABLED, M-M7; 14 delegations, 6 VS boots,
+  1 iteration). The Telescope overlay refactored into a **modular pane host** — the reusable
+  core the deferred lazygit overlay (and any future surface) builds on: NEW
+  `Telescope/Overlay/Utils/Panes/` (7 files, flat `Telescope.Overlay` namespace) — `IPane`
+  (+`PaneChrome` frozen brushes: Dim #333841 / Active #8b9dc3, a 1px bottom accent line,
+  brush-only switch, no layout shift), `PaneHost` (the ordered registry, idempotent
+  activation, the `NotifyClicked` left-click seam), the pure `PaneNavigationEngine`
+  (+`PaneRect`/`PaneDirection`/`PaneAxis` — the MIRRORED Cardinal pipeline: in-direction →
+  aligned → closest-gap → largest-adjacency, the `>=` last-in-list tie-break, the overlap
+  guard; the window `WindowNavigationEngine` untouched), `PromptPane`/`ListPane`(+`ListKeyMap`
+  — the arrows fall through: THE pinned decision)/`PreviewPane`/`PaneSelectionSync` (the
+  signed-delta native-selection replay). `FocusTargetModel` EVOLVED in place (the M34 history
+  carries): the `Input` token, `PaneFocusKey`, the GEOMETRIC spatial map (Ctrl+H/J/K/L =
+  focus left/down/up/right over the pane rects — NOT a fixed key→pane map), the pinned K
+  wrap Input→Preview (the larger adjacency = the Cardinal last-in-list tie-break), the click
+  `Focus`, `ExitsInsert`, the `NoOp` action. **REAL WPF focus per pane** (the user's
+  architecture directive — not a logical target): left-click focuses a pane (the natural WPF
+  focus + the PaneHost notification → the diagnostic + the visuals); **NO wrap** — a
+  direction with no pane is a consumed NO-OP logged as the NEW M-M7 literal
+  `[Telescope] focus no-op: no pane {direction} from {pane}`; the three-state
+  `focus target=Input|List|Preview` logged on every focus change (keys AND click); the
+  initial pane on open = **Input** (the prompt focused in insert mode — the 14 initial-target
+  consumers audited, all NO-EDIT). The key routing dispatches by the FOCUSED pane (the R0-R5
+  table: the focus machine first via tunneling; Input = typing falls through; List claims
+  j/k/gg/G/Enter/q/Esc/i/a/A/I with the native arrows live + adopted; Preview claims the
+  motions; Tab swallowed) — the `OverlayKeyHandler`/`TextMotionNavigator` state machines
+  UNTOUCHED (the pane layer routes TO them). The layout: the List (col 0, 260 fixed) +
+  Preview (col 1, star) ABOVE the full-width bottom-docked Input (the plan-D1 geometry the
+  unit tests' synthetic rects pin). The modal guarantee: pane focus never escapes the overlay
+  (one window's visual tree); `Deactivated`→close unchanged — RE-VERIFIED live (the pane
+  switches execute, `Assert-OverlayFocused` passes after every switch, no `overlay closed`
+  during the scenario). The M-M7 harness migration: the 4 `focus target=` sites → three-state
+  + the Ctrl+K→Ctrl+H focus preambles in the preview scenarios. New e2e scenario
+  `telescope-focus-panes` (43rd) — created RED, FIRST-RUN PASS after the fix. Unit tests:
+  Telescope 224 → **258** (+40 gross / +34 net: 23 evolved machine tests replacing the 6 M34,
+  7 engine, 6 pane-host, 3 ListKeyMap, 1 SelectionSync); NeoVisual 191 untouched.
+  **Iteration 1 (the VERIFY runs 176/177, fail-twice):** the composition kept the prompt
+  docked TOP (the ARTIFACT's own E2 contradiction of plan D1) → every vertical Ctrl-chord
+  geometrically no-oped live (`focus no-op: no pane up from Input`) while the units passed on
+  synthetic rects (the composition deviation invisible to the pure machine) → the RE-PLAN
+  (BP-A5 rev 2, trace-level — no 4a gate) pinned the ONE-LINE dock flip
+  (`DockPanel.SetDock(_promptPane.Content, Dock.Bottom)`) + the separator to the prompt's TOP
+  edge; the debug-agent applied it exactly; the affected subset (run 178) + the full gate
+  (run 179) GREEN. Final gates: `dotnet build` 0 errors; Telescope.Tests **258 passed,
+  0 failed**; NeoVisual.Tests **191 passed, 0 failed** (staggered); full 43-scenario e2e suite
+  GREEN on a fresh boot (run 179, `-TimeoutSec 2400`: 43/43, zero new flakes); both lints
+  PASS; `-SelfCheck` PASS; `-List` 43.
+  **Change summary:** created `Telescope/Overlay/Utils/Panes/` (IPane, PaneHost,
+  PaneNavigationEngine, PromptPane, ListPane, PreviewPane, PaneSelectionSync); modified
+  `Telescope/Overlay/Utils/FocusTargetModel.cs` (the evolved machine),
+  `Telescope/Overlay/TelescopeOverlay.cs` (the composition E1-E14 + the rev-2 dock flip),
+  `tests/Telescope.Tests/Program.cs` (+34 net, `[STAThread]`), `tools/harness/test-e2e.ps1`
+  (the M-M7 migration + the scenario), `docs/spec.md` §2.5/§2.2/§4/§5, `AGENTS.md`,
+  SKILL.md. **If this regresses, look first at the pane LAYOUT composition
+  (`TelescopeOverlay.cs` ~:204 — the `Dock.Bottom` pin; a re-dock to Top inverts the vertical
+  axis and every J/K move no-ops) and the routing dispatch (`OnPreviewKeyDown`'s R0-R5
+  order — the focus machine MUST run first via tunneling); the directional contract is
+  pinned by `Run_FocusTarget_*` + `Run_PaneNavEngine_*` and executed live by
+  `telescope-focus-panes`.**
 
 - **2026-10-04 — Gap 11: git leader bindings (`g,d` diff / `g,b` blame / `g,h` history)** —
   (Lane: `feature`, e2e ENABLED; 9 delegations, 4 VS boots, 1 iteration). Three pure

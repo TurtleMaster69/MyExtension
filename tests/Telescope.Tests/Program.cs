@@ -20,6 +20,10 @@ namespace Telescope.Tests
 {
     internal static class Program
     {
+        // BP-A1 (Feature 7): the pane-contract tests construct WPF FrameworkElements (the IPane
+        // fakes); WPF element construction/focus is unsupported on an MTA thread, so the runner's
+        // Main must be STA. Pure no-op for the existing tests (none touch WPF objects).
+        [STAThread]
         private static int Main(string[] args) => TestHarness.TestRunner.Run(typeof(Tests), args);
     }
 
@@ -3964,57 +3968,450 @@ namespace Telescope.Tests
         }
 
         // ================================================================
-        // FocusTargetModel — pure focus-target state machine (M34)
-        // RED: `FocusTargetModel`/`FocusTarget`/`FocusTargetAction` + `OverlayKey.CtrlH`/`CtrlL`
-        // don't exist -> compile error (CS0246/CS0103/CS0117)
+        // FocusTargetModel — the pane-focus state machine (Feature 7; evolves the M34 block)
+        // RED: `FocusTarget.Input`, `PaneFocusKey`, `FocusTargetAction.NoOp`, `SetLayout`,
+        // `Focus`, `MapKey`, `ExitsInsert` don't exist -> compile errors
+        // (CS0117/CS0246/CS1061). The 6 M34 tests are REPLACED by these 23 (the M34 history
+        // carries via the `-- FocusTarget` filter).
+        // The PINNED test layout — the overlay's real shape (bottom area, 300x100 DIPs):
+        // List (left, 1*) / Preview (right, 2*) on top, Input (full width) below.
+        // Registry order [Input, List, Preview] — the tie-break's iteration order (§1.2).
+        // NOTE (compile-RED authoring): the layout is built in BODY positions (inside the
+        // helper/tests), not a static field — a field typed KeyValuePair<FocusTarget,
+        // PaneRect>[] is a declaration-phase error, and csc aborts method-body binding on
+        // ANY declaration error (the 2026-10-04 columns-ux lesson), which would hide every
+        // body-level RED error this section pins. The inline shape is permanent: it compiles
+        // identically once the source lands, and the pinned rects are identical either way.
         // ================================================================
 
-        public static void Run_FocusTarget_StartsWithList()
+        private static FocusTargetModel NewModelAt(FocusTarget current)
         {
             var model = new FocusTargetModel();
+            model.SetLayout(new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 60, 300, 40)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
+            });
+            model.Focus(current);
+            return model;
+        }
+
+        public static void Run_FocusTarget_StartsWithInput()
+        {
+            var model = new FocusTargetModel();
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
+        public static void Run_FocusTarget_ResetStartsWithInput()
+        {
+            var model = new FocusTargetModel();
+            model.Focus(FocusTarget.Preview);   // move away first
+            model.Reset();
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
+        public static void Run_FocusTarget_CtrlHFromPreviewMovesToList()
+        {
+            var model = NewModelAt(FocusTarget.Preview);
+            var action = model.Handle(PaneFocusKey.Left);
+            Assert.Equal(FocusTargetAction.Handled, action);
             Assert.Equal(FocusTarget.List, model.Current);
         }
 
-        public static void Run_FocusTarget_CtrlLMovesToPreview()
+        public static void Run_FocusTarget_CtrlLFromListMovesToPreview()
         {
-            var model = new FocusTargetModel();
-            var action = model.Handle(OverlayKey.CtrlL);
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Right);
             Assert.Equal(FocusTargetAction.Handled, action);
             Assert.Equal(FocusTarget.Preview, model.Current);
         }
 
-        public static void Run_FocusTarget_CtrlHReturnsToList()
+        public static void Run_FocusTarget_CtrlJFromListMovesToInput()
         {
-            var model = new FocusTargetModel();
-            model.Handle(OverlayKey.CtrlL); // move to Preview first
-            var action = model.Handle(OverlayKey.CtrlH);
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Down);
             Assert.Equal(FocusTargetAction.Handled, action);
-            Assert.Equal(FocusTarget.List, model.Current);
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
+        public static void Run_FocusTarget_CtrlJFromPreviewMovesToInput()
+        {
+            var model = NewModelAt(FocusTarget.Preview);
+            var action = model.Handle(PaneFocusKey.Down);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
+        public static void Run_FocusTarget_CtrlKFromInputTargetsPreview()
+        {
+            var model = NewModelAt(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            // The PINNED up outcome: both panes are above the full-width Input; the Preview wins on
+            // LARGEST ADJACENCY (200 of 300 width vs the List's 100) — the last-in-list tie-break is
+            // the equal-width net (Run_PaneNavEngine_AdjacencyTieGoesToLastInList pins the rule).
+            Assert.Equal(FocusTarget.Preview, model.Current);
         }
 
         public static void Run_FocusTarget_EscapeInPreviewReturnsToList()
         {
-            var model = new FocusTargetModel();
-            model.Handle(OverlayKey.CtrlL); // move to Preview first
-            var action = model.Handle(OverlayKey.Escape);
+            var model = NewModelAt(FocusTarget.Preview);
+            var action = model.Handle(PaneFocusKey.Escape);
             Assert.Equal(FocusTargetAction.Handled, action);
             Assert.Equal(FocusTarget.List, model.Current);
         }
 
+        public static void Run_FocusTarget_EscapeInInputUnchanged()
+        {
+            var model = NewModelAt(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Escape);
+            Assert.Equal(FocusTargetAction.None, action);
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
         public static void Run_FocusTarget_EscapeInListUnchanged()
         {
-            var model = new FocusTargetModel();
-            var action = model.Handle(OverlayKey.Escape);
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Escape);
             Assert.Equal(FocusTargetAction.None, action);
             Assert.Equal(FocusTarget.List, model.Current);
         }
 
-        public static void Run_FocusTarget_ResetOnOpen()
+        public static void Run_FocusTarget_NoOpLeftFromInput()
         {
-            var model = new FocusTargetModel();
-            model.Handle(OverlayKey.CtrlL); // move to Preview
-            model.Reset();
+            var model = NewModelAt(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Left);
+            Assert.Equal(FocusTargetAction.NoOp, action);    // consumed — NOT Handled, NOT None
+            Assert.Equal(FocusTarget.Input, model.Current);  // NO wrap — the focus stays
+        }
+
+        public static void Run_FocusTarget_NoOpLeftFromList()
+        {
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Left);
+            Assert.Equal(FocusTargetAction.NoOp, action);
             Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        public static void Run_FocusTarget_NoOpRightFromInput()
+        {
+            var model = NewModelAt(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Right);
+            Assert.Equal(FocusTargetAction.NoOp, action);
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
+        public static void Run_FocusTarget_NoOpRightFromPreview()
+        {
+            var model = NewModelAt(FocusTarget.Preview);
+            var action = model.Handle(PaneFocusKey.Right);
+            Assert.Equal(FocusTargetAction.NoOp, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
+        }
+
+        public static void Run_FocusTarget_NoOpUpFromList()
+        {
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.NoOp, action);   // consumed — NOT Handled, NOT None
+            Assert.Equal(FocusTarget.List, model.Current);  // NO wrap — the focus stays
+        }
+
+        public static void Run_FocusTarget_NoOpUpFromPreview()
+        {
+            var model = NewModelAt(FocusTarget.Preview);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.NoOp, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
+        }
+
+        public static void Run_FocusTarget_NoOpDownFromInput()
+        {
+            var model = NewModelAt(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Down);
+            Assert.Equal(FocusTargetAction.NoOp, action);
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
+        public static void Run_FocusTarget_ClickFocusesListFromInput()
+        {
+            var model = NewModelAt(FocusTarget.Input);
+            var action = model.Focus(FocusTarget.List);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.List, model.Current);
+        }
+
+        public static void Run_FocusTarget_ClickFocusesPreviewFromList()
+        {
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Focus(FocusTarget.Preview);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
+        }
+
+        public static void Run_FocusTarget_ClickIdempotent()
+        {
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Focus(FocusTarget.List);
+            Assert.Equal(FocusTargetAction.Handled, action);  // always Handled (the caller re-logs)
+            Assert.Equal(FocusTarget.List, model.Current);    // the focus is unchanged
+        }
+
+        public static void Run_FocusTarget_EnumOrderPinned()
+        {
+            Assert.Equal(0, (int)FocusTarget.Input);
+            Assert.Equal(1, (int)FocusTarget.List);
+            Assert.Equal(2, (int)FocusTarget.Preview);
+        }
+
+        public static void Run_FocusTarget_MapKeyCtrlChords()
+        {
+            Assert.Equal(PaneFocusKey.Left, FocusTargetModel.MapKey(Key.H, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Right, FocusTargetModel.MapKey(Key.L, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Down, FocusTargetModel.MapKey(Key.J, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Up, FocusTargetModel.MapKey(Key.K, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Escape, FocusTargetModel.MapKey(Key.Escape, hasCtrl: false));
+            Assert.Equal(PaneFocusKey.None, FocusTargetModel.MapKey(Key.H, hasCtrl: false));  // plain h is a pane key
+            Assert.Equal(PaneFocusKey.None, FocusTargetModel.MapKey(Key.J, hasCtrl: false));
+        }
+
+        public static void Run_FocusTarget_ExitsInsertRule()
+        {
+            Assert.False(FocusTargetModel.ExitsInsert(FocusTarget.Input), "Input never exits insert (the prompt owns typing)");
+            Assert.True(FocusTargetModel.ExitsInsert(FocusTarget.List), "a focus change away from the prompt exits insert");
+            Assert.True(FocusTargetModel.ExitsInsert(FocusTarget.Preview), "a focus change away from the prompt exits insert");
+        }
+
+        // ================================================================
+        // PaneNavigationEngine — the pure geometric directional decision (Feature 7 rev 1;
+        // the WindowNavigationEngine pipeline over the pane rects)
+        // RED: `PaneNavigationEngine`/`PaneRect`/`PaneDirection` don't exist -> CS0246.
+        // ================================================================
+
+        public static void Run_PaneNavEngine_InDirectionFilter()
+        {
+            // A candidate BEHIND the direction is rejected: from the List (100,0,100,100), RIGHT,
+            // the Input (0,0,100,100) lies behind (X=0 is not > 100) and the Preview (250,0,100,100)
+            // is the only in-direction pane -> Preview.
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 0, 100, 100)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(100, 0, 100, 100)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(250, 0, 100, 100)),
+            };
+            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.List, PaneDirection.Right);
+            Assert.True(target == FocusTarget.Preview, $"expected Preview, got {target?.ToString() ?? "null"}");
+        }
+
+        public static void Run_PaneNavEngine_AlignmentFilter()
+        {
+            // An in-direction candidate with NO perpendicular overlap is rejected: from the List
+            // (0,100,100,50), RIGHT, the Preview (200,0,100,50) is in-direction (X=200 > 0) with a
+            // positive gap (100) but shares NO Y range with the List (0-50 vs 100-150) -> not
+            // aligned -> rejected -> null (the Input (0,0,100,50) is not in-direction either).
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 0, 100, 50)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 100, 100, 50)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(200, 0, 100, 50)),
+            };
+            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.List, PaneDirection.Right);
+            Assert.True(target == null, $"expected null (no aligned candidate), got {target?.ToString() ?? "null"}");
+        }
+
+        public static void Run_PaneNavEngine_OverlapGuardRejectsNegativeGap()
+        {
+            // THE PINNED DEVIATION: from the Preview, LEFT, the full-width Input is in-direction and
+            // aligned but OVERLAPS the Preview (gap = 100 - 300 = -200). Without the guard the Input's
+            // negative gap would win the closest-gap band and Ctrl+H from the Preview would focus the
+            // INPUT. The guard rejects it -> the List (gap 0).
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 60, 300, 40)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
+            };
+            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Preview, PaneDirection.Left);
+            Assert.True(target == FocusTarget.List, $"expected List, got {target?.ToString() ?? "null"}");
+        }
+
+        public static void Run_PaneNavEngine_ClosestGapWins()
+        {
+            // Two stacked candidates ABOVE the focused pane (gaps 10 and 30): the closest-gap band
+            // keeps only the gap-10 candidate -> the List.
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 100, 300, 40)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 60, 150, 30)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(0, 40, 150, 30)),
+            };
+            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Input, PaneDirection.Up);
+            Assert.True(target == FocusTarget.List, $"expected List (gap 10 beats 30), got {target?.ToString() ?? "null"}");
+        }
+
+        public static void Run_PaneNavEngine_LargestAdjacencyWins()
+        {
+            // Equal gaps (both 0), unequal X-overlap: the wider overlap wins — the real K-from-Input
+            // shape (the Preview's 200 of the Input's 300 width beats the List's 100).
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 60, 300, 40)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
+            };
+            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Input, PaneDirection.Up);
+            Assert.True(target == FocusTarget.Preview, $"expected Preview (adjacency 200 vs 100), got {target?.ToString() ?? "null"}");
+        }
+
+        public static void Run_PaneNavEngine_AdjacencyTieGoesToLastInList()
+        {
+            // THE PINNED TIE-BREAK: equal gaps, EQUAL adjacency (two 150-wide top panes) -> the LAST
+            // entry in registry order wins (the window engine's own `>=` rule) -> the Preview.
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 60, 300, 40)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 150, 60)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(150, 0, 150, 60)),
+            };
+            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Input, PaneDirection.Up);
+            Assert.True(target == FocusTarget.Preview, $"expected Preview (last in registry), got {target?.ToString() ?? "null"}");
+        }
+
+        public static void Run_PaneNavEngine_NoCandidateReturnsNull()
+        {
+            var layout = new[]
+            {
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 60, 300, 40)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
+                new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
+            };
+            Assert.True(PaneNavigationEngine.SelectTarget(layout, FocusTarget.List, PaneDirection.Up) == null,
+                "an edge direction with no pane must return null (the machine's NoOp source)");
+        }
+
+        // ================================================================
+        // ListKeyMap — the List pane's pinned consume-vs-fallthrough contract (Feature 7)
+        // RED: `ListKeyMap` doesn't exist -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_ListKeyMap_ArrowsFallThrough()
+        {
+            // THE PINNED DECISION: the native arrows stay live on the List pane.
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.Up, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.Down, shift: false));
+        }
+
+        public static void Run_ListKeyMap_SelectionGesturesClaimed()
+        {
+            Assert.Equal(OverlayKey.J, ListKeyMap.Map(Key.J, shift: false));
+            Assert.Equal(OverlayKey.K, ListKeyMap.Map(Key.K, shift: false));
+            Assert.Equal(OverlayKey.G, ListKeyMap.Map(Key.G, shift: false));
+            Assert.Equal(OverlayKey.ShiftG, ListKeyMap.Map(Key.G, shift: true));
+            Assert.Equal(OverlayKey.Enter, ListKeyMap.Map(Key.Enter, shift: false));
+            Assert.Equal(OverlayKey.Q, ListKeyMap.Map(Key.Q, shift: false));
+            Assert.Equal(OverlayKey.Escape, ListKeyMap.Map(Key.Escape, shift: false));
+            Assert.Equal(OverlayKey.I, ListKeyMap.Map(Key.I, shift: false));
+            Assert.Equal(OverlayKey.A, ListKeyMap.Map(Key.A, shift: false));
+        }
+
+        public static void Run_ListKeyMap_MotionsFallThrough()
+        {
+            // The prompt motions have no text caret on the List pane — not claimed.
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.H, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.L, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.W, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.B, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.E, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.D0, shift: false));
+            Assert.Equal(OverlayKey.Other, ListKeyMap.Map(Key.D4, shift: false));
+        }
+
+        // ================================================================
+        // PaneSelectionSync — the native-arrow adoption math (Feature 7)
+        // RED: `PaneSelectionSync` doesn't exist -> compile error (CS0246).
+        // ================================================================
+
+        public static void Run_PaneSelectionSync_Steps()
+        {
+            Assert.Equal(3, PaneSelectionSync.Steps(2, 5));    // 3 Downs
+            Assert.Equal(-3, PaneSelectionSync.Steps(5, 2));   // 3 Ups (the sign is the direction)
+            Assert.Equal(0, PaneSelectionSync.Steps(4, 4));    // no replay
+        }
+
+        // ================================================================
+        // PaneHost — the pane contract + host (Feature 7)
+        // RED: `IPane`/`PaneHost` don't exist -> compile error (CS0246).
+        // The fakes record Activate/Deactivate order; Content is a bare
+        // FrameworkElement (BP-A1's [STAThread] makes WPF construction legal).
+        // ================================================================
+
+        private sealed class FakePane : IPane
+        {
+            public readonly List<string> Events = new();
+            public FakePane(FocusTarget id) { Id = id; Content = new System.Windows.FrameworkElement(); }
+            public FocusTarget Id { get; }
+            public FrameworkElement Content { get; }
+            public bool IsFocusable => true;
+            public void Activate() => Events.Add($"activate:{Id}");
+            public void Deactivate() => Events.Add($"deactivate:{Id}");
+        }
+
+        public static void Run_PaneHost_RegistryOrderPinned()
+        {
+            var host = new PaneHost(
+                new FakePane(FocusTarget.Input), new FakePane(FocusTarget.List), new FakePane(FocusTarget.Preview));
+            Assert.Equal(FocusTarget.Input, host.GetPane(FocusTarget.Input)!.Id);
+            Assert.Equal(FocusTarget.List, host.GetPane(FocusTarget.List)!.Id);
+            Assert.Equal(FocusTarget.Preview, host.GetPane(FocusTarget.Preview)!.Id);
+        }
+
+        public static void Run_PaneHost_GetPaneById()
+        {
+            var host = new PaneHost(new FakePane(FocusTarget.List));
+            Assert.True(host.GetPane(FocusTarget.Preview) == null, "an unregistered id must resolve to null");
+        }
+
+        public static void Run_PaneHost_ActivateDeactivatesPrevious()
+        {
+            var list = new FakePane(FocusTarget.List);
+            var preview = new FakePane(FocusTarget.Preview);
+            var host = new PaneHost(new FakePane(FocusTarget.Input), list, preview);
+            host.Activate(FocusTarget.List);
+            host.Activate(FocusTarget.Preview);
+            // The old pane deactivates BEFORE the new one activates (element-wise — no sequence Assert).
+            Assert.Equal("activate:List", list.Events[0]);
+            Assert.Equal("deactivate:List", list.Events[1]);
+            Assert.Equal("activate:Preview", preview.Events[0]);
+            Assert.True(preview.Events.Count == 1, "the new pane must activate exactly once");
+        }
+
+        public static void Run_PaneHost_ActivateSamePaneIdempotent()
+        {
+            var list = new FakePane(FocusTarget.List);
+            var host = new PaneHost(list);
+            host.Activate(FocusTarget.List);
+            host.Activate(FocusTarget.List);
+            Assert.Equal(2, list.Events.Count);   // activate, activate — NO deactivate (same pane)
+            Assert.Equal("activate:List", list.Events[0]);
+            Assert.Equal("activate:List", list.Events[1]);
+        }
+
+        public static void Run_PaneHost_ActivateUnknownIdNoop()
+        {
+            var list = new FakePane(FocusTarget.List);
+            var host = new PaneHost(list);
+            host.Activate(FocusTarget.Preview);   // not registered
+            Assert.Equal(0, list.Events.Count);
+        }
+
+        public static void Run_PaneHost_NotifyClickedRaisesEvent()
+        {
+            var host = new PaneHost(new FakePane(FocusTarget.List));
+            FocusTarget? clicked = null;
+            host.PaneClicked += id => clicked = id;
+            host.NotifyClicked(FocusTarget.List);
+            Assert.Equal(FocusTarget.List, clicked!.Value);
         }
 
         // ================================================================

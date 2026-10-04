@@ -112,7 +112,8 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/Package/Utils/InitSteps.cs` | Dependency-free named-step package-init orchestrator (`[MyExtension] init <step> ok/failed`). |
 | `MyExtension/Vim/Utils/VimModeClassifier.cs` | Pure Vim ModeKind → typing flag + friendly name classifier (the `vim-mode=` truth table). |
 | `Telescope/Overlay/Utils/OverlayShowState.cs` | State-based guard for the deferred `ShowDialog()` (open-then-close race). |
-| `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure focus-target state machine (`[Telescope] focus target=List|Preview`). |
+| `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure pane-focus state machine — the GEOMETRIC directional move (Ctrl+H/J/K/L = left/down/up/right via `PaneNavigationEngine`), the logged no-op edges, and the click normalization behind `[Telescope] focus target=Input|List|Preview` (evolved from the M34 two-state model). |
+| `Telescope/Overlay/Utils/Panes/*.cs` | The pane host: `IPane` (Id token `Input|List|Preview`, content, `Activate`/`Deactivate`) + `PaneHost` (ordered registry, focused-pane tracking, click normalization) + `PaneNavigationEngine` (the pure geometric directional decision — the `WindowNavigationEngine` pipeline over the pane rects) + `PromptPane`/`ListPane`/`PreviewPane` + `PaneSelectionSync` (the native-arrow adoption math). |
 | `Telescope/Overlay/Utils/LineIndex.cs` | Pure line → (line, offset) index shared by the preview caret placement + blank-line fallback. |
 | `Telescope/Overlay/Utils/TryDispatch.cs` | Shared vim-motion dispatch (n11/BP-46: merged into `TextMotionDispatcher`; file retained as the seam marker). |
 | `Telescope/Overlay/Utils/IPreviewEditor.cs` | The preview pane's editor seam (`Show`/`ApplyCaret`/`Focus`/`Dispose`): the overlay delegates the REAL read-only editor view hosting (create/reuse by mtime, caret application, dispose) to a host-supplied implementation — VS-SDK-coupled view creation stays out of the Telescope library. |
@@ -190,11 +191,26 @@ path-like columns (`file`/`dir`/`path`) shorten by removing the FRONT
 at the END (`EndTruncate`); the horizontal scrollbar is Disabled; the overlay width =
 max(760, sum(visibleMinWidths) + scrollbar + preview(480) + chrome), recomputed at
 open + on every chooser toggle, capped by `WorkArea`; the selected row pins a
-dark-blue highlight (#2d4a75) + white text (active + inactive). Keys route via
-`OverlayKeyHandler` (list navigation/modes) when focus is on the list, or
-`TextMotionNavigator` (vim motions) when focus is on the preview. **Ctrl+H / Ctrl+L
-switch `_focusTarget` between List and Preview.** The overlay **closes on focus
-loss** (`Deactivated` → `CloseOverlay`).
+dark-blue highlight (#2d4a75) + white text (active + inactive). The overlay is
+a **modular pane host** (`Telescope/Overlay/Utils/Panes/`): the prompt, the results
+list, and the preview are PANES (`PromptPane`/`ListPane`/`PreviewPane`) behind one
+composable contract (`IPane` + `PaneHost` — adding a surface = implementing the
+contract + registering it; the reuse path for the deferred lazygit overlay). Each pane
+is focusable with REAL WPF focus: **left-click focuses a pane**, and **Ctrl+H/J/K/L
+move focus GEOMETRICALLY — LEFT/DOWN/UP/RIGHT** (the Cardinal spatial mapping, the
+same keys as the window navigation one level down): the pure `PaneNavigationEngine`
+runs the `WindowNavigationEngine` pipeline (in-direction → aligned → closest gap →
+largest adjacency, ties → the last pane in registry order) over the pane rects the
+host measures. Layout: Input bottom (full width), List left, Preview right — so
+Ctrl+K from the Input focuses the Preview (larger adjacency; the last-in-list
+tie-break is the equal-width net). A direction with no pane is a **logged no-op**
+(`focus no-op: no pane <direction> from <pane>`) — no wrap. The **initial pane on
+open is Input** (the prompt focused in insert mode). Keys route
+by the FOCUSED pane (the tunneling `OnPreviewKeyDown` interceptor dispatches first):
+Input → the prompt/insert-mode keys (`OverlayKeyHandler` — untouched), List → the
+selection keys (j/k/gg/G/Enter; the native arrows stay live), Preview → the vim
+motions (`TextMotionNavigator`). The overlay **closes on focus loss** (`Deactivated` →
+`CloseOverlay` unchanged — pane focus never escapes the overlay's own visual tree).
 
 ## 3. Keybindings
 
@@ -279,7 +295,8 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
 - `[Telescope] goto-direct finder=... file=... line=...` (the goto commands' single-hit DIRECT jump — the pinned Section A literal `[Telescope] goto-direct finder=… file=… line=…`; the existing `goto line=...` also fires on every open-at-line, incl. the direct-jump path)
 - `[Telescope] definitions gathered count=...` / `[Telescope] opened definition: file=... line=...` (the Definition finder — the goto commands' overlay path; the fault paths log `[Telescope] definitions gather failed: {msg}` / `[Telescope] open definition failed: {msg}`, and a command fault logs `[NeoVisual] goto failed: {finder}: {msg}`)
-- `[Telescope] focus target=List|Preview`
+- `[Telescope] focus target=Input|List|Preview` (logged on every focus change — Ctrl+H/J/K/L AND left-click; the initial pane on open is Input)
+- `[Telescope] focus no-op: no pane {direction} from {pane}` (a directional move with no pane that way — consumed, no wrap)
 - `[Telescope] result-mapper unknown display: {display}` (unknown-match warning when a display string has no payload)
 - `[Telescope] preview caret=... line=...`
 - `[Telescope] prompt-motion key=... caret=...`
@@ -311,7 +328,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **224 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **258 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -322,8 +339,11 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   dispatcher (`GotoDispatcher`), the definition finder
   (`DefinitionFinder`/`DefinitionHit`), the finder
   base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`),
-  the shared preview index (`LineIndex`), the focus-target state machine
-  (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
+   the shared preview index (`LineIndex`), the pane-focus state machine
+   (`FocusTargetModel` — the Input/List/Preview GEOMETRIC directional move via
+   `PaneNavigationEngine`, the logged no-op edges, the click normalization), the
+   geometric engine (`PaneNavigationEngine`), and the pane contract
+   (`IPane`/`PaneHost`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
   results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
@@ -355,14 +375,14 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 41 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 43 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **41 registered scenarios** (38 GREEN with no known-RED — `neovisual-window-management`
-(E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and `telescope-results-columns`
-(E2E-RC-1) are registered but never executed;
+The **43 registered scenarios** (42 executed GREEN with no known-RED — the only
+registered-but-unexecuted scenario is `telescope-focus-panes`, which executes at the
+Feature-7 VERIFY;
 `explorer-open-searchbox` was
 GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
@@ -371,7 +391,8 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-open-file-searchbox`,
 `telescope-open-file-navigation`, `telescope-prompt-motions`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
-`telescope-no-selection`, `telescope-results-columns`, `telescope-preview`, `neovisual-window-nav`,
+`telescope-no-selection`, `telescope-results-columns`, `telescope-preview`,
+`telescope-focus-panes`, `neovisual-window-nav`,
 `neovisual-leader`, `neovisual-window-management`, `neovisual-diagnostic-nav`, `neovisual-toolwindow`,
 `neovisual-explorer-toggle`,
 `neovisual-explorer-open`, `neovisual-explorer-open-o`,

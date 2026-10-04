@@ -90,16 +90,18 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   hermetic seam), results formatting, log writer (buffered `LogFileWriter`),
   the preview-pane vim motions (`TextMotionNavigator`), the finder base
   (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models),
-  the shared preview index (`LineIndex`), the focus-target state machine
-  (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
+   the shared preview index (`LineIndex`), the pane-focus state machine
+   (`FocusTargetModel` — the Input/List/Preview GEOMETRIC directional focus via
+   `PaneNavigationEngine` + the logged no-op edges + click normalization), the
+   shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
    (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
    results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
    caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`), plus the
    goto dispatcher (`GotoDispatcher`) + the definition finder (`DefinitionFinder`).
    `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
-   `-- LineIndex`, `-- FocusTarget` run subsets.
-   Currently **224 tests, all passing**.
+   `-- LineIndex`, `-- FocusTarget`, `-- Pane`, `-- ListKeyMap` run subsets.
+   Currently **258 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -132,14 +134,14 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 42 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 43 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (42 registered — all GREEN; the Gap 11 `neovisual-git-bindings` scenario executes at
-this item's VERIFY; `explorer-open-searchbox` was GREened
+Scenarios (43 registered — 42 executed GREEN; the Feature 7 `telescope-focus-panes`
+scenario executes at that item's VERIFY; `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -164,12 +166,13 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-q-close` — q closes the overlay in normal mode
 - `telescope-open-file-normal` — Enter selects the match in NORMAL mode
 - `telescope-no-selection` — j/k on an empty result list is a no-op (selection stays 0)
-- `telescope-results-columns` — the columned results list renders (default columns, headers visible) + selection moves; registered, never executed — queued as E2E-RC-1
-- `telescope-preview` — preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview; syntax-highlighted tokens
+- `telescope-results-columns` — the columned results list renders (default columns, headers visible) + selection moves
+- `telescope-preview` — preview shows selected file; Ctrl+L/Ctrl+H switch focus (3-pane contract Input|List|Preview); vim motions in preview; syntax-highlighted tokens
+- `telescope-focus-panes` — Ctrl+H/J/K/L move REAL focus GEOMETRICALLY between the Input/List/Preview panes — LEFT/DOWN/UP/RIGHT (the Cardinal spatial mapping; the `PaneNavigationEngine` pipeline over the pane rects; the pinned tie-break = the Cardinal's last-in-list rule) (modal — the overlay never deactivates; the Ctrl+K UP move from the open Input pane focuses the Preview — the larger adjacency, the last-in-list tie-break as the equal-width net — proving the initial pane is Input; a direction with no pane is a logged no-op, no wrap; left-click is unit-pinned + manual — not keyboard-injectable)
 - `neovisual-window-nav` — Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
 - `neovisual-leader` — Space+E and Space w - fire leader bindings (lowercase sequences; a lone Space+W consumes and waits — no binding fires)
-- `neovisual-window-management` — Space w -/w |/w d fire the `w`-prefix bindings (split below/right, focus-aware close; registered, never executed — queued as E2E-GAP1-1)
-- `neovisual-diagnostic-nav` — Space ]/[ d/e/w fire the six diagnostic-nav bindings (native `],d`/`[,d` + severity-filtered `],e`/`[,e`/`],w`/`[,w`; registered, never executed — queued as E2E-GAP3-1)
+- `neovisual-window-management` — Space w -/w |/w d fire the `w`-prefix bindings (split below/right, focus-aware close)
+- `neovisual-diagnostic-nav` — Space ]/[ d/e/w fire the six diagnostic-nav bindings (native `],d`/`[,d` + severity-filtered `],e`/`[,e`/`],w`/`[,w`)
 - `neovisual-git-bindings` — Space g d/g b/g h fire the git leader bindings (diff/blame/history via command:Team.Git.*; the scratch repo is git-seeded; the leader-binding lines + the ABSENCE of Command 'Team.Git.*' failed are the contract)
 - `neovisual-toolwindow` — Solution Explorer hjkl navigation + i/Esc input-mode
 - `neovisual-explorer-toggle` — Space+E opens/closes Solution Explorer (toggle)
@@ -256,7 +259,11 @@ Key facts that make this reliable:
   (goto commands — the single-hit DIRECT jump; the pinned Section A literal
   `[Telescope] goto-direct finder=… file=… line=…`,
   multi-hit opens the overlay and the finder's own lines fire),
-  `[Telescope] focus target=List|Preview`, `[Telescope] result-mapper unknown display: {display}`
+  `[Telescope] focus target=Input|List|Preview` (logged on every focus change — the
+  GEOMETRIC Ctrl+H/J/K/L moves AND left-click; the initial pane on open is Input),
+  `[Telescope] focus no-op: no pane {direction} from {pane}` (a directional move with no
+  pane that way — consumed, no wrap; direction ∈ left|right|up|down — `telescope-focus-panes`
+  asserts two of these edges), `[Telescope] result-mapper unknown display: {display}`
   (unknown-match warning when a display string has no payload), `[Telescope] preview caret=... line=...`,
    `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions),
    `[Telescope] results columns={ids}` (the visible column-id list — logged on every

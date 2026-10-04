@@ -381,3 +381,21 @@
 - NEEDS-PERMISSION: no
 - AGENT: docs-reviewer
 - DATE: 2026-10-05
+
+### 2026-10-05 — debug-agent (Feature 7 BP-A5 rev 2 verify) — e2e runtime-log location
+- CMD: `Get-ChildItem '<%TEMP%>\telescope_scratch\log' -Filter '*-neovisual-exp.log'`; then a `Split-Path` chain off the script FILE path → `tools\log`
+- RESULT: `Cannot find path ... because it does not exist` (×2) — the runtime log is NOT under the scratch solution and a Split-Path chain from the script file path is off by one level vs the harness's `$PSScriptRoot` chain
+- REASON: misuse — guessed paths (same class as the 2026-10-04 docs-reviewer entry)
+- ALTERNATIVE: the harness (`test-e2e.ps1:110-111`) computes `$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)` → the REPO ROOT, so the log dir is `<repoRoot>\log` (`C:\Projects\MyExtension\log`); newest run = `Get-ChildItem <repoRoot>\log -Filter '*-neovisual-exp.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1` — verified working (run 178)
+- NEEDS-PERMISSION: no
+- AGENT: debug-agent
+- DATE: 2026-10-05
+
+### 2026-10-05 — verification-agent (Feature 7 BP-B12 final gate)
+- CMD: `rg -n 'pattern' Telescope/Overlay/TelescopeOverlay.cs Telescope/Overlay/Utils/Panes/*.cs` (a `*.cs` glob wildcard inside a path argument)
+- RESULT: `rg: ...os error 123 (The filename, directory name, or volume label syntax is incorrect)` — the glob wildcard in the path arg was not expanded (passed literally to the filesystem on Windows)
+- REASON: misuse — glob wildcards belong in rg's `-g`/`--glob` flag or the pattern, not in a literal path argument on Windows
+- ALTERNATIVE: pass the DIRECTORY (`rg -n 'pattern' Telescope/Overlay/Utils/Panes`) — rg recurses it natively; verified working
+- NEEDS-PERMISSION: no
+- AGENT: verification-agent
+- DATE: 2026-10-05

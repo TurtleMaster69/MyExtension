@@ -540,6 +540,256 @@ namespace Telescope.Tests
             Assert.True(cells.All(c => c.Length == 0), "a null entry yields empty cells");
         }
 
+        // ================================================================
+        // Columns UX (plan D1-D4, BP-9) — the pinned min/max/truncation table,
+        // the pure width-fit engine (ColumnWidths), the logical shortening
+        // (ColumnTruncation Tail/End), and the truncating ResultRowCells
+        // overload. RED: ResultColumnTruncation / ColumnWidths /
+        // ColumnTruncation / ResultColumn.MinWidth|MaxWidth|Truncation and the
+        // 3-arg ResultRowCells.Compute do not exist yet -> compile error
+        // (observed: CS0103 name-not-found for the expression-position type
+        // references, CS1729 for the 9-arg ctor, CS1061 for the missing
+        // members, CS1501 for the 3-arg Compute overload).
+        // ================================================================
+
+        // Synthetic column for the width-algorithm tests (BP-1's 9-param ctor
+        // shape: id/header/width/widthChars/min/max/truncation/visible/getter).
+        // MaxWidth == int.MaxValue maps to the Flexible absorber (the model's 1:1 rule).
+        // The truncation kind is hard-coded to End (every call site's kind; Compute never
+        // reads it). NOTE: no ResultColumnTruncation in the SIGNATURE — a missing type in
+        // a parameter type is a declaration-phase error that makes csc skip method-body
+        // binding entirely, which would hide the rest of the planned RED errors.
+        private static ResultColumn Col(string id, int min, int max)
+            => new ResultColumn(
+                id, id,
+                max == int.MaxValue ? ResultColumnWidth.Flexible : ResultColumnWidth.Fixed,
+                max == int.MaxValue ? 0 : max,
+                min, max, ResultColumnTruncation.End, true, _ => "x");
+
+        // Asserts one column's pinned min/max/truncation table row (BP-2). The kind is
+        // typed object (boxed-enum equality via Assert.Equal<object>) — same reason as
+        // Col: the planned enum must not appear in a signature during RED.
+        private static void AssertCol(IReadOnlyList<ResultColumn> cols, string id, int min, int max, object kind)
+        {
+            var c = cols.First(x => x.Id == id);
+            Assert.Equal(min, c.MinWidth);
+            Assert.Equal(max, c.MaxWidth);
+            Assert.Equal<object>(kind, c.Truncation);
+        }
+
+        public static void Run_ResultsColumns_MinMaxWidths()
+        {
+            // The pinned per-column table (chars) — D1/D4's single source of truth (BP-2).
+            // Tail = the path-like columns (file/dir/path — the front is removed); End =
+            // every text/semantic column (the end is removed). All 23 catalog sites.
+            var files = FinderColumns.ForFinder("Files");
+            AssertCol(files, "file", 6, 30, ResultColumnTruncation.Tail);
+            AssertCol(files, "dir", 6, 40, ResultColumnTruncation.Tail);
+            AssertCol(files, "path", 10, 60, ResultColumnTruncation.Tail);
+
+            var issues = FinderColumns.ForFinder("Issues");
+            AssertCol(issues, "kind", 3, 8, ResultColumnTruncation.End);
+            AssertCol(issues, "file", 6, 30, ResultColumnTruncation.Tail);
+            AssertCol(issues, "message", 10, int.MaxValue, ResultColumnTruncation.End);
+            AssertCol(issues, "line", 2, 5, ResultColumnTruncation.End);
+
+            var refs = FinderColumns.ForFinder("References");
+            AssertCol(refs, "access", 2, 4, ResultColumnTruncation.End);
+            AssertCol(refs, "file", 6, 30, ResultColumnTruncation.Tail);
+            AssertCol(refs, "symbol", 6, 24, ResultColumnTruncation.End);
+            AssertCol(refs, "column", 2, 8, ResultColumnTruncation.End);
+            AssertCol(refs, "line", 2, 5, ResultColumnTruncation.End);
+            AssertCol(refs, "text", 10, int.MaxValue, ResultColumnTruncation.End);
+
+            var grep = FinderColumns.ForFinder("Grep");
+            AssertCol(grep, "file", 6, 30, ResultColumnTruncation.Tail);
+            AssertCol(grep, "line", 2, 5, ResultColumnTruncation.End);
+            AssertCol(grep, "text", 10, int.MaxValue, ResultColumnTruncation.End);
+
+            var fzf = FinderColumns.ForFinder("Fzf");
+            AssertCol(fzf, "file", 6, 30, ResultColumnTruncation.Tail);
+            AssertCol(fzf, "line", 2, 5, ResultColumnTruncation.End);
+            AssertCol(fzf, "text", 10, int.MaxValue, ResultColumnTruncation.End);
+
+            var impl = FinderColumns.ForFinder("Implementation");
+            AssertCol(impl, "kind", 3, 8, ResultColumnTruncation.End);
+            AssertCol(impl, "file", 6, 30, ResultColumnTruncation.Tail);
+            AssertCol(impl, "symbol", 6, int.MaxValue, ResultColumnTruncation.End);
+            AssertCol(impl, "line", 2, 5, ResultColumnTruncation.End);
+        }
+
+        public static void Run_ColumnWidths_NeededWidth_Basics()
+        {
+            // NeededWidth = sum(MinWidth * PixelsPerChar); 0 for null/empty (BP-3).
+            Assert.Equal(0d, ColumnWidths.NeededWidth(null!));
+            Assert.Equal(0d, ColumnWidths.NeededWidth(new ResultColumn[] { }));
+
+            // One synthetic min-6-char column -> 6 * 8 = 48px.
+            var one = new[] { Col("a", min: 6, max: 30) };
+            Assert.Equal(48d, ColumnWidths.NeededWidth(one));
+
+            // The References FULL catalog (the all-visible set): 2+6+6+2+2+10 = 28 chars
+            // -> 28 * 8 = 224px.
+            var refs = FinderColumns.ForFinder("References");
+            Assert.Equal(6, refs.Count);
+            Assert.Equal(224d, ColumnWidths.NeededWidth(refs));
+        }
+
+        public static void Run_ColumnWidths_Compute_Degenerate_MinsWin()
+        {
+            // DEGENERATE BRANCH (BP-3): available <= NeededWidth -> every column gets its
+            // MIN; the total equals NeededWidth (the reported needed width the caller
+            // widens the window to), NOT the available width.
+            var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();   // file + dir
+            double needed = ColumnWidths.NeededWidth(visible);   // 12 chars -> 96px
+            Assert.Equal(96d, needed);
+
+            var widths = ColumnWidths.Compute(needed - 8, visible);   // 88px available < 96 needed
+            Assert.Equal(2, widths.Count);
+            Assert.Equal(48d, widths[0]);   // file min 6 chars
+            Assert.Equal(48d, widths[1]);   // dir min 6 chars
+            Assert.Equal(96d, widths.Sum());   // the total == NeededWidth, NOT the 88 available
+        }
+
+        public static void Run_ColumnWidths_Compute_ExactTotal_WithAbsorber()
+        {
+            // EXACT-TOTAL INVARIANT (BP-3): with an absorber (text, MaxWidth == int.MaxValue)
+            // the assigned widths sum to the available width EXACTLY; every width stays
+            // within [Min*8, Max*8] (the absorber unbounded).
+            var refs = FinderColumns.ForFinder("References");   // all 6 columns; text is the absorber
+            var widths = ColumnWidths.Compute(400, refs);
+            Assert.Equal(6, widths.Count);
+            Assert.Equal(400d, widths.Sum());
+            for (int i = 0; i < refs.Count; i++)
+            {
+                double minPx = refs[i].MinWidth * ColumnWidths.PixelsPerChar;
+                double maxPx = refs[i].MaxWidth == int.MaxValue
+                    ? double.MaxValue
+                    : refs[i].MaxWidth * ColumnWidths.PixelsPerChar;
+                Assert.True(widths[i] >= minPx, $"{refs[i].Id}: never below its min");
+                Assert.True(widths[i] <= maxPx, $"{refs[i].Id}: never above its max");
+            }
+        }
+
+        public static void Run_ColumnWidths_Compute_PriorityOrder()
+        {
+            // PRIORITY DISTRIBUTION (BP-3): the surplus flows in MaxWidth-ascending order —
+            // the narrow semantic column reaches its max FIRST, the absorber takes the rest.
+            var a = Col("a", min: 1, max: 4);               // max 4 chars = 32px
+            var b = Col("b", min: 1, max: int.MaxValue);    // the absorber
+            var cols = new[] { a, b };
+
+            // 32px: needed 16, surplus 16 — the surplus runs out BEFORE a's 32px max:
+            // a = 8 + 16 = 24 (3 chars), b stays at its min 8.
+            var tight = ColumnWidths.Compute(32, cols);
+            Assert.Equal(24d, tight[0]);
+            Assert.Equal(8d, tight[1]);
+
+            // 80px: needed 16, surplus 64 — a reaches its 32px max FIRST, b absorbs the
+            // remainder: a = 32, b = 8 + 40 = 48; the exact-total invariant holds.
+            var loose = ColumnWidths.Compute(80, cols);
+            Assert.Equal(32d, loose[0]);
+            Assert.Equal(48d, loose[1]);
+            Assert.Equal(80d, loose.Sum());
+        }
+
+        public static void Run_ColumnWidths_Compute_FilesCatalog_Pin()
+        {
+            // The Files VISIBLE set (file 6/30, dir 6/40) at 240px: the surplus (240 - 96
+            // = 144) goes to file FIRST (its 240px max is not yet reached) -> file =
+            // 48 + 144 = 192, dir stays at its min 48; the exact-total invariant holds.
+            var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();
+            var widths = ColumnWidths.Compute(240, visible);
+            Assert.Equal(2, widths.Count);
+            Assert.Equal(192d, widths[0]);   // file
+            Assert.Equal(48d, widths[1]);    // dir
+            Assert.Equal(240d, widths.Sum());
+        }
+
+        public static void Run_ColumnWidths_WindowWidth_Default()
+        {
+            // WINDOW FORMULA (BP-3/BP-7): Width = min(max(default, NeededWidth + 18 + 480
+            // + 22), workArea). The Files default-visible set needs 96 + 520 = 616 < 760
+            // -> the landed default width wins.
+            var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();
+            Assert.Equal(760d, ColumnWidths.WindowWidth(760, visible, 1600));
+        }
+
+        public static void Run_ColumnWidths_WindowWidth_Grows_And_Caps()
+        {
+            // Two synthetic min-40-char columns: needed 640 + 18 + 480 + 22 = 1160 > 760
+            // -> the window GROWS to 1160 (more columns grow the WINDOW, never eat the
+            // preview); capped by the work area.
+            var cols = new[] { Col("a", min: 40, max: 60), Col("b", min: 40, max: 60) };
+            Assert.Equal(1160d, ColumnWidths.WindowWidth(760, cols, 1600));
+            Assert.Equal(1000d, ColumnWidths.WindowWidth(760, cols, 1000));   // the work-area cap
+        }
+
+        public static void Run_TailTruncate_LongPath_KeepsTail()
+        {
+            // TAIL truncation (BP-4, the user's R5): the FRONT is removed, the TAIL
+            // survives — the end folder + file name. 1 + 18 = 19 chars == maxWidth (the
+            // rev-1 contract: the result length equals maxWidth).
+            const string path = @"C:\Very\Long\Path\Models\Services\Order.cs";
+            Assert.Equal(@"…\Services\Order.cs", ColumnTruncation.TailTruncate(path, 19));
+
+            var cut = ColumnTruncation.TailTruncate(path, 19);
+            Assert.True(cut.StartsWith("…"), "the ellipsis prefix marks the removed front");
+            Assert.True(cut.EndsWith("Order.cs"), "the file name survives");
+            Assert.True(cut.Contains(@"\Services\"), "the end folder survives (the plan's risk-3 minimum tail)");
+        }
+
+        public static void Run_TailTruncate_NoOp_And_Edges()
+        {
+            // The no-op + edge contract (BP-4): exact width and shorter are UNCHANGED (no
+            // ellipsis); null/"" -> ""; maxWidth 0 -> ""; maxWidth 1 -> the bare ellipsis.
+            Assert.Equal(@"Services\Order.cs", ColumnTruncation.TailTruncate(@"Services\Order.cs", 17));
+            Assert.Equal(@"Order.cs", ColumnTruncation.TailTruncate(@"Order.cs", 19));
+            Assert.Equal("", ColumnTruncation.TailTruncate(null!, 10));
+            Assert.Equal("", ColumnTruncation.TailTruncate("", 10));
+            Assert.Equal("", ColumnTruncation.TailTruncate(@"C:\x\Order.cs", 0));
+            Assert.Equal("…", ColumnTruncation.TailTruncate(@"C:\x\Order.cs", 1));
+        }
+
+        public static void Run_EndTruncate_Basics()
+        {
+            // END truncation (BP-4): the END is removed, the start survives — 7 chars +
+            // the ellipsis (8 chars == maxWidth).
+            Assert.Equal("the qui…", ColumnTruncation.EndTruncate("the quick brown fox", 8));
+        }
+
+        public static void Run_EndTruncate_NoOp_And_Edges()
+        {
+            // The mirror of the Tail edges: exact width and shorter are UNCHANGED;
+            // null/"" -> ""; maxWidth 0 -> ""; maxWidth 1 -> the bare ellipsis.
+            Assert.Equal("the quick", ColumnTruncation.EndTruncate("the quick", 9));
+            Assert.Equal("fox", ColumnTruncation.EndTruncate("fox", 19));
+            Assert.Equal("", ColumnTruncation.EndTruncate(null!, 10));
+            Assert.Equal("", ColumnTruncation.EndTruncate("", 10));
+            Assert.Equal("", ColumnTruncation.EndTruncate("the quick brown fox", 0));
+            Assert.Equal("…", ColumnTruncation.EndTruncate("the quick brown fox", 1));
+        }
+
+        public static void Run_ResultRowCells_Truncation_Kinds()
+        {
+            // The TRUNCATING overload (BP-5/BP-8): each cell is shortened to its column's
+            // char width by the column's OWN truncation kind (Grep: file=Tail, line=End,
+            // text=End — the three arrays share the visible-column order).
+            var grep = FinderColumns.ForFinder("Grep");
+            var hit = new GrepHit(@"C:\Very\Long\Path\Models\Services\OrderController.cs", 12, "the quick brown fox jumps");
+            var cells = ResultRowCells.Compute(
+                new FinderEntry("OrderController.cs:12: the quick brown fox jumps", hit), grep, new[] { 11, 5, 20 });
+
+            Assert.Equal(3, cells.Count);
+            Assert.Equal(@"…troller.cs", cells[0]);   // Tail: 1 + 10 = 11 chars == maxWidth; the extension survives
+            Assert.Equal("12", cells[1]);             // End at 5: a no-op (2 chars <= 5)
+            Assert.Equal("the quick brown fox…", cells[2]);   // End: 19 chars + the ellipsis
+
+            // A null-payload entry never throws: every cell is empty.
+            var empty = ResultRowCells.Compute(new FinderEntry("a row"), grep, new[] { 11, 5, 20 });
+            Assert.True(empty.All(c => c.Length == 0), "a null payload yields empty cells");
+        }
+
         public static void Run_LogFileWriter_WritesAndClearsFile()
         {
             using (var dir = new TempDir())

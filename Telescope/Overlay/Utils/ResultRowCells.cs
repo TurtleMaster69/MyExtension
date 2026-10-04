@@ -27,5 +27,29 @@ namespace Telescope.Overlay
 
             return cells;
         }
+
+        /// <summary>
+        /// The truncating overload (plan D4): the raw cells, then each cell shortened to its
+        /// column's computed char width by the column's truncation kind. <paramref name="charWidths"/>
+        /// is aligned with <paramref name="visibleColumns"/> (the ColumnWidths.Compute px widths
+        /// divided by PixelsPerChar). A missing/short charWidths entry means NO truncation for
+        /// that column (defensive).
+        /// </summary>
+        internal static IReadOnlyList<string> Compute(
+            FinderEntry? entry,
+            IReadOnlyList<ResultColumn> visibleColumns,
+            IReadOnlyList<int> charWidths)
+        {
+            object? payload = entry?.Payload;
+            var cells = new string[visibleColumns.Count];
+            for (int i = 0; i < visibleColumns.Count; i++)
+            {
+                string raw = visibleColumns[i].Getter(payload);
+                int width = charWidths != null && i < charWidths.Count ? charWidths[i] : int.MaxValue;
+                cells[i] = ColumnTruncation.Apply(visibleColumns[i].Truncation, raw, width);
+            }
+
+            return cells;
+        }
     }
 }

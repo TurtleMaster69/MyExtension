@@ -11,9 +11,8 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 41 registered live E2E scenarios (38 GREEN +
-> `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
-> `telescope-results-columns` (E2E-RC-1) queued unexecuted; no known-RED; a few flake on
+> test commands, the 41 registered live E2E scenarios (ALL executed GREEN — no
+> known-RED; a few flake on
 > retry), feature status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -130,7 +129,15 @@ Kind Class → cls, Interface → inf, Struct → str, Enum → enm, Method → 
 Property → prop, Event → evt (the user-specified imp/func/inf among them; defensive
 entries + the ≤4-char fallback rule pinned by the column model). Selection, preview
 and Enter read the row's hit payload by index — display- and column-independent (fzf
-filters the `Display` strings; `ResultMapper` re-associates payloads). Keys route via
+filters the `Display` strings; `ResultMapper` re-associates payloads). Each column
+has min/max widths (chars) fitted by the pure `ColumnWidths` engine (min → max
+priority distribution, the absorber takes the remainder, the exact-total invariant);
+path-like columns (`file`/`dir`/`path`) shorten by removing the FRONT
+(`ColumnTruncation.TailTruncate` — the end folder + file name survive), text columns
+at the END (`EndTruncate`); the horizontal scrollbar is Disabled; the overlay width =
+max(760, sum(visibleMinWidths) + scrollbar + preview(480) + chrome), recomputed at
+open + on every chooser toggle, capped by `WorkArea`; the selected row pins a
+dark-blue highlight (#2d4a75) + white text (active + inactive). Keys route via
 `OverlayKeyHandler` (list navigation/modes) when focus is on the list, or
 `TextMotionNavigator` (vim motions h/l/j/k/w/b/e/0/$/gg/G) when
 focus is on the preview. **Ctrl+H / Ctrl+L switch `_focusTarget` between List and
@@ -268,13 +275,11 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (208) and
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (221) and
   `dotnet run --project tests/NeoVisual.Tests` (190), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — 38 GREEN +
-  `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
-  `telescope-results-columns` (E2E-RC-1)
-  queued unexecuted — against the experimental
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — ALL executed GREEN
+  against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

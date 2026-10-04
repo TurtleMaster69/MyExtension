@@ -1,315 +1,210 @@
-# Plan — Gap 6 (core): goto commands — `gd`/`gI`/`gr` → single-hit direct, multi-hit Telescope
+# Plan — Bugfix + UX: the Telescope results columns (no h-scroll, all columns visible, min/max widths, logical shortening, column-relative window width, the selection contrast)
 
-> **Lane: feature (e2e ENABLED).** UPDATE 2026-10-04 (user): the e2e-deferral mandate is
-> LIFTED (the machine supports the VS Experimental Instance) — the e2e scenario specified here
-> is CREATED + PROVEN RED by `e2e-test-builder` before the build and EXECUTED by
-> `verification-agent` at VERIFY. New capability + likely one new diagnostic → **M-M7 trigger**
-> (feature lane, full pipeline).
+> **Lane: bugfix + UX (e2e ENABLED).** Fixes + refines the just-landed columns feature per the
+> user's 2026-10-04 reports/directives. No new diagnostic literal (the existing
+> `[Telescope] results columns=` + `results count=` lines are the contract, unchanged). JUMPS
+> THE QUEUE (the first pending item — the user is looking at the UI now).
 >
-> **Source:** the queue's Gap 6 item ("goto-definition finder + wire VsVim gd/gr/gi to the
-> Telescope finders") + the user's 2026-10-04 instructions: *"remap go to definition go to
-> reference go to implementation to gd, gI, gr … if it has only 1 hit go directly there if its
-> multiple hits forward it to telescope and display it there"* + the wiring decision:
-> *"since this is only gonna work in vsvim context text windows its probably better that I do
-> it there and just map extension command there — before I just mapped default visual studio
-> commands to them and it worked."*
+> **User requirements (2026-10-04, verbatim intent):**
+> 1. *"the results of telescope have scrollbars remove them we dont need them. it can be
+>    scrolled in height but it shouldnt be scrollable in width. all columns should be visible
+>    right now they are hidden... its not user friendly"*
+> 2. *"also the text under highlited item is not visible since its same color"*
+> 3. *"the columns should have min and max width if max width is reached they should shorten
+>    the content but shorten it logicaly(it should only lose information that is not extremly
+>    important)"*
+> 4. *"the width of results/whole telescope window should change relative to number of
+>    column"*
+> 5. *"the location should be shortend by removing front part not last part since last part is
+>    most important(we want to at least see end folder cuz only seeing start of path gives no
+>    meningfull information"*
 >
-> **WIRING DECISION (user-made):** the extension exposes **VS commands**; the USER maps
-> `gd`/`gI`/`gr` in **VsVim** themselves (they have mapped VS commands in VsVim before — it
-> works). NO leader keys, NO hook changes, NO g-sequence state machine, NO VsVim interop.
-> The companion plan (`plans/plan.md` — Telescope columns + preview-as-editor) is unaffected;
-> that plan's multi-hit display is where this plan's "forward to telescope" lands.
->
-> **Ground truth:** Gap 3 in flight (neovim_hub); the baselines move under it (NeoVisual
-> 177→187). This plan's arithmetic is taken against the ACTUAL totals at execution time.
-> The repo already has: `ReferencesFinder` + `ImplementationFinder` (caret-symbol Roslyn
-> gatherers), `RoslynGatherers.TryGetCaretSymbol` (the shared caret-symbol seam),
-> `TelescopeCommand.cs` (the VS command wiring for the Telescope finders — the exact pattern
-> this plan extends), `HitOpener` (open-at-line), `TelescopeLauncher.FinderNames` (the finder
-> registry that drives the derived `Actions.Registry` entries).
+> **Ground truth:** the columns plan is GREEN (the user is using it). The planner reads the
+> LANDED code (`Telescope/Overlay/TelescopeOverlay.cs` — the ListView/GridView construction,
+> the width logic, the item style; `Telescope/Overlay/Utils/FinderColumns.cs` + the column
+> model) — the real code is the truth.
 
 ## Goal
 
-Three VS commands — **goto-definition**, **goto-references**, **goto-implementation**
-(Telescope-backed) — each gathering the targets for the symbol at the caret: **exactly 1 hit →
-open it directly** (no overlay); **multiple hits → open the Telescope overlay** with the
-corresponding finder. The user wires `gd`/`gr`/`gI` to these commands in VsVim.
+The results list NEVER scrolls horizontally and ALWAYS shows every column: each column has a
+**min and max width**; the content shortens LOGICALLY at its width cap (path-like columns
+truncate from the FRONT keeping the tail — the end folder + file name are the important part;
+text columns truncate at the END); the overlay window's WIDTH scales with the number of
+visible columns (more columns → a wider window, capped by the work area); the selected row's
+text contrasts with its highlight.
 
 ## Approach
 
-### D1 — The three VS commands (the TelescopeCommand pattern)
+**D1 — Per-column min/max widths (the model change).** `ResultColumn` gains `MinWidth` +
+`MaxWidth` (in chars; the planner pins the values per column: the semantic columns
+kind/access/line get tight caps — e.g. access min 2/max 4, kind min 3/max 8, line min 2/max 5;
+the path-like columns file/dir/path get wider caps — e.g. file min 6/max 30, dir min 6/max 40,
+path min 10/max 60; the text column min 10, NO max — it absorbs). The planner reads the landed
+`FinderColumns` + pins the table per column per finder.
 
-Read `MyExtension/Package/Utils/TelescopeCommand.cs` (the existing VS command wiring for the
-Telescope finders) + its .vsct registration; add three commands following the SAME pattern.
-The planner pins: the exact canonical command names (DTE `ExecuteCommand` form — derived from
-the package's command set + the VSCT symbols; cite how the existing finder commands are
-named), the command flags, and the visibility context (a text editor / any code window).
+**D2 — The pure width-fit algorithm.** NEW pure `ColumnWidths.Compute(availableWidth, columns)`
+→ the per-column pixel widths:
+- start at each column's MIN; distribute the surplus toward each column's MAX in priority
+  order (the narrow semantic columns reach their max first; the text column absorbs whatever
+  remains);
+- never below MIN, never above MAX; the total = the available width exactly (the invariant);
+- the degenerate case (the available < sum(MINs)): the MINs win (the caller then widens the
+  window per D3 — the algorithm reports the needed width).
+RED-first (the function doesn't exist).
 
-### D2 — The single/multi-hit dispatcher (pure seam)
+**D3 — The window width scales with the columns (R4).** The overlay's width = 
+`max(defaultWidth, sum(visibleMinWidths) + previewWidth + chrome)` — recomputed when the
+visible column set changes (the chooser toggle) and at open; capped at the work area width
+(`SystemParameters.WorkArea.Width`). The planner pins the formula + the preview's share (the
+user's motivation: more columns must NOT eat the preview — the window GROWS instead).
 
-New pure type (the `CloseWindowCommand`/`DiagnosticNavigator` pattern):
-`GotoDispatcher.Decide(int hitCount)` → `DirectJump | OpenOverlay` (1 → direct; 0 and >1 →
-overlay? **Pin: 0 hits → OpenOverlay too** (the overlay shows the empty state + the user can
-retype) — or a no-op diagnostic? The planner picks + pins; LazyVim's reference: an empty
-result list is shown, not a silent no-op). The direct-jump path uses the existing
-`HitOpener` open-at-line; the overlay path uses `TelescopeLauncher.Open(finderName)`.
+**D4 — The logical shortening (R3+R5).** NEW pure helper(s):
+- `TailTruncate(text, maxWidth)` — for PATH-LIKE columns (file/dir/path/location): remove the
+  FRONT, keep the TAIL, prefix `…` (e.g. `C:\Very\Long\Path\Models\Services\Order.cs` →
+  `…\Services\Order.cs`) — the end folder + file name survive (the user's explicit example);
+  Telescope.nvim's `path_display="truncate"` is the reference (it truncates the path start).
+- `EndTruncate(text, maxWidth)` — for TEXT columns (message/line text): remove the END
+  (the standard `…`) — the start of a line is the important part there.
+- The column definition carries the truncation KIND (Tail for the path-like, End for the
+  text); the cell rendering applies it at the computed width. RED-first.
 
-### D3 — The goto-definition finder (NEW — the Gap 6 build)
+**D5 — The horizontal scrollbar OFF.** `ScrollViewer.HorizontalScrollBarVisibility="Disabled"`
+on the ListView — combined with D2/D3 (the widths fit + the window grows), nothing is clipped
+or hidden. The vertical scrolling stays.
 
-New `DefinitionFinder` (Telescope, `Name="Definition"`): the caret symbol's DEFINITION
-locations via Roslyn — the ReferencesFinder/ImplementationFinder pattern (MEF-resolved
-`VisualStudioWorkspace` + `RoslynGatherers.TryGetCaretSymbol`; the definition locations from
-the symbol's `DeclaringSyntaxReferences` / `SymbolFinder.FindSourceDefinitionAsync` — the
-planner pins the exact API from the RoslynGatherers source + the existing gatherers'
-host-injected seam so it stays hermetic-testable). Deterministic ordering
-(`OrderBy(FilePath).ThenBy(LineNumber)` — the ImplementationFinder precedent). Registered in
-`MyExtensionPackage` + `TelescopeLauncher.FinderNames` (which auto-derives the
-`telescope-definition` registry entry — keeping `Run_ActionsRegistry_TelescopeMapsToFinder`
-green; NO default leader binding is added unless the user asks).
+**D6 — The selection contrast.** The `ItemContainerStyle` pins the selected-row colors
+explicitly (the highlight background + a CONTRASTING foreground, both the active and the
+inactive-selection states) — consistent with the overlay's palette. The planner reads the
+landed styles first.
 
-### D4 — The command actions
+**D7 — Tests.** `tests/Telescope.Tests`: `Run_ColumnWidths_*` (the fit/the min-max/the
+priority distribution/the exact-total invariant/the degenerate case), `Run_TailTruncate_*` /
+`Run_EndTruncate_*` (the logical shortening: the tail keeps the end folder + the file name;
+the short-path no-op; the exact-width edge), the window-width formula test. RED-first. The
+existing column tests stay GREEN (the catalog is unchanged; the model gains members).
 
-Each command: resolve the caret symbol (the existing seam) → gather (references/
-implementations/definitions) → `GotoDispatcher.Decide(count)` → direct-jump (open at line +
-log) or `TelescopeLauncher.Open(finder)` (the finder re-gathers at overlay open — the
-double-gather is acceptable; the planner may instead pass the pre-gathered hits if the
-overlay supports it — decide + justify).
+**D8 — e2e (ENABLED).** The existing `telescope-results-columns` scenario stays GREEN (the
+diagnostics byte-stable). The visual defects are NOT harness-assertable — the unit-pinned
+algorithms + a MANUAL visual pass (the planner notes it in the verification checklist).
 
-### D5 — Diagnostics (M-M7)
+**D9 — Docs.** Minimal: the column-model description (the min/max + the truncation kinds) in
+SKILL.md/spec.md if documented there; progress.md at GREEN.
 
-The direct-jump path needs an outcome diagnostic — pin ONE new literal family, e.g.
-`[Telescope] goto-direct finder=... file=... line=...` (or reuse the finders' existing
-`opened reference:`/`opened implementation:`/`goto line=` lines where they already fire —
-the planner pins the minimal set; every new literal is declared for the log-literal diff gate).
-
-### D6 — The VsVim mapping (docs — the user's own step)
-
-The docs record the three canonical command names + a worked VsVim mapping example (the
-user's established flow — e.g. mapping the command to `gd`/`gr`/`gI` in VsVim's keyboard
-options / vimrc). No code.
-
-### D7 — Tests + harness + docs
-
-- **Unit (`tests/Telescope.Tests` + possibly NeoVisual for the registry count):** the
-  `GotoDispatcher` seam (RED CS0246), the DefinitionFinder's pure gather/mapping parts (the
-  host-injected seam pattern), the registry count (the FinderNames entry auto-derives
-  `telescope-definition` — the telescope-maps-to-finder test stays green; the count test
-  updates if it pins an exact number).
-- **Harness:** a queued scenario — the commands are executable via the harness's DTE helper
-  (`dte-command.ps1` can execute a VS command), so the scenario can invoke each command on a
-  seeded symbol and assert the direct-jump/overlay diagnostics. The scenario is CREATED +
-  PROVEN RED by `e2e-test-builder` before the build and EXECUTED at VERIFY (the e2e-ENABLED
-  lane).
-- **Docs:** spec.md/AGENTS.md/SKILL.md (the commands + the finder + the VsVim mapping note),
-  progress.md (the Gap 6 item → partially DONE: the goto core; the remaining Gap 6 scope —
-  any additional gd/gr/gi polish — stays queued).
-
-## Acceptance criteria (each mapped to a diagnostic + a test)
+## Acceptance criteria
 
 | # | Criterion | Diagnostic | Test |
 |---|-----------|-----------|------|
-| AC1 | The goto-definition command with 1 hit opens the definition directly | the pinned direct-jump literal | unit `Run_GotoDispatcher_SingleHitIsDirectJump`; e2e `telescope-goto` Part 1 (executed at VERIFY) |
-| AC2 | The goto-definition command with multiple hits opens the Telescope overlay with the Definition finder | the existing `open finder=` line | unit dispatcher + finder tests; e2e `telescope-goto` Part 2 (executed at VERIFY) |
-| AC3 | The goto-references command behaves identically over the EXISTING References finder | existing `references gathered`/`opened reference:` lines | unit dispatcher; e2e `telescope-goto` Part 3 (executed at VERIFY) |
-| AC4 | The goto-implementation command behaves identically over the EXISTING Implementation finder | existing `implementations gathered`/`opened implementation:` lines | unit dispatcher; e2e `telescope-goto` Part 4 (executed at VERIFY) |
-| AC5 | The three commands are registered and DTE-executable | the command names resolve | unit registry/wiring tests; e2e (executed at VERIFY) |
-| AC6 | The Definition finder's results are deterministic + hermetic-testable | `open finder=Definition candidates=...` | unit `Run_DefinitionFinder_*` |
+| AC1 | NO horizontal scrollbar, ever | (visual — the unit-pinned invariant) | unit `Run_ColumnWidths_*` |
+| AC2 | ALL columns visible at any width (the min/max fit + the window growth) | (visual) | unit `Run_ColumnWidths_*` + the window formula test |
+| AC3 | Each column respects its min AND max | (visual) | unit (the min/max table pinned) |
+| AC4 | Path-like columns truncate from the FRONT (the tail survives: the end folder + file name) | (visual) | unit `Run_TailTruncate_*` |
+| AC5 | Text columns truncate at the END | (visual) | unit `Run_EndTruncate_*` |
+| AC6 | The overlay width scales with the visible column count (capped by the work area) | (visual) | unit (the formula) |
+| AC7 | The selected row's text contrasts with the highlight (active + inactive) | (visual) | code-inspection + manual |
+| AC8 | The existing diagnostics/behavior are unregressed | `results columns=` / `results count=` byte-stable | the existing tests + e2e stay GREEN |
 
-## Files to be touched (initial estimate)
+## Files to be touched
 
-- **Modified:** `MyExtension/Package/Utils/TelescopeCommand.cs` (+ its .vsct),
-  `MyExtension/Package/MyExtensionPackage.cs` (register), `MyExtension/Package/Utils/TelescopeLauncher.cs`
-  (FinderNames), `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs`
-  (the registry count — ONLY after Gap 3 lands; coordinate), `docs/spec.md`, `AGENTS.md`,
-  `SKILL.md`, `docs/progress.md`, the harness.
-- **Created:** `Telescope/Finders/DefinitionFinder.cs` (+ its hit model), the pure
-  `GotoDispatcher` seam.
-- **Not touched:** the hook (`GlobalKeyboardHook`), `InputHandler` (no new key routing — the
-  commands are DTE-executed), `LeaderSequenceMatcher`/`KeyNames` (no leader keys).
+- **Modified:** `Telescope/Overlay/TelescopeOverlay.cs` (D5/D6 + D2/D3's call sites), the
+  column model (`ResultColumn` +`MinWidth`/`MaxWidth`/the truncation kind — D1/D4),
+  `FinderColumns` (the per-column values), the tests.
+- **Created:** `Telescope/Overlay/Utils/ColumnWidths.cs` + the truncate helpers (the exact
+  split the planner pins).
+- **Not touched:** the finders, ResultMapper, the diagnostics, the harness.
 
-## Open risks / uncertainty
+## Open risks
 
-1. **The canonical command names (low).** Pinned from the existing TelescopeCommand pattern;
-   the user maps them in VsVim — a name change after mapping is a user-side edit (documented).
-2. **The definition gather's shape (medium).** `DeclaringSyntaxReferences` vs
-   `SymbolFinder.FindSourceDefinitionAsync` — the planner pins from the RoslynGatherers
-   source; metadata-only symbols (no source location) are skipped (the ImplementationFinder
-   precedent).
-3. **Gap 3 coordination (process).** The NeoVisual registry-count test moves under Gap 3
-   (12→16); this plan adds a FinderNames entry (16→17 after Gap 3) — the planner sequences
-   the count-test edits against the ACTUAL post-Gap-3 state.
-4. **The double-gather (low).** The command gathers to count, then the overlay re-gathers —
-   acceptable (the gatherers are cached); the planner may optimize later.
+1. **The min-width floor vs the tiny overlay (low).** The window-growth formula (D3) makes the
+   floor unreachable in practice; the degenerate branch is pinned anyway.
+2. **The theme consistency (low).** The selection colors must match the overlay's palette.
+3. **The tail-truncate readability (low).** `…` + the tail must still identify the file — the
+   tests pin the minimum tail (the file name + at least one folder).
 
 ## Build Plan
 
-> **Aggregated (Stage 3)** from `artifacts/goto-section-{a,b,c}.md` — the authoritative full
-> detail (complete code, the .vsct content, the assertion tables, the doc edits) lives there;
-> the steps below are the executable contract. **e2e is ENABLED** (the scenario is created +
-> proven RED before the build, executed at VERIFY).
+> **Aggregated (Stage 3)** from `artifacts/columns-ux-section.md` — the authoritative full
+> detail (the code, the 23-site table, the test code) lives there; the steps below are the
+> contract. **e2e ENABLED** (the existing scenario stays green; the visual ACs are the
+> verify-agent's manual pass).
 >
-> **Pinned corrections (binding — the plan's D1/D2 guesses are superseded):** (1) **NO .vsct
-> exists** — `Telescope.Show` is registered dynamically/unnamed, so this plan ADDS
-> `MyExtensionPackage.vsct` (+ `VSCTCompile` + `[ProvideMenuResource("Menus.ctmenu", 1)]`);
-> (2) the canonical command names are **`MyExtension.GotoDefinition` / `MyExtension.GotoReferences` /
-> `MyExtension.GotoImplementation`** (hyphenated names are invalid — VS strips hyphens;
-> PascalCase per the VS command-name rules); flags `CommandWellOnly`, NO visibility
-> constraints (`ExecuteCommand` fails on a disabled command); (3) **0 hits → OpenOverlay**
-> (LazyVim parity — the overlay shows the empty state); (4) the Roslyn API =
-> **`DeclaringSyntaxReferences`** (synchronous; no `FindSourceDefinitionAsync` hop) +
-> `Locations.Where(IsInSource)` fallback + (path,line) dedupe + **finder-side**
-> `OrderBy(FilePath).ThenBy(LineNumber)` (in `DefinitionFinder.GatherHits` — the determinism
-> test requires finder-side ordering); (5) the double-gather (command counts, the overlay
-> re-gathers) is ACCEPTED; (6) the registry is ALREADY 16 (Gap 3 landed) → **16 → 17**;
-> (7) **M-M7 = 6 new byte-exact literals**: `[Telescope] definitions gathered count=`,
-> `[Telescope] opened definition:`, `[Telescope] goto-direct finder=… file=… line=…`,
-> `[Telescope] definitions gather failed:`, `[Telescope] open definition failed:`,
-> `[NeoVisual] goto failed: {finder}: {msg}`; (8) **`GotoDispatcher` lives in
-> `Telescope/Controller/GotoDispatcher.cs`** (namespace `Telescope.Controller`, `internal`) —
-> Telescope.Tests references only Telescope.csproj, so the seam must be a Telescope type for
-> its tests to be hermetic (Telescope +9 / NeoVisual +0-edited-only).
+> **Pinned tables:** the min/max (chars): file 6/30 Tail · dir 6/40 Tail · path 10/60 Tail ·
+> kind 3/8 End · message 10/∞ End · line 2/5 End · access 2/4 End · symbol(Refs) 6/24 End ·
+> symbol(Impl) 6/∞ End · column 2/8 End · text 10/∞ End. TRUNCATION: Tail = file/dir/path
+> (the front removed; the end folder + the file name survive); End = all text/semantic columns.
+> WINDOW FORMULA: `Width = min(max(760, NeededWidth+18+480+22), WorkArea.Width)`; the results
+> column = Pixel(`Width−502`); Compute's available = that −18; recomputed at open + every
+> chooser toggle.
 
-### Phase 1 — Commands + dispatcher + Definition finder (BP-1 … BP-9)
-
-- **BP-1** — the `CommandList` IDs (0x0101-0x0103) for the three commands.
-- **BP-2** — NEW `MyExtensionPackage.vsct` (the full file content in the artifact).
-- **BP-3** — the `.csproj` `VSCTCompile` item + `[ProvideMenuResource("Menus.ctmenu", 1)]`.
-- **BP-4** — the pure `GotoDispatcher.Decide(int)` → `DirectJump | OpenOverlay` (1 → direct;
-  0 and >1 → overlay) — **`Telescope/Controller/GotoDispatcher.cs`**, namespace
-  `Telescope.Controller`, `internal` (a Telescope type so the Telescope.Tests tests are
-  hermetic).
-- **BP-5** — `DefinitionHit` (the hit model; extends `FileLocation`; **+`Kind`** — the 4-arg
-  ctor `(filePath, lineNumber, symbolName, kind)`, matching the `ImplementationHit` precedent).
-- **BP-6** — `DefinitionFinder` (Telescope, `Name="Definition"`) — the host-injected gather
-  seam (hermetic-testable); the display `{Kind} {SymbolName} — {file}:{line}`; the
-  **finder-side** `OrderBy(FilePath).ThenBy(LineNumber)` inside `GatherHits`.
-- **BP-7** — `RoslynGatherers.GatherDefinitions` + the pure `MapDefinitionHits`
-  (`DeclaringSyntaxReferences` → in-source locations → (path,line) dedupe ONLY — the ordering
-  is finder-side per BP-6).
-- **BP-8** — the command actions (`ExecuteGoto`/`AddGotoCommand`): resolve the caret symbol →
-  gather → `Decide` → direct-jump (`HitOpener`) or `TelescopeLauncher.Open(finder)`; the finder
-  registration in `MyExtensionPackage`; `using Telescope.Controller;` for the dispatcher.
-- **BP-9** — `FinderNames["telescope-definition"] = "Definition"` (auto-derives the registry
-  entry) + the registry-count test 16 → 17 (re-read the post-Gap-3 state first).
-
-### Phase 2 — Unit tests (BP-B1 … BP-B4)
-
-- **BP-B1** — 6 `Run_DefinitionFinder_*` hermetic tests (display/payload/open/preview-jump/
-  determinism/gather-summary), inserted after `Run_ImplementationFinder_LineNumberDrivesPreviewJump`
-  (re-locate by name). RED: CS0246.
-- **BP-B2** — 3 `Run_GotoDispatcher_*` tests (Decide(1)→DirectJump; 0/-1/2/5→OpenOverlay).
-  RED: CS0246.
-- **BP-B3** — EDIT `Run_ActionsRegistry_ContainsAllBuiltins` (NeoVisual): 16 → 17 +
-  `"telescope-definition"` — GUARDED: re-read the file first; proceed only at count 16
-  (STOP at 12 = Gap 3 not landed).
-- **BP-B4** — the gate: both suites 0-failed; `dotnet build` 0 errors; counts vs `<ACTUAL>`.
-  Pinned deltas: Telescope **+9** (delta-only — 172→181, or 190→199 if the columns plan lands
-  first); NeoVisual **+0 new, 1 edited** (stays 187).
-
-### Phase 3 — Harness + docs + e2e (BP-C1 … BP-C13)
-
-- **BP-C1** — seed the `GotoProbe` partial-class pair (the multi-hit Definition fixture) +
-  the perturbation audit.
-- **BP-C2..C5** — register `telescope-goto` (inserted after `telescope-implementation`) with
-  4 parts executed via `dte-command.ps1` DTE command execution: goto-definition 1-hit →
-  direct (`Shared`@Reader.cs:5 → Models/Shared.cs:1); goto-definition 2-hit → the Definition
-  overlay (`open finder=Definition candidates=2`); goto-references ≥2-hit → the References
-  overlay; goto-implementation 1-hit → direct (`IShape` → Shape.cs:2). Asserts the pinned
-  `goto-direct`/`definitions gathered`/`open finder=` lines + the existing `goto line=`
-  fallback + `Wait-ActiveDocumentMatch`.
-- **BP-C6..C9** — the docs: spec §3 (the commands + the VsVim mapping note), §4/§5/§8 (the
-  literals + counts); AGENTS.md (the counts, the scenario list, the diagnostics list, the
-  feature + keybindings bullets); SKILL.md (the wiring + counts).
-- **BP-C10** — progress.md: the Gap-6 DONE form at GREEN (the goto CORE ships; any remaining
-  Gap 6 scope stays queued).
-- **BP-C11/C12** — the e2e-queue rows (workspace E2E-GOTO-1/2 + the canonical
-  `docs/e2e-queue.md` section) — with e2e ENABLED these drain at VERIFY.
-- **BP-C13** — the lint/self-check phase gate.
-- **BP-E2E (the lane)** — `e2e-test-builder` creates `telescope-goto` + proves RED; 
-  `verification-agent` executes it + the full suite at VERIFY.
+- **BP-1** — `ResultColumn` +`MinWidth`/`MaxWidth`/`ResultColumnTruncation` (Tail/End).
+- **BP-2** — pin the per-column table in `FinderColumns` (all 23 sites).
+- **BP-3** — NEW pure `ColumnWidths` (Compute/NeededWidth/WindowWidth).
+- **BP-4** — NEW pure `ColumnTruncation` (Tail/End).
+- **BP-5** — the truncating `ResultRowCells` overload.
+- **BP-6** — the h-scrollbar Disabled + the selection contrast (the brush keys + the IsSelected
+  trigger; the per-cell Foreground removed).
+- **BP-7** — the Pixel results column + `ApplyWindowWidth` + the Compute-owned widths.
+- **BP-8** — the truncation in `RebuildRows` + the recompute at open/toggle.
+- **BP-9** — 13 unit tests (the RED classification per test).
+- **BP-10** — the minimal docs.
+- **BP-11** — the final gate (the build + Telescope 212 + NeoVisual 190 + the e2e + the manual
+  visual pass).
 
 ## Verification Trace
 
 | failing test / gate (RED before the change) | implicated steps | expected diagnostic / proof |
 |---|---|---|
-| `Run_GotoDispatcher_SingleHitIsDirectJump` / `_ZeroHitsOpensOverlay` / `_MultipleHitsOpenOverlay` (3 new) | BP-4, BP-B2 | RED CS0246 → GREEN: 1→DirectJump; 0/>1→OpenOverlay |
-| `Run_DefinitionFinder_*` (6 new — the canonical set incl. `_OpenLogsOpenedDefinition`/`_NameIsDefinition`) | BP-5/6/7, BP-B1 | RED CS0246 → GREEN: display/payload/open/preview-jump/determinism/gather-summary |
-| `Run_ActionsRegistry_ContainsAllBuiltins` (edit) | BP-9, BP-B3 | `Expected [17] but got [16]` → GREEN 17 keys incl. `telescope-definition` |
-| `Run_ActionsRegistry_TelescopeMapsToFinder` (must stay GREEN) | BP-9 | the registry's telescope keys ≡ FinderNames keys |
-| unit gate | BP-B4 | both suites 0-failed; `dotnet build` 0 errors |
-| e2e `telescope-goto` (RED then GREEN) | BP-C2..C5, BP-E2E | RED before the source lands; GREEN: the 4 parts' `goto-direct`/`open finder=`/`goto line=` lines + the active-document matches |
-| e2e `telescope-goto` Part 4 (was RED at verify — caret order-dependency) | BP-C2..C5 (amended) | root cause: the preceding scenario leaves the caret ON `IShape`; re-opening restores it → the single `w` lands past the symbol → gather 0 → the pinned 0-hits OpenOverlay rule. FIX (harness, run 167 PASS): Part 4 normalizes the caret with `gg` before the walk (idempotent) |
-| e2e `neovisual-window-management` (3rd-strike REGRESSION — fixed this item) | (harness hardening item a — executed) | root cause: the scenario asserted VS-process foreground, never EDITOR focus → the doc-window commands were unavailable and `w,d` routed on the stale `IsToolWindow` flag. FIX (harness, run 167 PASS): step 0 opens Alpha.cs via the overlay + `Wait-ActiveDocumentMatch` editor-focus assert before the binding steps |
-| e2e full suite | BP-E2E | all pre-existing scenarios GREEN; **the full-suite gate REQUIRES an explicit `-TimeoutSec 2400`** (the DEFAULT 300s budget cannot fit 41 scenarios — run 165 expired at 37 and suppressed the summary; raising the default is a filed hardening item) |
-| lints + sweeps | BP-C13 | check-doc-refs 0 unresolved; check-doc-content PASS; `-List` = 41 (40 + telescope-goto — the trace's original "40" was aggregated before the columns scenario landed) |
+| `Run_ColumnWidths_*` (the fit/min-max/priority/exact-total/degenerate set) | BP-3, BP-9 | RED CS0246 → GREEN: the exact-total invariant; never below min / above max |
+| `Run_ColumnTruncation_*` (Tail/End) | BP-4, BP-9 | RED → GREEN: the tail keeps the end folder + the file name; the end-truncate for text |
+| the truncating cells | BP-5, BP-8 | the cells shorten at the computed width |
+| the window formula | BP-3, BP-7 | the width scales with the visible columns; capped by the work area |
+| the selection contrast | BP-6 | the IsSelected trigger sets a contrasting foreground (active + inactive) |
+| the h-scrollbar | BP-6 | Disabled; the vertical unchanged |
+| unit gate | BP-9, BP-11 | Telescope 212 / NeoVisual 190 (staggered) |
+| e2e `telescope-results-columns` (stays GREEN) | BP-11 | the diagnostics byte-stable |
+| the manual visual pass | BP-11 | the verify-agent's checklist: no h-scroll; all columns visible; the contrast readable |
 
-**Known-RED allowlist: NONE.** Expected RED = the new unit tests (CS0246) + the new e2e
-scenario before the source lands. The verification-agent must NOT flag the NeoVisual count
-test's sequencing (it edits only at the post-Gap-3 state) or the double-gather (accepted).
-
-## Hub handoff steps (DEFERRED until Gap 3 GREEN in docs/progress.md)
-
-1. Verify Gap 3's GREEN entry (the precondition — its code/docs have landed; the Done entry
-   was pending at aggregation time).
-2. Write the assembled plan to `docs/implementation_plan.md` (AFTER the columns plan's
-   handoff — this plan is SECOND in the queue).
-3. `docs/progress.md`: the goto plan as the next pending item (the e2e-ENABLED lane); the
-   Done entry at GREEN; the Decisions entry recording the commands+VsVim-mapping wiring
-   decision.
-4. The e2e queues: E2E-GOTO-1..2 appended; drained at this plan's VERIFY.
+**Known-RED allowlist: NONE.** Expected RED = the new unit tests before the change exists.
+The visual ACs (AC1-AC3, AC6-AC7) are unit-pinned + manually verified — the harness cannot
+see pixels; the verifier must not demand a pixel assertion.
 
 ## Execution Log
 
-### Attempt 1 — VERIFY FAIL (2026-10-04)
+### Attempt 1 — GREEN (2026-10-04)
 
-- **RED (BP-E2E):** `e2e-test-builder` seeded the `GotoProbe` partial-class pair (+ the
-  seed-leak expectation tree) and registered `telescope-goto` (4 parts via DTE command
-  execution; +170 insertions in the harness only), `-List` 41, `-SelfCheck` PASS, and PROVED
-  RED for the RIGHT reason: `Command "MyExtension.GotoDefinition" is not valid.` — the three
-  commands unregistered (the plan's RED mode (a)); every pre-DTE step passed. 1 VS boot.
-  Accepted deviation: Part 2's walk corrected 3×`w` → 2×`w` (the artifact's guess; grounded
-  in the proven-green implementation-finder walk semantics).
-- **BUILD (Phases 1-3, one dispatch):** BP-1..BP-9 (the CommandList IDs, the NEW
-  `MyExtensionPackage.vsct`, the csproj/package wiring, the `GotoDispatcher` seam,
-  `DefinitionHit`, `DefinitionFinder`, `RoslynGatherers.GatherDefinitions`, the command
-  actions, the FinderNames entry), BP-B1..B4 (Telescope 199 → **208**; NeoVisual registry
-  16 → 17, stays **190**), BP-C6..C9 (the docs), BP-C11/C12 (the e2e-queue rows). `dotnet
-  build` 0 errors; both suites verified; `-List` 41; `-SelfCheck` PASS.
-- **DEVIATION adjudications (hub):** `TelescopeCommand` backtick → `TelescopeCommand.cs`
-  (no such symbol exists; the file-path form resolves via the lint's filename fallback) →
-  ACCEPT · the spec §5.2 inline-list adaptation → ACCEPT · the spec §4 six-literal family
-  line → ACCEPT (implements the M-M7 contract) · the BP-C11/C12 in-place row upgrades →
-  ACCEPT · the GREEN-count 37→38 / registered 40→41 actuals → ACCEPT.
-- **VERIFY round 1: FAIL** — two harness-layer REDs (fail-twice): (1) `telescope-goto`
-  Part 4's order-dependent caret state (the preceding scenario leaves the caret ON `IShape`;
-  re-opening restores it → the walk lands past the symbol → gather 0 → the pinned 0-hits
-  OpenOverlay rule); Parts 1-3 GREEN (the commands/dispatcher/Definition finder all work).
-  (2) `neovisual-window-management` — the flaky count hit **2 → 3 = the 3rd-strike
-  threshold** → the hub UPGRADED it to a REGRESSION (fail-twice in this item's runs) per the
-  M-M2 budget. Harness finding: the DEFAULT 300s suite budget cannot fit 41 scenarios (run
-  165 expired at 37, suppressed the summary) — the gate requires `-TimeoutSec 2400`.
-- `delegations: 3 | VS boots: 3 (runs 164-166) | iterations: 0`
-
-### Attempt 2 — GREEN (2026-10-04)
-
-- **8a DEBUG (verify-time, harness-only):** (1) `telescope-goto` Part 4 — a `gg` caret
-  normalization before the walk (idempotent; the proven implementation-finder walk
-  arithmetic); (2) `neovisual-window-management` — step 0 opens Alpha.cs via the overlay +
-  `Wait-ActiveDocumentMatch` editor-focus assert before the binding steps (the hardening
-  item a's fix direction EXECUTED). Both scenarios PASS on a fresh boot (run 167).
-- **8b adjudications:** DEVIATIONS: none. The harness findings filed: the default-budget
-  raise (hardening item e); the plan trace's stale `-List = 40` (corrected to 41 — the plan
-  was aggregated before the columns scenario landed).
-- **8c RE-PLAN (hub, trace-table-only):** the two fixed-RED rows + the `-TimeoutSec 2400`
-  requirement + the `-List` 41 correction added to the Verification Trace (no 4a re-gate —
-  trace-table-only).
-- **VERIFY round 2 (final gate):** **PASS** — `dotnet build` 0 errors; Telescope **208/0**;
-  NeoVisual **190/0** (staggered); `-SelfCheck` PASS; `-List` 41; both lints PASS; FULL
-  41-scenario e2e suite on a fresh boot (run 168, `-TimeoutSec 2400`): **41/41, zero
-  flakes**. The fixed window-management scenario held (the `w,|` VS-side
-  horizontal+vertical-groups limitation is documented — the binding diagnostic is the
-  contract). Zero `definitions gather failed:` / `open definition failed:` / `[NeoVisual]
-  goto failed:` lines.
-- **failure-log sweep:** 10 entries read, 0 fixed, 0 queued, 0 annotated (all carry FIXED
-  annotations).
-- `delegations: 5 | VS boots: 4 (runs 164-168) | iterations: 1`
+- **Lane:** bugfix + UX (e2e ENABLED). **Deviations adjudicated (hub, pre-VERIFY):**
+  `DEVIATION: BP-5-return-type -> ACCEPT (the artifact's string[] snippet contradicted the
+  test contract — Program.cs:783 asserts .Count; the overload returns IReadOnlyList<string>
+  mirroring the 2-param overload; tests byte-identical, no diagnostic change)` ·
+  `DEVIATION: BP-10-placement -> ACCEPT (the column model is documented in BOTH spec.md §2.5
+  and SKILL.md; the identical passage went into both, per plan D9)`.
+- **RED (e2e-test-builder): RED-CONFIRMED** — 13 unit tests added to
+  `tests/Telescope.Tests/Program.cs` (+250 lines, 0 deletions; the existing 208 byte-untouched;
+  no source file touched; no VS boot, no e2e run). The project failed to compile with 63
+  missing-symbol errors, EVERY error mapped to a planned symbol (BP-1/BP-3/BP-4/BP-5) — the
+  plan's "RED CS0246" realized as CS0103/CS1729/CS1501/CS1061 (expression-position type refs
+  report CS0103; same missing-symbol class). Baseline drift noted: the plan's "199 → 212" was
+  authored pre-goto-item; the real baseline was 208 → **221**.
+- **BUILD (build-agent): BP-1..BP-8 + BP-10 all done.** `dotnet build` 0 errors; Telescope.Tests
+  **221/0**. Created `Telescope/Overlay/Utils/ColumnWidths.cs` + `ColumnTruncation.cs` (both
+  pure); modified `ResultColumn.cs` (+`ResultColumnTruncation` Tail/End, +Min/Max/Truncation,
+  ctor 6→9), `FinderColumns.cs` (all 23 sites pinned to the table), `ResultRowCells.cs`
+  (+truncating overload), `TelescopeOverlay.cs` (h-scroll Disabled, the selection contrast
+  brushes + IsSelected trigger, the Pixel results column, `ApplyWindowWidth` +
+  `ApplyComputedColumnWidths`, Compute-owned widths, truncation in `RebuildRows`, recompute at
+  open + chooser toggle), spec.md §2.5 + SKILL.md (BP-10). Tests byte-identical; the
+  `results columns=` / `results count=` literals byte-stable (TelescopeOverlay.cs:757/761).
+- **VERIFY (verification-agent) — the FINAL GATE: PASS.** Harness-health first: `-SelfCheck`
+  PASS, `-List` 41 scenarios, `check-doc-refs.ps1` PASS, `check-doc-content.ps1` PASS 12/12.
+  Units staggered (W11): Telescope **221/0**, NeoVisual **190/0**. Full e2e FRESH boot
+  (`-TimeoutSec 2400`): **41/41 GREEN**, `telescope-results-columns` first-try (no retry), the
+  diagnostics byte-stability proven at BOTH the source-diff level (zero TelescopeLog.Log
+  changes in the item's diff) and the live-log level (run 169). Manual visual pass: AC1-AC7
+  all verified (code lines + the unit-pinned invariants). Zero flakes, zero regressions, zero
+  known-RED.
+- **Pre-existing lint fix (hub, blocking, pre-VERIFY):** `tools/lint/check-doc-refs.ps1` gained
+  a doc-scoped allowlist entry for `.opencode/agent/trailmark-guidance.md`
+  (GraphStore/CodeGraph — Trailmark PYTHON types unresolvable in the C#-scoped lint;
+  introduced by the earlier hub-creator QueryEngine-construction CORRECTION). Lint PASS after.
+- **Failure-log sweep:** 10 entries read, 0 fixed, 0 queued, 0 annotated (every entry already
+  carries a FIXED resolution).
+- **Cost:** delegations: 3 | VS boots: 1 | iterations: 0

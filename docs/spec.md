@@ -179,7 +179,15 @@ Kind Class → cls, Interface → inf, Struct → str, Enum → enm, Method → 
 Property → prop, Event → evt (the user-specified imp/func/inf among them; defensive
 entries + the ≤4-char fallback rule pinned by the column model). Selection, preview
 and Enter read the row's hit payload by index — display- and column-independent (fzf
-filters the `Display` strings; `ResultMapper` re-associates payloads). Keys route via
+filters the `Display` strings; `ResultMapper` re-associates payloads). Each column
+has min/max widths (chars) fitted by the pure `ColumnWidths` engine (min → max
+priority distribution, the absorber takes the remainder, the exact-total invariant);
+path-like columns (`file`/`dir`/`path`) shorten by removing the FRONT
+(`ColumnTruncation.TailTruncate` — the end folder + file name survive), text columns
+at the END (`EndTruncate`); the horizontal scrollbar is Disabled; the overlay width =
+max(760, sum(visibleMinWidths) + scrollbar + preview(480) + chrome), recomputed at
+open + on every chooser toggle, capped by `WorkArea`; the selected row pins a
+dark-blue highlight (#2d4a75) + white text (active + inactive). Keys route via
 `OverlayKeyHandler` (list navigation/modes) when focus is on the list, or
 `TextMotionNavigator` (vim motions) when focus is on the preview. **Ctrl+H / Ctrl+L
 switch `_focusTarget` between List and Preview.** The overlay **closes on focus
@@ -297,7 +305,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **208 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **221 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -490,8 +498,16 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
   stable); narrow columns render compact values (Access W/R; Issues Kind
   err/warn/todo/info; Implementation Kind imp/func/inf + cls/str/enm/prop/evt);
   selection/preview/Enter stay payload-by-index (fzf + `ResultMapper` untouched).
+  Each column has min/max widths fitted by the pure `ColumnWidths` engine (the
+  priority distribution + the exact-total invariant); path-like columns shorten
+  from the FRONT (`ColumnTruncation.TailTruncate` — the end folder + file name
+  survive), text columns at the END; the horizontal scrollbar is Disabled; the
+  overlay width scales with the visible column count (recomputed at open + every
+  chooser toggle, capped by the work area); the selected row pins a contrasting
+  highlight + white text (active + inactive).
   New diagnostic `results columns={ids}`; unit-tested in `tests/Telescope.Tests`
-  (the column-set/visibility tests); live e2e registered, queued as E2E-RC-1..2.
+  (the column-set/visibility/width-fit/truncation tests); live e2e
+  `telescope-results-columns` passes.
 
 ## 8. Build & test commands
 

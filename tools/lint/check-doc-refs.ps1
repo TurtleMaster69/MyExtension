@@ -111,6 +111,9 @@ $docScopedAllowlist = @{
     'docs/progress.md' = @('CardinalNavigationConstants', 'RectCoordinate', 'UtilityMethods', 'WindowAdapter', 'WindowMatrix')
     'docs/reviews/architecture-review.md' = @('DistinctBy', 'CardinalMovment', 'CardinalNavigation', 'RectCoordinate', 'WindowAdapter', 'WindowMatrix')
     '.opencode/agent/code-review-worker.md' = @('DistinctBy')
+    # Trailmark PYTHON types cited by the Trailmark-guidance doc (the QueryEngine
+    # construction CORRECTION, 2026-10-04) — unresolvable in the C#-scoped lint by design.
+    '.opencode/agent/trailmark-guidance.md' = @('GraphStore', 'CodeGraph')
 }
 
 # File paths the docs mention that are intentionally absent (documented-absent).

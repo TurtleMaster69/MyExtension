@@ -55,6 +55,12 @@ in run 155/157)** — every gate was exercised and passed on the VS-capable mach
   (`neovisual-diagnostic-nav` first live run — the six `leader-binding executed:` lines +
   4× `diagnostic-nav no-op: no-entries`, the expected fresh-instance outcome; zero
   `failed:` lines), `E2E-GAP3-2` (full-suite re-run, 39/39 with the flaky above).
+- **Columns UX bugfix (2026-10-04):** `E2E-CUX-1` — discharged by the item's final gate
+  (the full 41-scenario fresh-boot suite, run 169, `-TimeoutSec 2400`): 41/41 GREEN,
+  `telescope-results-columns` first-try (no retry), `results columns=` / `results count=`
+  byte-stable (proven at the source-diff AND live-log level), zero flakes; the 7 visual ACs
+  verified by the MANUAL visual pass (code lines + the unit-pinned `ColumnWidths`/
+  `ColumnTruncation` invariants; Telescope 221 / NeoVisual 190).
 
 ## Queued gates — Telescope columns + preview (2026-10-04)
 
@@ -94,3 +100,26 @@ VERIFY, not deferred). Two gates:
   new scenario; the exact-count queries stay exact and `seed-leak` stays GREEN.
   The two registered-unexecuted scenarios (`neovisual-window-management`,
   `neovisual-diagnostic-nav`) are E2E-GAP1-1/E2E-GAP3-1's gates, not this one's.
+
+## Queued gates - the planning hub's five plans (2026-10-04)
+
+All five plans are gate-APPROVED and handed off in order (the FIRST pending item is written to
+`docs/implementation_plan.md`; the rest live in the hub session
+`.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/`).
+e2e is ENABLED - the gates drain at each plan's VERIFY.
+
+- ~~**E2E-CUX-1** - the columns UX bugfix (FIRST)~~ — **DISCHARGED GREEN 2026-10-04** (the
+  item's final gate: the full 41-scenario fresh-boot suite, run 169; `telescope-results-columns`
+  first-try, the diagnostics byte-stable at source-diff + live-log level; see the What ran
+  GREEN section). No new scenario; the visual ACs were the MANUAL visual pass (all 7 verified).
+- **E2E-PBUF-1** - the preview buffer-source swap (second): no new scenario; the existing preview
+  scenarios stay GREEN (`preview tokens=` VALUE grows - presence-only regex); the semantic
+  coloring is the MANUAL visual pass.
+- **E2E-GIT-1** - Gap 11 (third): the NEW `neovisual-git-bindings` scenario (created + proven RED
+  before the build): the three `leader-binding executed:` lines + the ABSENCE of
+  `Command 'Team.Git.*' failed` (the scratch repo seeded).
+- **E2E-PANES-1** - Feature 7 (fourth): the NEW `telescope-focus-panes` scenario: Ctrl+J/H/L/K ->
+  `focus target=Input|List|Preview` + the modal guarantee; the M-M7 migration of the 4 two-state
+  sites; the left-click path is unit-pinned + manual.
+- **E2E-RECENT-1** - Gap 4 (fifth): the NEW `telescope-recent` scenario: `Space+f,e` opens the
+  Recent overlay; `Models/Order.cs` opened first is the TOP match (per-key snapshots); Enter opens.

@@ -99,7 +99,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    goto dispatcher (`GotoDispatcher`) + the definition finder (`DefinitionFinder`).
    `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
    `-- LineIndex`, `-- FocusTarget` run subsets.
-   Currently **208 tests, all passing**.
+   Currently **221 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -386,8 +386,16 @@ Done and tested (live + unit):
   stable); narrow columns render compact values (Access W/R; Issues Kind
   err/warn/todo/info; Implementation Kind imp/func/inf + cls/str/enm/prop/evt);
   selection/preview/Enter stay payload-by-index (fzf + `ResultMapper` untouched).
+  Each column has min/max widths fitted by the pure `ColumnWidths` engine (the
+  priority distribution + the exact-total invariant); path-like columns shorten
+  from the FRONT (`ColumnTruncation.TailTruncate` — the end folder + file name
+  survive), text columns at the END; the horizontal scrollbar is Disabled; the
+  overlay width scales with the visible column count (recomputed at open + every
+  chooser toggle, capped by the work area); the selected row pins a contrasting
+  highlight + white text (active + inactive).
   New diagnostic `results columns={ids}`; unit-tested in `tests/Telescope.Tests`
-  (the column-set/visibility tests); live e2e registered, queued as E2E-RC-1..2.
+  (the column-set/visibility/width-fit/truncation tests); live e2e
+  `telescope-results-columns` passes.
 
 ## Hard requirements that are easy to violate
 

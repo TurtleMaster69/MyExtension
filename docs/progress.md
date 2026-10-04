@@ -7,7 +7,10 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 6 core — goto commands (`gd`/`gI`/`gr` → 1-hit direct / multi-hit Telescope) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 41-scenario suite + both unit suites GREEN; the 3rd-strike window-management regression fixed in-item)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** the columns UX bugfix (no
+h-scroll, all columns visible, min/max widths, logical shortening, column-relative window
+width, the selection contrast) — GREEN 2026-10-04 (bugfix + UX lane, e2e ENABLED; full
+41-scenario suite + both unit suites GREEN, zero flakes, 0 iterations)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -108,12 +111,20 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **the goto commands reached GREEN 2026-10-04** with e2e enabled;
-  see the Done section. Nothing is in flight.)
-- **Next up:** **Gap 11 (git)** — leader bindings for the native git diff/blame/log/history
-  commands (triage EXTEND/REUSE native 2026-10-03; small feature; plan in
-  `docs/plans/backlog-plans.md`; **verify the exact command names live** — e2e is enabled;
-  the full-suite gate uses `-TimeoutSec 2400`). Then the rest
+- **In progress:** (none — **the columns UX bugfix reached GREEN 2026-10-04** with e2e
+  enabled; see the Done section. Nothing is in flight.)
+- **Next up:** **the preview buffer-source swap** (`plan-preview-buffer.md` — the fix the
+  columns plan's Done entry OWNERS to the planning hub: the workspace buffer
+  (`VisualStudioWorkspace` → `GetDocumentIdsWithFilePath` → `GetTextBuffer()`) for solution
+  files → FULL Roslyn highlighting (the Peek model); the standalone fallback otherwise;
+  CodeLens SKIPPED; the document-window embedding REJECTED. Telescope.Tests 221 → 224; the
+  plan is gate-APPROVED in the planning-hub session). **Then:** Gap 11 (the git bindings —
+  WRITTEN + APPROVED), Feature 7 (the pane architecture — WRITTEN + APPROVED), Gap 4 (the
+  recent-files finder — WRITTEN + APPROVED; `f,e` PROPOSED — confirm at handoff). All plans
+  live in
+  `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/`
+  and are handed off progressively (each written to `docs/implementation_plan.md` when it
+  becomes the first item). Then the rest
   of the user-chosen **"smallest first"** run order (2026-10-03):
   gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
@@ -242,14 +253,12 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **208 passed**; `tests/NeoVisual.Tests`
-  **190 passed** (after Feature 6 + Gap 1 + Gap 3 + the columns/preview item + the goto
-  commands, 2026-10-04).
+- Offline units: `tests/Telescope.Tests` **221 passed**; `tests/NeoVisual.Tests`
+  **190 passed** (after the columns UX bugfix, 2026-10-04).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **41 scenarios** — ALL executed GREEN
-  (full-suite fresh boot with `-TimeoutSec 2400`, run 168, 2026-10-04; the new
-  `telescope-goto` passed its first live run; `neovisual-window-management`'s 3rd-strike
-  regression was FIXED in-item — step-0 editor-focus establishment — and held). **No
-  known-RED remains** —
+  (full-suite fresh boot with `-TimeoutSec 2400`, run 169, 2026-10-04; the columns UX
+  bugfix's final gate — `telescope-results-columns` first-try, the diagnostics byte-stable,
+  zero flakes). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
   `telescope-implementation` 7c6569b) - the full 41-scenario suite is GREEN.
 
@@ -378,6 +387,43 @@ Top of the queue, in priority order:
 > is **native bindings** (small); gap 8 is **folded into feature 8**. The which-key item is
 > built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
 > (LazyVim-style) AND an inline popup variant, so both can be tested.
+
+> ~~**FIRST ITEM (2026-10-04):** the **columns UX bugfix** plan~~ — **DONE** (GREEN
+> 2026-10-04, bugfix + UX lane, e2e ENABLED; see the Done section). Full 41-scenario
+> fresh-boot suite GREEN (run 169, zero flakes); Telescope.Tests 208 → **221**; NeoVisual
+> 190. Shipped: per-column min/max widths (the pinned 11-row table across all 23 catalog
+> sites), the pure `ColumnWidths.Compute` (the priority distribution + the exact-total
+> invariant + the degenerate mins-win case), **logical shortening** (Tail = path-like
+> columns truncate from the FRONT — the end folder + file name survive; End = text), the
+> **overlay width scales with the visible column count**
+> (`min(max(760, NeededWidth+18+480+22), WorkArea.Width)`, recomputed at open + every chooser
+> toggle), the h-scrollbar Disabled, the **selection contrast** (the IsSelected trigger sets
+> a contrasting foreground, active + inactive). No new diagnostic (the existing
+> `results columns=` / `results count=` lines byte-stable).
+
+> **THEN (2026-10-04, gate-APPROVED, handed off in order):**
+> 2. **the preview buffer-source swap** (`plan-preview-buffer.md`) — the fix the columns plan's
+>    Done entry OWNERS to the planning hub: the workspace buffer (`VisualStudioWorkspace` →
+>    `GetDocumentIdsWithFilePath` → `GetTextBuffer()`) for solution files → FULL Roslyn
+>    highlighting (the Peek model); the standalone fallback otherwise; CodeLens SKIPPED (the
+>    References finder covers counts); the document-window embedding REJECTED (unsupported).
+>    Telescope.Tests 212 → 215.
+> 3. **Gap 11 — the git bindings** (`plan-gap11.md`): `g,d` diff / `g,b` blame / `g,h` history
+>    (the branches binding DROPPED — the user's decision; the deferred lazygit overlay covers
+>    it); `g,g`/`g,c` unchanged until that overlay ships; the scratch repo seeded (`git init`,
+>    `.git` excluded from the seed-leak set); the e2e scenario `neovisual-git-bindings`.
+> 4. **Feature 7 — the overlay PANE architecture** (`plan-feature7.md`): the user's directive —
+>    REAL focus (not logical), left-click focusable panes, one modular overlay (an IPane
+>    contract + a PaneHost registry — the types land with the plan) the deferred lazygit
+>    overlay reuses; Ctrl+H=List, Ctrl+L=Preview, Ctrl+J=Input,
+>    Ctrl+K=cycle (the wrap pinned); M-M7 (`focus target=Input|List|Preview` — the 4 harness
+>    sites update); the e2e scenario `telescope-focus-panes`.
+> 5. **Gap 4 — the recent-files finder** (`plan-gap4.md`): `Name="Recent"`, the leader `f,e`
+>    (PROPOSED — confirm at handoff); CRITICAL: `EnvDTE.RecentFiles` does NOT exist in the 17.x
+>    interop → the reflection probe + the session-MRU fallback behind the unchanged seam; the
+>    e2e scenario `telescope-recent`.
+> The lazygit overlay (`g,g`) remains DEFERRED (a bonus when the core is finished — Feature 7's
+> pane host is its foundation). Gap 5 (symbols) is the next planning batch.
 
 > **FIRST ITEM (2026-10-04):** ~~the **Telescope results columns + preview-as-editor**
 > plan~~ — **DONE** (GREEN 2026-10-04, feature lane, e2e ENABLED; see the Done section).
@@ -744,6 +790,56 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Columns UX bugfix (no h-scroll, all columns visible, min/max widths,
+  logical shortening, column-relative window width, the selection contrast)** (Lane:
+  `bugfix + UX`, e2e ENABLED; 3 delegations, 1 VS boot, 0 iterations). Fixes + refines the
+  just-landed columns feature per the user's 2026-10-04 reports: the results list NEVER
+  scrolls horizontally (`ScrollViewer.HorizontalScrollBarVisibility="Disabled"`, vertical
+  Auto unchanged) and ALWAYS shows every column — each column has **min/max widths** (the
+  pinned 11-row table across all 23 catalog sites: file 6/30 Tail · dir 6/40 Tail · path
+  10/60 Tail · kind 3/8 End · message 10/∞ End · line 2/5 End · access 2/4 End ·
+  symbol(Refs) 6/24 End · symbol(Impl) 6/∞ End · column 2/8 End · text 10/∞ End); the pure
+  `ColumnWidths.Compute` distributes the surplus in priority order (never below min / above
+  max; the exact-total invariant; the degenerate available<sum(MINs) case → the mins win and
+  the caller widens the window); **logical shortening** — `ColumnTruncation.TailTruncate`
+  removes the FRONT of path-like columns keeping the tail (`…\Services\Order.cs` — the end
+  folder + file name survive; Telescope.nvim `path_display="truncate"` is the reference),
+  `EndTruncate` removes the END of text columns; the **overlay width scales with the visible
+  column count** (`min(max(760, NeededWidth+18+480+22), WorkArea.Width)`, recomputed at open
+  + every chooser toggle; the results column = Pixel(Width−502), Compute's available = that
+  −18 — more columns grow the window instead of eating the preview); the **selection
+  contrast** (SelectionHighlightBrush #2d4a75 + SelectionForegroundBrush white, the
+  IsSelected trigger sets both, active + inactive states; the per-cell Foreground removed).
+  NO new diagnostic — the existing `[Telescope] results columns=` / `results count=` lines
+  are byte-stable (proven at the source-diff AND live-log level). Unit tests: Telescope
+  208 → **221** (13 new: 7 `Run_ColumnWidths_*`, 2 `Run_TailTruncate_*`, 2 `Run_EndTruncate_*`,
+  `Run_ResultRowCells_Truncation_Kinds`, `Run_ResultsColumns_MinMaxWidths`); NeoVisual 190
+  untouched. Final gates: `dotnet build` 0 errors; Telescope.Tests **221 passed, 0 failed**;
+  NeoVisual.Tests **190 passed, 0 failed** (staggered); full 41-scenario e2e suite GREEN on
+  a fresh boot (run 169, `-TimeoutSec 2400`: 41/41, zero flakes, `telescope-results-columns`
+  first-try); both lints PASS; `-SelfCheck` PASS; `-List` 41; the 7 visual ACs verified by
+  the MANUAL visual pass (code lines + the unit-pinned invariants). Deviations adjudicated
+  (hub): BP-5 return type `IReadOnlyList<string>` (the artifact's `string[]` snippet
+  contradicted the test contract) → ACCEPT; BP-10 placement (spec.md §2.5 + SKILL.md) →
+  ACCEPT. Hub pre-VERIFY lint fix: `check-doc-refs.ps1` gained a doc-scoped allowlist entry
+  for `.opencode/agent/trailmark-guidance.md` (GraphStore/CodeGraph — Trailmark Python
+  types unresolvable in the C#-scoped lint).
+  **Change summary:** created `Telescope/Overlay/Utils/ColumnWidths.cs` +
+  `Telescope/Overlay/Utils/ColumnTruncation.cs` (both pure, dependency-free); modified
+  `Telescope/Overlay/Utils/ResultColumn.cs` (+`ResultColumnTruncation` enum, +Min/Max/
+  Truncation, ctor 6→9 params), `Telescope/Overlay/Utils/FinderColumns.cs` (the 23 sites
+  pinned), `Telescope/Overlay/Utils/ResultRowCells.cs` (+the truncating Compute overload),
+  `Telescope/Overlay/TelescopeOverlay.cs` (the h-scroll, the selection brushes + trigger,
+  the Pixel results column, `ApplyWindowWidth`/`ApplyComputedColumnWidths`, the truncation
+  in `RebuildRows`), `tests/Telescope.Tests/Program.cs` (+13 tests), `docs/spec.md` §2.5 +
+  SKILL.md (the column-model passage), `tools/lint/check-doc-refs.ps1` (the allowlist
+  entry). **If this regresses, look first at `ColumnWidths.Compute` (the distribution +
+  the exact-total invariant — pinned by `Run_ColumnWidths_*`) and
+  `TelescopeOverlay.ApplyComputedColumnWidths`/`ApplyWindowWidth` (the wiring: the Pixel
+  results column, the recompute at open + chooser toggle) — the two places the unit tests
+  and the e2e scenario assert on; the truncation contract is pinned by
+  `Run_TailTruncate_*`/`Run_EndTruncate_*`.**
 
 - **2026-10-04 — Gap 6 core: goto commands (`gd`/`gI`/`gr` → 1-hit direct / multi-hit
   Telescope)** (Lane: `feature`, e2e ENABLED — full pipeline: e2e RED before the build,

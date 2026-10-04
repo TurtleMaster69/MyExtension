@@ -157,7 +157,7 @@ Add-Check 'DOC-66-2' 'progress.md "Next up" section points at the current code-r
 
 $baselineLine = Normalize-Text (Get-Bullet $progressPath '- Offline units:')
 $baselineWrongAttr = ($baselineLine -match 'Architecture consolidation')
-$baselineRightAttr = ($baselineLine -match '51 findings' -or $baselineLine -match 'Code review fixes' -or $baselineLine -match '67 findings' -or $baselineLine -match '2026-09-30' -or $baselineLine -match 'Code review findings' -or $baselineLine -match 'combined plan' -or $baselineLine -match 'after Feature')
+$baselineRightAttr = ($baselineLine -match '51 findings' -or $baselineLine -match 'Code review fixes' -or $baselineLine -match '67 findings' -or $baselineLine -match '2026-09-30' -or $baselineLine -match 'Code review findings' -or $baselineLine -match 'combined plan' -or $baselineLine -match 'after Feature' -or $baselineLine -match 'columns UX bugfix')
 $baselineHasCounts = ($baselineLine -match '\*\*\d+ passed\*\*')
 Add-Check 'DOC-66-3' 'progress.md baseline carries attributed unit counts (e.g. "**172 passed** ... after Feature 6 ... 2026-10-04") attributed to a legitimate GREEN item, not the Architecture consolidation' `
     (-not $baselineWrongAttr -and $baselineRightAttr -and $baselineHasCounts) ("wrongAttr=$baselineWrongAttr rightAttr=$baselineRightAttr hasCounts=$baselineHasCounts line: $baselineLine")

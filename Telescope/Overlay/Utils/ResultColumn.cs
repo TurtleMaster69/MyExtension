@@ -21,6 +21,20 @@ namespace Telescope.Overlay
     }
 
     /// <summary>
+    /// How a column's cell text shortens at its max width (plan D4): Tail removes the FRONT
+    /// (path-like columns — the end folder + file name survive), End removes the END (text
+    /// columns — the start of the line is the important part).
+    /// </summary>
+    internal enum ResultColumnTruncation
+    {
+        /// <summary>Path-like: remove the FRONT, keep the TAIL, prefix '…'.</summary>
+        Tail,
+
+        /// <summary>Text: remove the END, suffix '…'.</summary>
+        End,
+    }
+
+    /// <summary>
     /// One column in a finder's results list: a stable id (the lowercase-hyphenated token the
     /// <c>[Telescope] results columns=</c> diagnostic prints), a human header, a width kind,
     /// a cell getter over the row's payload (the finder's hit model), and the default
@@ -40,6 +54,16 @@ namespace Telescope.Overlay
         /// <summary>Fixed width in characters; 0 and ignored when <see cref="Width"/> is Flexible.</summary>
         internal int WidthChars { get; }
 
+        /// <summary>Floor in characters — a column is never narrower than this.</summary>
+        internal int MinWidth { get; }
+
+        /// <summary>Ceiling in characters; <c>int.MaxValue</c> marks the ONE absorbing column
+        /// per catalog (1:1 with the Flexible width kind) — no cap.</summary>
+        internal int MaxWidth { get; }
+
+        /// <summary>The logical-shortening kind applied at the max width (plan D4).</summary>
+        internal ResultColumnTruncation Truncation { get; }
+
         /// <summary>Whether the column starts visible (the user's catalog marks).</summary>
         internal bool DefaultVisible { get; }
 
@@ -54,6 +78,9 @@ namespace Telescope.Overlay
             string header,
             ResultColumnWidth width,
             int widthChars,
+            int minWidth,
+            int maxWidth,
+            ResultColumnTruncation truncation,
             bool defaultVisible,
             Func<object?, string> getter)
         {
@@ -61,6 +88,9 @@ namespace Telescope.Overlay
             Header = header ?? string.Empty;
             Width = width;
             WidthChars = width == ResultColumnWidth.Flexible ? 0 : widthChars;
+            MinWidth = Math.Max(0, minWidth);
+            MaxWidth = Math.Max(MinWidth, maxWidth);   // defensive: max >= min, always
+            Truncation = truncation;
             DefaultVisible = defaultVisible;
             Getter = getter ?? throw new ArgumentNullException(nameof(getter));
         }

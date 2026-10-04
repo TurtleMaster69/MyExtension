@@ -42,12 +42,29 @@ namespace Telescope.Overlay
         private readonly TextBox _promptBox;
         private readonly ListView _resultsList;
         private readonly GridView _gridView;
-        private GridViewColumn? _flexibleColumn;   // the LAST visible flexible column (D-B3)
-        private double _fixedWidthSum;             // sum of the fixed columns' assigned widths
+        private GridViewColumn? _flexibleColumn;   // FALLBACK-PATH-ONLY: the single display column (D-B3)
+        private double _fixedWidthSum;             // FALLBACK-PATH-ONLY: sum of the fixed columns' widths
         private readonly ContentControl _previewHost;
+
+        // D3: the bottom Grid's results column is PIXEL-sized (ApplyWindowWidth owns it); the
+        // preview column is Star and takes the rest (never below PreviewMinWidth — the window
+        // grows instead, the user's R4).
+        private readonly ColumnDefinition _resultsColumnDef;
+
+        // D4: the char widths aligned with the last RebuildColumns' visible columns — RebuildRows
+        // truncates against them. UI-thread-only, like all overlay state.
+        private int[] _activeCharWidths = Array.Empty<int>();
 
         /// <summary>The results/row foreground (the old box's #d3d7de).</summary>
         private static readonly Brush ResultForeground = new SolidColorBrush(Color.FromRgb(0xd3, 0xd7, 0xde));
+
+        /// <summary>The selected-row highlight (a dark blue from the accent #8b9dc3's hue family —
+        /// the light #d3d7de text contrasts on it in BOTH the active and inactive states; the
+        /// default system highlight is what made the selected text unreadable).</summary>
+        private static readonly Brush SelectionHighlightBrush = new SolidColorBrush(Color.FromRgb(0x2d, 0x4a, 0x75));
+
+        /// <summary>The selected-row text (white — contrasts with the dark highlight).</summary>
+        private static readonly Brush SelectionForegroundBrush = new SolidColorBrush(Colors.White);
 
         // ---- Finder / results state ----
         private IReadOnlyList<FinderEntry> _candidates = Array.Empty<FinderEntry>();
@@ -182,8 +199,9 @@ namespace Telescope.Overlay
             {
                 Background = new SolidColorBrush(Color.FromRgb(0x1b, 0x1f, 0x24)),
             };
+            _resultsColumnDef = new ColumnDefinition { Width = new GridLength(260) };   // ApplyWindowWidth owns it (D3)
+            bottom.ColumnDefinitions.Add(_resultsColumnDef);
             bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
 
             _resultsList = new ListView
             {
@@ -198,8 +216,10 @@ namespace Telescope.Overlay
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
             };
             // Attached ScrollViewer properties (no C# object-initializer syntax for attached
-            // properties — set via the static accessors).
-            ScrollViewer.SetHorizontalScrollBarVisibility(_resultsList, ScrollBarVisibility.Auto);
+            // properties — set via the static accessors). Horizontal is DISABLED (plan D5):
+            // the widths fit + the window grows (D2/D3), so nothing is clipped or hidden —
+            // the list must never scroll horizontally. Vertical stays Auto.
+            ScrollViewer.SetHorizontalScrollBarVisibility(_resultsList, ScrollBarVisibility.Disabled);
             ScrollViewer.SetVerticalScrollBarVisibility(_resultsList, ScrollBarVisibility.Auto);
             // Rows are selected programmatically (j/k); a click must never move WPF keyboard focus
             // off the prompt nor desync the ListView's selection from _keyHandler.SelectedIndex —
@@ -209,6 +229,20 @@ namespace Telescope.Overlay
             rowStyle.Setters.Add(new Setter(IsTabStopProperty, false));
             rowStyle.Setters.Add(new Setter(HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
             rowStyle.Setters.Add(new Setter(IsHitTestVisibleProperty, false));
+            // D6 — the selection contrast (the user's R2: "the text under highlighted item is not
+            // visible since its same color"). The brush-key overrides recolor the DEFAULT template's
+            // selection visuals (the canonical recipe — no re-template); the IsSelected trigger pins
+            // the colors explicitly. Active and inactive get the SAME pinned pair (the overlay is
+            // modal — both states must contrast).
+            _resultsList.Resources[SystemColors.HighlightBrushKey] = SelectionHighlightBrush;
+            _resultsList.Resources[SystemColors.HighlightTextBrushKey] = SelectionForegroundBrush;
+            _resultsList.Resources[SystemColors.ControlBrushKey] = SelectionHighlightBrush;      // the inactive selection
+            _resultsList.Resources[SystemColors.ControlTextBrushKey] = SelectionForegroundBrush; // the inactive text
+            rowStyle.Setters.Add(new Setter(ForegroundProperty, ResultForeground));
+            var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+            selectedTrigger.Setters.Add(new Setter(BackgroundProperty, SelectionHighlightBrush));
+            selectedTrigger.Setters.Add(new Setter(ForegroundProperty, SelectionForegroundBrush));
+            rowStyle.Triggers.Add(selectedTrigger);
             _resultsList.ItemContainerStyle = rowStyle;
 
             // Visible column headers (the D1 requirement), themed like the title bar. Headers are
@@ -221,9 +255,11 @@ namespace Telescope.Overlay
             _gridView.ColumnHeaderContainerStyle = headerStyle;
             _resultsList.View = _gridView;
 
-            // GridView does not star-size: the LAST visible (flexible) column is filled by a
-            // SizeChanged handler (ApplyFlexibleColumnWidth, BP-B3); the others are fixed-width.
-            _resultsList.SizeChanged += (_, _) => ApplyFlexibleColumnWidth();
+            // GridView does not star-size: the columned path's widths come from Compute
+            // (ApplyComputedColumnWidths, D2); the SizeChanged re-application is a layout-timing
+            // safety net (the Pixel-sized results column makes it a no-op in practice). The
+            // fallback display column keeps the landed fill (ApplyFlexibleColumnWidth, BP-B3).
+            _resultsList.SizeChanged += (_, _) => ApplyComputedColumnWidths();
 
             // Right-click a column header -> the column chooser (BP-B5). Wired ONCE on the ListView
             // so it survives column rebuilds; handledEventsToo so an upstream handle can't hide it.
@@ -324,7 +360,9 @@ namespace Telescope.Overlay
             _previewNavigator.SetText(string.Empty);
             _promptBox.Text = string.Empty;
             UpdateModeLabel();
-            RenderResults();
+            SyncFinderColumns();   // resolve the catalog + visibility model first (D3 needs the visible set)
+            ApplyWindowWidth();    // D3: the width before the centering math below
+            RenderResults();       // rebuilds the columns + rows at the final width (columnsDirty is true on a fresh instance)
 
             TelescopeLog.Log($"open finder={finder.Name} candidates={_candidates.Count}");
             // N38/BP-52: the availability probe runs off the UI thread; await it here.
@@ -552,6 +590,50 @@ namespace Telescope.Overlay
             return _activeVisibilityModel.VisibleIds;
         }
 
+        /// <summary>
+        /// D3: the overlay width scales with the visible columns —
+        /// max(DefaultOverlayWidth, NeededWidth + scrollbar + preview + chrome), capped by the
+        /// work area — and the Pixel-sized results column gets the complement (the preview never
+        /// shrinks below PreviewMinWidth). Recomputed at open and on every chooser toggle.
+        /// </summary>
+        private void ApplyWindowWidth()
+        {
+            IReadOnlyList<ResultColumn> visible = VisibleColumns();
+            double workArea = SystemParameters.WorkArea.Width;
+            Width = ColumnWidths.WindowWidth(ColumnWidths.DefaultOverlayWidth, visible, workArea);
+            _resultsColumnDef.Width = new GridLength(ColumnWidths.ResultsListWidth(Width));
+        }
+
+        /// <summary>
+        /// D2: applies the computed column widths to the GridView — Compute at the results list's
+        /// content width (the Pixel column minus the vertical scrollbar), EVERY column (including
+        /// the absorber) set from the result; the char widths are kept for the row truncation
+        /// (RebuildRows). The fallback display column keeps the landed fill. With the Pixel-sized
+        /// results column the SizeChanged re-application is a no-op (the estimate is exact; the
+        /// window is NoResize) — it is a layout-timing safety net only.
+        /// </summary>
+        private void ApplyComputedColumnWidths()
+        {
+            if (_useFallbackDisplayColumn)
+            {
+                ApplyFlexibleColumnWidth();   // the fallback: the landed single-column fill
+                return;
+            }
+
+            IReadOnlyList<ResultColumn> visible = VisibleColumns();
+            if (visible.Count == 0 || _gridView.Columns.Count == 0) return;
+            double available = ColumnWidths.ResultsListWidth(Width) - ColumnWidths.VerticalScrollbarWidth;
+            IReadOnlyList<double> px = ColumnWidths.Compute(available, visible);
+            var chars = new int[px.Count];
+            for (int i = 0; i < px.Count; i++)
+            {
+                if (i < _gridView.Columns.Count) _gridView.Columns[i].Width = px[i];
+                chars[i] = (int)(px[i] / ColumnWidths.PixelsPerChar);
+            }
+
+            _activeCharWidths = chars;
+        }
+
         private void RebuildColumns()
         {
             _gridView.Columns.Clear();
@@ -570,30 +652,15 @@ namespace Telescope.Overlay
             IReadOnlyList<ResultColumn> visible = VisibleColumns();
             for (int i = 0; i < visible.Count; i++)
             {
-                ResultColumn col = visible[i];
-                bool flexible = col.Width == ResultColumnWidth.Flexible;
-                GridViewColumn gvc = MakeColumn(col.Header, i);
-                if (!flexible)
-                {
-                    gvc.Width = Math.Max(24, col.WidthChars * 8);
-                    _fixedWidthSum += gvc.Width;
-                }
-                else if (_flexibleColumn == null)
-                {
-                    _flexibleColumn = gvc;   // the FIRST flexible column fills the remaining width
-                }
-                else
-                {
-                    gvc.Width = 80;          // defensive: only one flexible column per catalog today
-                    _fixedWidthSum += 80;
-                }
-                _gridView.Columns.Add(gvc);
+                _gridView.Columns.Add(MakeColumn(visible[i].Header, i));
             }
-            ApplyFlexibleColumnWidth();
+
+            ApplyComputedColumnWidths();   // D2: Compute owns ALL column widths (fixed + absorber)
         }
 
         /// <summary>Builds one GridViewColumn: visible header text + an index-bound cell template
-        /// (Cascadia 13, the overlay's foreground, ellipsis-trimmed — the Telescope `…` pattern).</summary>
+        /// (Cascadia 13, ellipsis-trimmed — the Telescope `…` pattern). The cell text INHERITS the
+        /// row foreground (no per-cell brush — it would defeat the selection trigger, the R2 bug).</summary>
         private GridViewColumn MakeColumn(string header, int cellIndex)
         {
             var template = new DataTemplate();
@@ -601,7 +668,6 @@ namespace Telescope.Overlay
             factory.SetBinding(TextBlock.TextProperty, new Binding($"[{cellIndex}]"));
             factory.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Cascadia Code, Consolas"));
             factory.SetValue(TextBlock.FontSizeProperty, 13.0);
-            factory.SetValue(TextBlock.ForegroundProperty, ResultForeground);
             factory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
             template.VisualTree = factory;
             return new GridViewColumn { Header = header, CellTemplate = template };
@@ -634,8 +700,9 @@ namespace Telescope.Overlay
                 }
                 else
                 {
-                    row = new string[visible.Count];
-                    for (int c = 0; c < visible.Count; c++) row[c] = visible[c].Getter(entry.Payload);
+                    // D4: each cell shortened to its column's computed char width by the
+                    // column's OWN truncation kind (Tail for path-like, End for text).
+                    row = ResultRowCells.Compute(entry, visible, _activeCharWidths).ToArray();
                 }
                 cells[i] = row;
                 rows.Add(new ResultRow(row));
@@ -1122,12 +1189,14 @@ namespace Telescope.Overlay
             menu.IsOpen = true;
         }
 
-        /// <summary>Applies one chooser toggle: flips the model, marks the columns dirty, re-renders
-        /// (which rebuilds the GridViewColumns in catalog order and logs the NEW columns= line).</summary>
+        /// <summary>Applies one chooser toggle: flips the model, recomputes the D3 window width
+        /// for the NEW visible set, marks the columns dirty, re-renders (which rebuilds the
+        /// GridViewColumns in catalog order and logs the NEW <c>results columns=</c> line).</summary>
         private void ToggleColumn(string id)
         {
             if (_activeVisibilityModel == null) return;
             _activeVisibilityModel.Toggle(id);
+            ApplyWindowWidth();      // D3: the width recomputed for the NEW visible set (before the rebuild)
             _columnsDirty = true;
             RenderResults();
         }

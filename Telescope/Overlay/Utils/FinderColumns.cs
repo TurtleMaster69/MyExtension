@@ -69,71 +69,72 @@ namespace Telescope.Overlay
 
         internal static IReadOnlyList<ResultColumn> Files(string? projectRoot = null) => new[]
         {
-            new ResultColumn("file", "File", ResultColumnWidth.Fixed, 28, true,
+            //                    id      header      width-kind                  chars  min  max  truncation  visible
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<FileHit>(p, h => BaseName(h))),
-            new ResultColumn("dir", "Directory", ResultColumnWidth.Flexible, 0, true,
+            new ResultColumn("dir", "Directory", ResultColumnWidth.Flexible,     0,   6,  40, ResultColumnTruncation.Tail, true,
                 p => DirCell(p, projectRoot)),
-            new ResultColumn("path", "Path", ResultColumnWidth.Fixed, 60, false,
+            new ResultColumn("path", "Path",     ResultColumnWidth.Fixed,       60,  10,  60, ResultColumnTruncation.Tail, false,
                 p => Cell<FileHit>(p, h => h.FilePath)),
         };
 
         internal static IReadOnlyList<ResultColumn> Issues() => new[]
         {
-            new ResultColumn("kind", "Kind", ResultColumnWidth.Fixed, 6, true,
+            new ResultColumn("kind", "Kind",     ResultColumnWidth.Fixed,        6,   3,   8, ResultColumnTruncation.End, true,
                 p => Cell<CodeIssue>(p, i => KindAbbreviations.Issue(i.Kind))),
-            new ResultColumn("file", "File", ResultColumnWidth.Fixed, 28, true,
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<CodeIssue>(p, i => BaseName(i))),
-            new ResultColumn("message", "Message", ResultColumnWidth.Flexible, 0, true,
+            new ResultColumn("message", "Message", ResultColumnWidth.Flexible,   0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
                 p => Cell<CodeIssue>(p, i => i.Text)),
-            new ResultColumn("line", "Line", ResultColumnWidth.Fixed, 6, false,
+            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, false,
                 p => Cell<CodeIssue>(p, i => Line(i))),
         };
 
         internal static IReadOnlyList<ResultColumn> References() => new[]
         {
-            new ResultColumn("access", "Access", ResultColumnWidth.Fixed, 4, true,
+            new ResultColumn("access", "Access", ResultColumnWidth.Fixed,        4,   2,   4, ResultColumnTruncation.End, true,
                 p => Cell<ReferenceHit>(p, r => KindAbbreviations.Access(r.IsWrite))),
-            new ResultColumn("file", "File", ResultColumnWidth.Fixed, 28, true,
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<ReferenceHit>(p, r => BaseName(r))),
-            new ResultColumn("symbol", "Symbol", ResultColumnWidth.Fixed, 24, false,
+            new ResultColumn("symbol", "Symbol", ResultColumnWidth.Fixed,       24,   6,  24, ResultColumnTruncation.End, false,
                 p => Cell<ReferenceHit>(p, r => r.Symbol)),
-            new ResultColumn("column", "Column", ResultColumnWidth.Fixed, 8, false,
+            new ResultColumn("column", "Column", ResultColumnWidth.Fixed,        8,   2,   8, ResultColumnTruncation.End, false,
                 p => Cell<ReferenceHit>(p, r => r.Column.ToString(CultureInfo.InvariantCulture))),
-            new ResultColumn("line", "Line", ResultColumnWidth.Fixed, 6, false,
+            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, false,
                 p => Cell<ReferenceHit>(p, r => Line(r))),
-            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible, 0, false,
+            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, false,
                 p => Cell<ReferenceHit>(p, r => r.LineText)),
         };
 
         internal static IReadOnlyList<ResultColumn> Grep() => new[]
         {
-            new ResultColumn("file", "File", ResultColumnWidth.Fixed, 28, true,
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<GrepHit>(p, h => BaseName(h))),
-            new ResultColumn("line", "Line", ResultColumnWidth.Fixed, 6, true,
+            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, true,
                 p => Cell<GrepHit>(p, h => Line(h))),
-            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible, 0, true,
+            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
                 p => Cell<GrepHit>(p, h => h.LineText)),
         };
 
         internal static IReadOnlyList<ResultColumn> Fzf() => new[]
         {
-            new ResultColumn("file", "File", ResultColumnWidth.Fixed, 28, true,
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<FzfHit>(p, h => BaseName(h))),
-            new ResultColumn("line", "Line", ResultColumnWidth.Fixed, 6, true,
+            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, true,
                 p => Cell<FzfHit>(p, h => Line(h))),
-            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible, 0, true,
+            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
                 p => Cell<FzfHit>(p, h => h.LineText)),
         };
 
         internal static IReadOnlyList<ResultColumn> Implementation() => new[]
         {
-            new ResultColumn("kind", "Kind", ResultColumnWidth.Fixed, 6, true,
+            new ResultColumn("kind", "Kind",     ResultColumnWidth.Fixed,        6,   3,   8, ResultColumnTruncation.End, true,
                 p => Cell<ImplementationHit>(p, h => KindAbbreviations.Implementation(h.Kind))),
-            new ResultColumn("file", "File", ResultColumnWidth.Fixed, 28, true,
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<ImplementationHit>(p, h => BaseName(h))),
-            new ResultColumn("symbol", "Symbol", ResultColumnWidth.Flexible, 0, false,
+            new ResultColumn("symbol", "Symbol", ResultColumnWidth.Flexible,     0,   6,  int.MaxValue, ResultColumnTruncation.End, false,
                 p => Cell<ImplementationHit>(p, h => h.SymbolName)),
-            new ResultColumn("line", "Line", ResultColumnWidth.Fixed, 6, false,
+            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, false,
                 p => Cell<ImplementationHit>(p, h => Line(h))),
         };
 

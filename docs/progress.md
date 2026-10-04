@@ -7,7 +7,7 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Telescope results columns + preview-as-editor — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 40-scenario suite + both unit suites GREEN; 1 flaky recorded; the preview-classifier limitation documented, fix owned by the planning hub)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 6 core — goto commands (`gd`/`gI`/`gr` → 1-hit direct / multi-hit Telescope) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 41-scenario suite + both unit suites GREEN; the 3rd-strike window-management regression fixed in-item)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -108,33 +108,38 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **Telescope results columns + preview-as-editor reached GREEN
-  2026-10-04** with e2e enabled; see the Done section. Nothing is in flight.)
-- **Next up:** **the goto commands plan** (`gd`/`gI`/`gr` →
-  `MyExtension.GotoDefinition/GotoReferences/GotoImplementation`; 1 hit → direct, multiple →
-  the overlay; a new DefinitionFinder; the user maps the keys in VsVim; gate-APPROVED round 2;
-  plan at
-  `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-124602/plans/plan-goto.md`
-  — written to `docs/implementation_plan.md` when it becomes the first item; **e2e ENABLED**).
-  Then the rest
+- **In progress:** (none — **the goto commands reached GREEN 2026-10-04** with e2e enabled;
+  see the Done section. Nothing is in flight.)
+- **Next up:** **Gap 11 (git)** — leader bindings for the native git diff/blame/log/history
+  commands (triage EXTEND/REUSE native 2026-10-03; small feature; plan in
+  `docs/plans/backlog-plans.md`; **verify the exact command names live** — e2e is enabled;
+  the full-suite gate uses `-TimeoutSec 2400`). Then the rest
   of the user-chosen **"smallest first"** run order (2026-10-03):
   gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
-  gaps 8-11 triaged 2026-10-03). Gap 3 (diagnostics navigation, `]`/`[` prefix) is
-  **DONE** (GREEN 2026-10-04, e2e enabled; the backlog's `Edit.NextError`/
-  `Edit.PreviousError` assumption was FALSIFIED — shipped instead: native
-  `Edit.GotoNextIssueinFile`/`Edit.GotoPreviousIssueinFile` for `],d`/`[,d` + the BUILT
-  severity-filtered `],e`/`[,e`/`],w`/`[,w` navigator; see the Done section). Gap 1
-  (window-management leader bindings + case-sensitive leader combos) is **DONE** (GREEN
-  2026-10-04; its queued e2e gates ran GREEN at the Gap 3 VERIFY — see the Done section).
-  Feature 6 (Solution Explorer search-box vim motions) is **DONE** (GREEN 2026-10-04; see
-  the Done section). The Telescope `fzf` finder (item 5) is **DONE** (GREEN 2026-10-03;
-  see the Done section). The Architecture backlog is now **CLOSED** — F13 and F43 were
-  verified already-fixed and annotated FIXED (2026-10-02). See the Pending queue +
-  User-requested features sections below.
+  gaps 8-11 triaged 2026-10-03). The goto commands (Gap 6 core: `gd`/`gI`/`gr` →
+  `MyExtension.GotoDefinition/GotoReferences/GotoImplementation`, 1-hit direct / multi-hit
+  overlay, the new DefinitionFinder + GotoDispatcher) are **DONE** (GREEN 2026-10-04; see
+  the Done section). The Telescope results columns + preview-as-editor item is **DONE**
+  (GREEN 2026-10-04; the preview-classifier limitation is documented, fix owned by the
+  planning hub). Gap 3 (diagnostics navigation) is **DONE** (GREEN 2026-10-04; see the Done
+  section). Gap 1 (window-management leader bindings + case-sensitive leader combos) is
+  **DONE** (GREEN 2026-10-04; see the Done section). Feature 6 (Solution Explorer search-box
+  vim motions) is **DONE** (GREEN 2026-10-04; see the Done section). The Telescope `fzf`
+  finder (item 5) is **DONE** (GREEN 2026-10-03; see the Done section). The Architecture
+  backlog is now **CLOSED** — F13 and F43 were verified already-fixed and annotated FIXED
+  (2026-10-02). See the Pending queue + User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-10-04] DECIDED: **goto wiring (user instruction).** The extension exposes **VS
+  commands** (`MyExtension.GotoDefinition` / `MyExtension.GotoReferences` /
+  `MyExtension.GotoImplementation`); the USER maps `gd`/`gI`/`gr` to them in **VsVim**
+  themselves (*"since this is only gonna work in vsvim context text windows its probably
+  better that I do it there and just map extension command there — before I just mapped
+  default visual studio commands to them and it worked"*). NO leader keys, NO hook changes,
+  NO g-sequence state machine, NO VsVim interop. 1 hit → direct jump; 0/multiple hits → the
+  Telescope overlay (0-hits → OpenOverlay, LazyVim parity). — status: DONE (GREEN 2026-10-04).
 - [2026-10-04] DECIDED: **E2E RE-AUTHORIZED (user instruction).** *"u dont need to defer
   them anymore"* / *"u also have permissions to run e2e now"* — supersedes the earlier
   same-day deferral. The default loop's e2e gates apply again; the queued gates
@@ -237,16 +242,16 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **199 passed**; `tests/NeoVisual.Tests`
-  **190 passed** (after Feature 6 + Gap 1 + Gap 3 + the Telescope columns/preview item,
-  2026-10-04).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **40 scenarios** — ALL executed GREEN
-  (full-suite fresh boot, 2026-10-04; the new `telescope-results-columns` passed its first
-  live run; `neovisual-window-management` is flaky-on-retry ×2 cumulative — pass-on-retry,
-  harness order-dependency, hardening queued, ONE more flake = 3rd-strike upgrade).
-  **No known-RED remains** —
+- Offline units: `tests/Telescope.Tests` **208 passed**; `tests/NeoVisual.Tests`
+  **190 passed** (after Feature 6 + Gap 1 + Gap 3 + the columns/preview item + the goto
+  commands, 2026-10-04).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **41 scenarios** — ALL executed GREEN
+  (full-suite fresh boot with `-TimeoutSec 2400`, run 168, 2026-10-04; the new
+  `telescope-goto` passed its first live run; `neovisual-window-management`'s 3rd-strike
+  regression was FIXED in-item — step-0 editor-focus establishment — and held). **No
+  known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 40-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the full 41-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -390,27 +395,30 @@ Top of the queue, in priority order:
 > asserts the line's PRESENCE only until the workspace-attach fix lands. Telescope.Tests
 > 172 → 199; NeoVisual 190.
 
-> **SECOND ITEM (2026-10-04):** the **goto commands** plan (the user's request; gate-APPROVED
-> round 2). Lane: **feature (e2e ENABLED)**. Three VS commands —
-> MyExtension.GotoDefinition / MyExtension.GotoReferences / MyExtension.GotoImplementation
-> (a NEW .vsct — none existed): 1 hit → jump directly, multiple hits → the Telescope overlay
-> with the corresponding finder; a NEW DefinitionFinder (Roslyn `DeclaringSyntaxReferences`);
-> a GotoDispatcher seam in `Telescope/Controller/`; the USER maps `gd`/`gI`/`gr` to the
-> commands in VsVim themselves (their explicit wiring decision — no hook/leader changes).
-> Plan at
-> `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-124602/plans/plan-goto.md`
-> (written to `docs/implementation_plan.md` when it becomes the first item); Telescope.Tests
-> +9; e2e `telescope-goto` (4 parts via DTE command execution).
+> **SECOND ITEM (2026-10-04):** ~~the **goto commands** plan~~ — **DONE** (GREEN 2026-10-04,
+> feature lane, e2e ENABLED; see the Done section). Three VS commands —
+> `MyExtension.GotoDefinition` / `MyExtension.GotoReferences` / `MyExtension.GotoImplementation`
+> (a NEW `MyExtensionPackage.vsct` — none existed): 1 hit → jump directly, 0/multiple hits →
+> the Telescope overlay with the corresponding finder; a NEW `DefinitionFinder` (Roslyn
+> `DeclaringSyntaxReferences`, finder-side deterministic ordering); the pure `GotoDispatcher`
+> seam in `Telescope/Controller/`; the USER maps `gd`/`gI`/`gr` to the commands in VsVim
+> themselves (their explicit wiring decision — no hook/leader changes). New e2e scenario
+> `telescope-goto` (41st) — created + PROVEN RED (DTE unknown-command rejection) before the
+> build, PASSED its first live run after the Part-4 caret-normalization fix. Telescope.Tests
+> 199 → 208; NeoVisual 190 (registry 16 → 17). The 3rd-strike `neovisual-window-management`
+> regression was FIXED in this item (step-0 editor-focus establishment — hardening item a
+> executed).
 
 > **HARDENING QUEUE (harness, filed 2026-10-04 from the Gap 3 VERIFY — batch with a future
 > harness touch; none blocks the queue):**
-> a. **`neovisual-window-management` step-3 order-dependency (flaky ×2 cumulative — ONE more
->    flake triggers the 3rd-strike REGRESSION upgrade).** In the full-suite ordering, the
->    `w,d` document-close poll (3s) intermittently finds the active document unchanged —
->    the scenario asserts VS focus but never ESTABLISHES editor focus at start, and the
->    focus-aware close routes on the (documented-stale) `IsToolWindow` flag. Pass-on-retry
->    (runs 157, 160, 163). Fix direction: establish editor focus (Enter-NormalContext + an
->    editor-focus assert) at scenario start before step 3's poll.
+> a. ~~**`neovisual-window-management` step-3 order-dependency (flaky ×2 cumulative — ONE more
+>    flake triggers the 3rd-strike REGRESSION upgrade).**~~ **FIXED 2026-10-04** (the goto
+>    item's verify-time debug — the 3rd strike fired in runs 165/166 and was upgraded to a
+>    REGRESSION per the M-M2 budget): the scenario now ESTABLISHES editor focus at start
+>    (step 0 opens Alpha.cs via the overlay + `Wait-ActiveDocumentMatch`) before the binding
+>    steps; run 167 (subset) + run 168 (full suite) PASS. Root cause: the scenario asserted
+>    VS-process foreground only, so with a tool window focused the doc-window commands were
+>    unavailable and the focus-aware `w,d` routed on the stale `IsToolWindow` flag.
 > b. **Cleanup `Save-AllDocuments` writes seeds AFTER the `seed-leak` check** — the guard's
 >    window excludes end-of-run cleanup writes (harmless across boots — each boot reseeds —
 >    but a coverage gap). Fix direction: run the leak check after the final save, or save
@@ -423,7 +431,14 @@ Top of the queue, in priority order:
 > d. **Documented, no action:** the tab-group DTE commands (`Window.NewHorizontalTabGroup`/
 >    `NewVerticalTabGroup`) log `Command ... is not available` on a fresh instance — the
 >    scenarios' contract is the `leader-binding executed:` line, not command success
->    (documented at `test-e2e.ps1:718-720`).
+>    (documented at `test-e2e.ps1:718-720`). (Also: with editor focus restored,
+>    `w,-` creates a horizontal group after which VS natively disables
+>    `Window.NewVerticalTabGroup` — horizontal+vertical groups cannot mix; the scenario
+>    asserts the binding diagnostic only.)
+> e. **The harness's DEFAULT suite budget (300s) cannot fit 41 scenarios** — run 165 expired
+>    at 37 scenarios and suppressed the FAIL summary; the full-suite gate REQUIRES an explicit
+>    `-TimeoutSec 2400` (documented in the goto plan's Verification Trace). Fix direction:
+>    raise the default (scale by scenario count) or fail fast with a clear message.
 
 > **KNOWN LIMITATION (2026-10-04, user-owned — the fix is IN FLIGHT IN THE PLANNING HUB; do
 > not pick this up as a queue item):** the preview's workspace-detached buffer
@@ -729,6 +744,58 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Gap 6 core: goto commands (`gd`/`gI`/`gr` → 1-hit direct / multi-hit
+  Telescope)** (Lane: `feature`, e2e ENABLED — full pipeline: e2e RED before the build,
+  executed at VERIFY; 5 delegations, 4 VS boots, 1 iteration). Three VS commands —
+  `MyExtension.GotoDefinition` / `MyExtension.GotoReferences` / `MyExtension.GotoImplementation`
+  (a NEW `MyExtensionPackage.vsct` — none existed before; + the VSCTCompile item +
+  the ProvideMenuResource attribute; flags CommandWellOnly, no visibility
+  constraints): each resolves the caret symbol (the shared `RoslynGatherers.TryGetCaretSymbol`
+  seam) → gathers → the pure `GotoDispatcher.Decide(count)` seam
+  (`Telescope/Controller/`, 1 → DirectJump; 0/>1 → OpenOverlay — LazyVim parity) →
+  direct-jump via `HitOpener` (logging `[Telescope] goto-direct finder=… file=… line=…`) or
+  `TelescopeLauncher.Open(finder)`. NEW `DefinitionFinder` (Telescope, `Name="Definition"`):
+  the caret symbol's definition locations via Roslyn `DeclaringSyntaxReferences` +
+  `Locations.Where(IsInSource)` fallback + (path,line) dedupe (gather-side) +
+  FINDER-SIDE `OrderBy(FilePath).ThenBy(LineNumber)` (deterministic); display
+  `{Kind} {SymbolName} — {file}:{line}`; registered in `MyExtensionPackage` +
+  `TelescopeLauncher.FinderNames` (`telescope-definition` auto-derives the 17th registry
+  entry). NEW M-M7 literal family (6, byte-exact): `definitions gathered count=` /
+  `opened definition:` / `goto-direct finder=… file=… line=…` / `definitions gather failed:` /
+  `open definition failed:` / `[NeoVisual] goto failed: {finder}: {msg}`. The USER maps
+  `gd`/`gI`/`gr` to the commands in VsVim themselves (their explicit wiring decision — no
+  hook/leader changes; the docs record the command names + a worked mapping example). New
+  e2e scenario `telescope-goto` (41st; 4 parts via DTE command execution over the seeded
+  GotoProbe partial-class pair) — created + PROVEN RED (DTE unknown-command rejection)
+  before the build, PASSED its first live run. Unit tests: Telescope 199 → **208** (6
+  `Run_DefinitionFinder_*` + 3 `Run_GotoDispatcher_*`); NeoVisual 190 (registry 16 → 17).
+  **Verify-time iteration (1):** two harness-layer REDs fixed (a) `telescope-goto` Part 4's
+  order-dependent caret state (the preceding scenario leaves the caret ON `IShape`; re-opening
+  restores it → the walk lands past the symbol → gather 0) — fixed with a `gg` caret
+  normalization before the walk; (b) `neovisual-window-management`'s 3rd-strike flake
+  UPGRADED to a REGRESSION per the M-M2 budget and FIXED (step 0 opens Alpha.cs via the
+  overlay + `Wait-ActiveDocumentMatch` editor-focus assert before the binding steps — the
+  doc-window commands need editor focus). Harness finding: the DEFAULT 300s suite budget
+  cannot fit 41 scenarios — the full-suite gate uses `-TimeoutSec 2400` (the default-budget
+  raise is a filed hardening item). Final gates: `dotnet build` 0 errors; Telescope.Tests
+  **208 passed, 0 failed**; NeoVisual.Tests **190 passed, 0 failed** (staggered); full
+  41-scenario e2e suite GREEN on a fresh boot (run 168, `-TimeoutSec 2400`: 41/41, zero
+  flakes); both lints PASS; `-SelfCheck` PASS; `-List` 41.
+  **Change summary:** created `MyExtension/MyExtensionPackage.vsct`,
+  `Telescope/Controller/GotoDispatcher.cs`, `Telescope/Finders/DefinitionFinder.cs`,
+  `Telescope/Finders/Utils/DefinitionHit.cs`; modified
+  `MyExtension/Package/Utils/TelescopeCommand.cs` (CommandList 0x0101-03),
+  `MyExtension/MyExtension.csproj` (VSCTCompile), `MyExtension/Package/MyExtensionPackage.cs`
+  (ProvideMenuResource + the finder registration + AddGotoCommand/ExecuteGoto),
+  `MyExtension/Package/RoslynGatherers.cs` (GatherDefinitions/MapDefinitionHits),
+  `MyExtension/Package/Utils/TelescopeLauncher.cs` (FinderNames), `tools/harness/test-e2e.ps1`
+  (the GotoProbe seed pair + the scenario + the two debug fixes),
+  `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs` (registry 17), docs.
+  **If this regresses, look first at `ExecuteGoto`'s dispatcher branch (a wrong Decide
+  argument sends 1-hit gathers to the overlay) and `DefinitionFinder.GatherHits`'s finder-side
+  ordering (the determinism test pins it) — the two places the e2e parts assert on; for the
+  VsVim mapping, the docs' command names are the contract.**
 
 - **2026-10-04 — Telescope results columns + preview-as-editor** (Lane: `feature`, e2e
   ENABLED — full pipeline: e2e RED before the build, executed at VERIFY; 7 delegations,

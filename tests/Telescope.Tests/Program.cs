@@ -2586,6 +2586,162 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // DefinitionFinder — the caret symbol's definition locations (Gap 6 D3)
+        // (hermetic seams: injected gatherer Func<IReadOnlyList<DefinitionHit>> + opener
+        // Action<DefinitionHit>, mirroring ReferencesFinder/ImplementationFinder)
+        // RED: `DefinitionFinder` / `DefinitionHit` do not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_DefinitionFinder_DisplayFormatting()
+        {
+            var hit = new DefinitionHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            var finder = new DefinitionFinder(() => new[] { hit }, _ => { });
+
+            var entries = finder.GetCandidates();
+            Assert.Equal(1, entries.Count);
+            // Deterministic display, the ImplementationFinder contract (X4):
+            // {Kind} {SymbolName} — {file}:{line}.
+            Assert.Equal("Class Shape — Shape.cs:2", entries[0].Display);
+            // The FinderNames contract (folded here, rev 1 — no separate _NameIsDefinition
+            // test): the launcher maps "telescope-definition" -> this finder's Name.
+            Assert.Equal("Definition", finder.Name);
+        }
+
+        public static void Run_DefinitionFinder_PayloadRoundTrips()
+        {
+            var hit = new DefinitionHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            var finder = new DefinitionFinder(() => new[] { hit }, _ => { });
+
+            var entry = finder.GetCandidates()[0];
+            // The DefinitionHit payload must round-trip through FinderEntry.Payload so OnSelected
+            // can recover the exact file/line/kind to open.
+            Assert.True(ReferenceEquals(hit, entry.Payload), "payload must be the exact DefinitionHit instance");
+            var payload = entry.Payload as DefinitionHit;
+            Assert.True(payload != null, "payload is a DefinitionHit");
+            Assert.Equal(@"C:\p\Shape.cs", payload!.FilePath);
+            Assert.Equal(2, payload.LineNumber);
+            Assert.Equal("Shape", payload.SymbolName);
+            Assert.Equal("Class", payload.Kind);
+        }
+
+        public static void Run_DefinitionFinder_OnSelectedOpensHitAtLine()
+        {
+            // Rev 1: the open-outcome log assert (P5 row 2) is FOLDED here — no separate
+            // _OpenLogsOpenedDefinition test (the canonical 6-test set covers every literal).
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var hit = new DefinitionHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+                    DefinitionHit? opened = null;
+                    var finder = new DefinitionFinder(() => new[] { hit }, h => opened = h);
+                    var entry = finder.GetCandidates()[0];
+
+                    finder.OnSelected(entry);
+                    Assert.True(opened != null, "opener invoked");
+                    Assert.Equal(@"C:\p\Shape.cs", opened!.FilePath);
+                    Assert.Equal(2, opened.LineNumber);
+                    Assert.Equal("Shape", opened.SymbolName);
+                    Assert.Equal("Class", opened.Kind);
+
+                    LogFileWriter.Flush();
+                    string content = ReadAllTextShared(logPath);
+                    Assert.True(content.Contains("[Telescope] opened definition: file=C:\\p\\Shape.cs line=2"),
+                        $"expected '[Telescope] opened definition: file=C:\\p\\Shape.cs line=2', got: {content}");
+                });
+            }
+        }
+
+        public static void Run_DefinitionFinder_LineNumberDrivesPreviewJump()
+        {
+            // Line mapping: the hit's 1-based LineNumber is what positions the preview caret
+            // (the shared TextMotionNavigator mapping the overlay's DefinitionHit preview
+            // branch relies on — same pin as References/Implementation).
+            string text = "one\ntwo\nthree\nfour";
+            var hit = new DefinitionHit(@"C:\p\File.cs", 3, "File", "Class");
+            var nav = new TextMotionNavigator();
+            nav.SetText(text);
+            nav.MoveToLine(hit.LineNumber);
+            Assert.Equal(3, nav.LineNumber);
+            Assert.Equal(8, nav.Caret); // start of "three"
+        }
+
+        public static void Run_DefinitionFinder_UnorderedGatherOrderedDeterministically()
+        {
+            // AC6 determinism (X5): the FINDER owns OrderBy(FilePath).ThenBy(LineNumber) so the
+            // contract is hermetically testable — an arbitrarily-ordered gather comes out sorted.
+            var b = new DefinitionHit(@"C:\p\B.cs", 10, "B", "Class");
+            var a2 = new DefinitionHit(@"C:\p\A.cs", 20, "A", "Method");
+            var a1 = new DefinitionHit(@"C:\p\A.cs", 5, "A", "Class");
+            var finder = new DefinitionFinder(() => new[] { b, a2, a1 }, _ => { });
+
+            var entries = finder.GetCandidates();
+            Assert.Equal(3, entries.Count);
+            Assert.Equal("Class A — A.cs:5", entries[0].Display);
+            Assert.Equal("Method A — A.cs:20", entries[1].Display);
+            Assert.Equal("Class B — B.cs:10", entries[2].Display);
+        }
+
+        public static void Run_DefinitionFinder_GatherSummaryLogged()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    var hits = new[]
+                    {
+                        new DefinitionHit(@"C:\p\A.cs", 5, "A", "Class"),
+                        new DefinitionHit(@"C:\p\B.cs", 10, "B", "Class"),
+                    };
+                    var finder = new DefinitionFinder(() => hits, _ => { });
+
+                    finder.GetCandidates();
+                    LogFileWriter.Flush();
+
+                    // The gather-summary literal (X6) — the ImplementationFinder precedent
+                    // (`implementations gathered count=`, ImplementationFinder.cs:44).
+                    // Rev 1: the e2e lane is ENABLED (executed at VERIFY) — this hermetic
+                    // pin is the fast offline gate, not a replacement for a deferred e2e.
+                    string content = ReadAllTextShared(logPath);
+                    Assert.True(content.Contains("[Telescope] definitions gathered count=2"),
+                        $"expected '[Telescope] definitions gathered count=2', got: {content}");
+                });
+            }
+        }
+
+        // ================================================================
+        // GotoDispatcher — the single/multi-hit goto decision (Gap 6 D2)
+        // (pure static seam, the CloseWindowCommand/DiagnosticNavigator pattern)
+        // RED: `GotoDispatcher` / `GotoDecision` do not exist yet -> compile error (CS0246)
+        // ================================================================
+
+        public static void Run_GotoDispatcher_SingleHitIsDirectJump()
+        {
+            // AC1: exactly 1 hit -> open it directly (no overlay).
+            Assert.Equal(GotoDecision.DirectJump, GotoDispatcher.Decide(1));
+        }
+
+        public static void Run_GotoDispatcher_ZeroHitsOpensOverlay()
+        {
+            // The pinned empty-result behavior (D2/X7): 0 hits STILL opens the overlay — it
+            // shows the empty state and the user can retype (LazyVim shows an empty list,
+            // never a silent no-op).
+            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(0));
+            // Defensive: a negative count can never come from List.Count, but the seam pins it
+            // on the overlay side too (never DirectJump).
+            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(-1));
+        }
+
+        public static void Run_GotoDispatcher_MultipleHitsOpenOverlay()
+        {
+            // AC2: multiple hits -> the Telescope overlay with the corresponding finder.
+            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(2));
+            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(5));
+        }
+
+        // ================================================================
         // GrepFinder — query-driven live grep over the solution's files
         // (hermetic seams mirroring CodeIssuesFinder: injected file-PATH source +
         // Action<GrepHit> opener; the finder reads file CONTENT off disk from those paths)

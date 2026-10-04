@@ -155,6 +155,79 @@ namespace MyExtension.Package
         }
 
         /// <summary>
+        /// Gathers the <b>definition locations</b> of the symbol at the caret in the active
+        /// document. The caret symbol resolved by <see cref="TryGetCaretSymbol"/>
+        /// (SymbolFinder.FindSymbolAtPositionAsync) IS the definition symbol — Roslyn unifies
+        /// symbol instances across occurrences — so its <c>ISymbol.DeclaringSyntaxReferences</c>
+        /// are exactly the definition locations (synchronous; NO extra SymbolFinder async
+        /// round-trip). Each syntax reference is mapped via SyntaxTree.GetLineSpan; symbols with
+        /// no syntax-backed declaration (metadata-only, e.g. the caret on `string`) fall back to
+        /// <c>ISymbol.Locations.Where(IsInSource)</c> and yield no hits when neither source exists
+        /// (the ImplementationFinder skip precedent). Runs on the UI thread; the only Roslyn async
+        /// calls are inside TryGetCaretSymbol (already wrapped in
+        /// ThreadHelper.JoinableTaskFactory.Run — never a blocking sync-wait). Returns an empty
+        /// list on any non-fatal failure.
+        /// </summary>
+        public IReadOnlyList<DefinitionHit> GatherDefinitions()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!TryGetCaretSymbol(out var workspace, out var document, out var symbol))
+            {
+                return Array.Empty<DefinitionHit>();
+            }
+
+            var locations = new List<(string Path, int Line)>();
+            foreach (var src in symbol.DeclaringSyntaxReferences)
+            {
+                var span = src.SyntaxTree.GetLineSpan(src.Span);
+                locations.Add((span.Path, span.StartLinePosition.Line + 1)); // 0-based -> 1-based
+            }
+
+            if (locations.Count == 0)
+            {
+                // Fallback (the ImplementationFinder precedent): symbols whose declarations are not
+                // syntax-backed but do carry in-source locations.
+                foreach (var loc in symbol.Locations)
+                {
+                    if (!loc.IsInSource)
+                    {
+                        continue;
+                    }
+                    var span = loc.GetLineSpan();
+                    locations.Add((span.Path, span.StartLinePosition.Line + 1));
+                }
+            }
+
+            // The display kind — the GatherImplementations precedent (RoslynGatherers.cs:141-143):
+            // named types report their TypeKind (Class/Interface/...), other symbols their Kind.
+            string kind = symbol is Microsoft.CodeAnalysis.INamedTypeSymbol nts
+                ? nts.TypeKind.ToString()
+                : symbol.Kind.ToString();
+            return MapDefinitionHits(locations, symbol.Name, kind);
+        }
+
+        /// <summary>
+        /// The PURE definition-hit mapping (hermetic-shape, no Roslyn types in the signature):
+        /// drops empty paths / non-positive lines, dedupes (path,line) — a workspace-resolved
+        /// symbol can carry declaring syntax references from several linked projects'
+        /// compilations of the SAME file, and a duplicated single definition would wrongly flip
+        /// the 1-hit direct jump into an overlay. NO ordering here (rev 1): the deterministic
+        /// OrderBy(FilePath).ThenBy(LineNumber) lives FINDER-side in
+        /// <see cref="DefinitionFinder.GatherHits"/> (contract X5) so it is hermetically
+        /// testable; this mapping preserves the gather order.
+        /// </summary>
+        internal static IReadOnlyList<DefinitionHit> MapDefinitionHits(
+            IEnumerable<(string Path, int Line)> locations, string symbolName, string kind)
+        {
+            return locations
+                .Where(l => !string.IsNullOrEmpty(l.Path) && l.Line >= 1)
+                .Select(l => new DefinitionHit(l.Path, l.Line, symbolName, kind))
+                .GroupBy(h => h.FilePath + "|" + h.LineNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+        }
+
+        /// <summary>
         /// Resolves the symbol at the caret in the active document via Roslyn (workspace = MEF
         /// <c>VisualStudioWorkspace</c>, symbol resolution via <c>SymbolFinder</c>). The shared
         /// prologue of the references/implementations gatherers. Runs on the UI thread; every

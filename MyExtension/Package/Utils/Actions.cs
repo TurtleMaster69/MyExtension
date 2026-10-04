@@ -33,7 +33,7 @@ namespace MyExtension.Package
             };
 
             // The telescope entries are derived from TelescopeLauncher.FinderNames (the single
-            // source of truth): a 6th telescope action added there is automatically a Registry
+            // source of truth): a new telescope action added there is automatically a Registry
             // entry, so the hook path can never throw KeyNotFoundException on a telescope name.
             foreach (var kvp in TelescopeLauncher.FinderNames)
             {

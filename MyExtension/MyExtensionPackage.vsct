@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable"
+              xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <!-- Standard shell GUIDs/IDs (guidSHLMainMenu, IDM_VS_MENU_TOOLS). -->
+  <Extern href="vsshlids.h"/>
+
+  <Commands package="guidMyExtensionPackage">
+
+    <Groups>
+      <!-- Host group for the goto commands. The buttons carry CommandWellOnly, so nothing
+           appears on the Tools menu; the commands live only in the command well (keyboard
+           mapping + DTE ExecuteCommand). -->
+      <Group guid="guidMyExtensionCmdSet" id="MyMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS"/>
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidMyExtensionCmdSet" id="cmdidGotoDefinition" priority="0x0100" type="Button">
+        <Parent guid="guidMyExtensionCmdSet" id="MyMenuGroup"/>
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>Go To Definition (Telescope)</ButtonText>
+          <CommandName>GotoDefinition</CommandName>
+          <CanonicalName>.MyExtension.GotoDefinition</CanonicalName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidMyExtensionCmdSet" id="cmdidGotoReferences" priority="0x0101" type="Button">
+        <Parent guid="guidMyExtensionCmdSet" id="MyMenuGroup"/>
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>Go To References (Telescope)</ButtonText>
+          <CommandName>GotoReferences</CommandName>
+          <CanonicalName>.MyExtension.GotoReferences</CanonicalName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidMyExtensionCmdSet" id="cmdidGotoImplementation" priority="0x0102" type="Button">
+        <Parent guid="guidMyExtensionCmdSet" id="MyMenuGroup"/>
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>Go To Implementation (Telescope)</ButtonText>
+          <CommandName>GotoImplementation</CommandName>
+          <CanonicalName>.MyExtension.GotoImplementation</CanonicalName>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <!-- The PACKAGE guid (MyExtensionPackage.PackageGuidString) — owns the Commands element. -->
+    <GuidSymbol name="guidMyExtensionPackage" value="{2f73bf14-6619-47e7-850c-29e95557f429}"/>
+    <!-- The COMMAND SET guid (GuidList.CommandSet in TelescopeCommand.cs) — shared with the
+         dynamic Telescope.Show registration (0x0100, deliberately NOT declared here). -->
+    <GuidSymbol name="guidMyExtensionCmdSet" value="{3f0c5a2d-4f7e-4a2b-9c3e-8d1b7f0e6a2c}">
+      <IDSymbol name="MyMenuGroup" value="0x1020"/>
+      <IDSymbol name="cmdidGotoDefinition" value="0x0101"/>
+      <IDSymbol name="cmdidGotoReferences" value="0x0102"/>
+      <IDSymbol name="cmdidGotoImplementation" value="0x0103"/>
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

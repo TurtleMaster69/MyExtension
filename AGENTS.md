@@ -95,10 +95,11 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   `TryDispatch` was merged into it, n11), the prompt routing seam
    (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
    results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
-   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`).
+   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`), plus the
+   goto dispatcher (`GotoDispatcher`) + the definition finder (`DefinitionFinder`).
    `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
    `-- LineIndex`, `-- FocusTarget` run subsets.
-   Currently **199 tests, all passing**.
+   Currently **208 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -131,13 +132,13 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 40 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 41 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (40 registered — 37 GREEN with no known-RED; `neovisual-window-management` (E2E-GAP1-1),
+Scenarios (41 registered — 38 GREEN with no known-RED; `neovisual-window-management` (E2E-GAP1-1),
 `neovisual-diagnostic-nav` (E2E-GAP3-1), and `telescope-results-columns` (E2E-RC-1) are
 registered but never executed;
 `explorer-open-searchbox` was GREened
@@ -153,6 +154,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-references` — Space F R: references to the symbol at the caret (read/write access), previews, opens at line
 - `telescope-grep` — Space F G: query-driven search of the solution's files (grep hits per typed query), previews, opens at line
 - `telescope-implementation` — Space F I: implementations/overrides of the symbol at the caret, previews, opens at line
+- `telescope-goto` — the goto commands (DTE-executed; the user maps gd/gr/gI in VsVim): 1 hit → direct jump, multi-hit → the Telescope overlay with the corresponding finder
 - `telescope-fzf` — Space F Z: fuzzy content finder over the solution's files (fzf hits per typed query), previews, opens at the hit line
 - `telescope-open-file-searchbox` — insert-mode query, wait for the filtered result, Enter opens it
 - `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
@@ -188,7 +190,8 @@ Exit code 0 = all selected passed.
 
 Key facts that make this reliable:
 - The scratch solution (`%TEMP%\telescope_scratch`) is seeded with many source files including
-  nested folders (`Models/`, `Services/`), so navigation/search scenarios exercise 10 candidates.
+  nested folders (`Models/`, `Services/`), so navigation/search scenarios exercise many
+  candidates (the Files finder lists every seeded .cs file).
   Seeding is **always reset** each run (`Reset-ScratchSolution`) and every seeded file is written
   with **uniform** line endings; a bootstrap `Assert-SeedConsistent` self-check fails fast on a
   mixed-EOL/drifted seed so VS never shows the "normalize line endings?" modal (which would steal
@@ -242,6 +245,10 @@ Key facts that make this reliable:
   (fzf finder — query-driven fuzzy content finder; literal fallback when fzf is missing),
   `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
   (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
+  `[Telescope] goto-direct finder=... file=... line=...`
+  (goto commands — the single-hit DIRECT jump; the pinned Section A literal
+  `[Telescope] goto-direct finder=… file=… line=…`,
+  multi-hit opens the overlay and the finder's own lines fire),
   `[Telescope] focus target=List|Preview`, `[Telescope] result-mapper unknown display: {display}`
   (unknown-match warning when a display string has no payload), `[Telescope] preview caret=... line=...`,
    `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions),
@@ -365,6 +372,13 @@ Done and tested (live + unit):
   with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
    (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
    `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
+- Goto commands (`goto-definition`/`goto-references`/`goto-implementation`):
+  the symbol-at-caret gather (definitions via Roslyn
+  `DeclaringSyntaxReferences`; references/implementations via the EXISTING
+  finders) + the pure `GotoDispatcher` seam (1 hit → direct jump via
+  `HitOpener`, multi-hit → the Telescope overlay with the corresponding
+  finder). NOT leader-bound — the USER maps them in VsVim to `gd`/`gr`/`gI`.
+  — `telescope-goto` live test passes.
 - Telescope results columns: the overlay's results list is a columned ListView
   (GridView, headers visible) — one row = multiple columns from per-finder column
   sets (every catalog column implemented and toggleable; the user-marked subset
@@ -400,9 +414,12 @@ Done and tested (live + unit):
   automatically** — it's only read if it exists, and merged over the built-in
   defaults in `MyExtension/Resources/default-keybindings.json` (embedded resource). Action
   names are resolved in `InputHandler.ResolveAction` (`navigate-left` etc.);
-  `command:<VsCommandName>` runs any VS command by name (this is how the
+   `command:<VsCommandName>` runs any VS command by name (this is how the
   LazyVim-style leader bindings like `w,-`→`Window.NewHorizontalTabGroup` and
-  `],d`→`command:Edit.GotoNextIssueinFile` are wired).
+  `],d`→`command:Edit.GotoNextIssueinFile` are wired). The **goto commands**
+  (`goto-definition`/`goto-references`/`goto-implementation`) are VS commands
+  (the `TelescopeCommand.cs` pattern) the user maps in **VsVim** to `gd`/`gr`/`gI`
+  — no leader keys, no hook routing; the e2e executes them via DTE.
   Leader sequences are **case-sensitive** (a capital letter in the config means
   Shift+letter; `s,g` ≠ `s,G`); simple shortcuts stay case-insensitive. To add a
   *new built-in action*, add a case there and a line in `default-keybindings.json`.

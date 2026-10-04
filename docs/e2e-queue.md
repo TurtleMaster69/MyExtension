@@ -71,14 +71,26 @@ deferred). Two gates:
   regression across all telescope-* scenarios (36/37 preview sites byte-stable; the 1
   `preview tokens=` site updated per the plan's BP-D10).
 
-## Queued gates — goto commands (2026-10-04)
+## Queued gates — Gap 6 goto (2026-10-04)
 
-Plan: `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-124602/plans/plan-goto.md`
-(the SECOND pending item; written to `docs/implementation_plan.md` when it becomes first) —
-**e2e ENABLED**. Two gates:
+Plan: `plan-goto.md` (neovim-planning-hub session) — **Gap 6 (core): goto
+commands — `gd`/`gI`/`gr` → single-hit direct, multi-hit Telescope** (feature
+lane, **e2e ENABLED** — the deferral is lifted; the scenario is created + proven
+RED before the build and executed at VERIFY, so these gates are DRAINED at
+VERIFY, not deferred). Two gates:
 
-- **E2E-GOTO-1** — the NEW `telescope-goto` scenario (created + proven RED before the build).
-  4 parts via DTE command execution: goto-definition 1-hit→direct; goto-definition 2-hit→the
-  Definition overlay; goto-references ≥2-hit→the References overlay; goto-implementation
-  1-hit→direct. The VsVim key mapping (`gd`/`gI`/`gr`) is the USER's step — not e2e-dependent.
-- **E2E-GOTO-2** — full-suite regression re-run at VERIFY.
+- **E2E-GOTO-1** — the NEW `telescope-goto` scenario (created by this plan's
+  Phase 1; first live run at VERIFY). Asserts: goto-definition single-hit →
+  `[Telescope] goto-direct finder=… file=…\Models\Shared.cs line=1` +
+  `[Telescope] goto line=1` + the active document becomes Models/Shared.cs;
+  goto-definition multi-hit (the seeded `GotoProbe` partial pair) →
+  `[Telescope] open finder=Definition candidates=2` + `preview file=.*GotoProbe`;
+  goto-references multi-hit → `[Telescope] open finder=References candidates=…`
+  (≥2) + `references gathered reads=… writes=…`; goto-implementation single-hit →
+  `[Telescope] goto-direct … file=…Shape.cs line=2` + `[Telescope] goto line=2` +
+  the active document becomes Shape.cs. Covers AC1–AC6.
+- **E2E-GOTO-2** — full-suite regression re-run (all 41 registered scenarios):
+  no regression from the 2 new seed files (the `GotoProbe` partial pair) or the
+  new scenario; the exact-count queries stay exact and `seed-leak` stays GREEN.
+  The two registered-unexecuted scenarios (`neovisual-window-management`,
+  `neovisual-diagnostic-nav`) are E2E-GAP1-1/E2E-GAP3-1's gates, not this one's.

@@ -14,6 +14,7 @@
 #   telescope-issues      Space F D: warnings/errors/TODO finder filters, previews, opens at line
 #   telescope-references  Space F R: lists read/write references to the caret symbol, previews+opens at line
 #   telescope-implementation  Space F I: lists implementations of the caret symbol, previews+opens at the decl line
+#   telescope-goto        goto-definition/references/implementation commands: 1 hit -> direct jump, multi-hit -> Telescope overlay
 #   telescope-grep      Space F G: grep finder searches files for the query, previews + opens at the hit line
 #   telescope-fzf       Space F Z: fzf finder fuzzy-matches file contents, previews + opens at the hit line
 #   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
@@ -401,6 +402,14 @@ $script:SeedCanonical = @{
     # collide with the references-finder seed (Shared/Reader/Writer). Uniform CRLF.
     'Models/IShape.cs'      = "interface IShape`r`n{`r`n    void Draw();`r`n}`r`n"
     'Shape.cs'              = "// Shape.cs implementer`r`nclass Shape : IShape`r`n{`r`n    public void Draw() { }`r`n}`r`n"
+    # Partial-class pair for the goto-definition MULTI-hit case (telescope-goto):
+    # `partial class GotoProbe` is declared in TWO files, so goto-definition on
+    # `GotoProbe` has 2 declaring locations and the dispatcher takes the overlay
+    # path (open finder=Definition candidates=2). New type names do NOT collide
+    # with the references seed (Shared) or the implementation seed (IShape).
+    # Uniform CRLF.
+    'GotoProbe.cs'             = "partial class GotoProbe`r`n{`r`n    public void First() { }`r`n}`r`n"
+    'Models/GotoProbe.More.cs' = "partial class GotoProbe`r`n{`r`n    public void Second() { }`r`n}`r`n"
 }
 
 function Assert-SeedConsistent([string]$scratchDir) {
@@ -723,6 +732,30 @@ Register-Scenario 'neovisual-leader' {
 Register-Scenario 'neovisual-window-management' {
     param($vs, $logPath)
     Reset-LogBaseline $logPath
+
+    # 0. Establish EDITOR focus first (hardening item (a)): the preceding scenarios leave a TOOL
+    #    WINDOW focused (neovisual-window-nav's Cardinal navigation ends on a tool window;
+    #    neovisual-leader ends on Solution Explorer), and Enter-NormalContext's Escapes never move
+    #    focus to a document window — with a tool window focused the doc-window commands are
+    #    "not available" (runs 165/166: Window.NewHorizontalTabGroup/NewVerticalTabGroup failed)
+    #    and the focus-aware w,d close routes to Window.CloseToolWindow, so the active document
+    #    never changes and the step-3 poll times out. Open a seeded file through the overlay (the
+    #    established open helper) so a document window owns focus, and prove it the established
+    #    way (neovisual-explorer-move-editor-focus): the ACTIVE DOCUMENT must match (view-
+    #    independent — VS reuses an open tab without raising editor-view-opened). Alpha.cs is
+    #    opened by no other scenario (Gamma.cs is reserved for move-editor-focus, Beta.cs for
+    #    editor-insert); step 3's w,d closes it again, so no stale tab leaks into later scenarios.
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Alpha'
+    Assert-NewLogLine $logPath "promptChanged query='Alpha'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Alpha.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Alpha\.cs" 'Enter opened Alpha.cs'
+    $activeDoc = Wait-ActiveDocumentMatch $vs.Id 'Alpha\.cs$' 3000
+    if (-not $activeDoc) { throw 'editor did not show Alpha.cs after opening it (active document never matched Alpha.cs)' }
+    Close-Telescope $vs $logPath
+
     Enter-NormalContext $vs
     Assert-VsFocused $vs 'window management bindings'
 
@@ -1557,6 +1590,178 @@ Register-Scenario 'telescope-implementation' {
 
     # Step 6: close.
     Close-Telescope $vs $logPath
+}
+
+# --- telescope-goto --------------------------------------------------------
+# The goto commands (goto-definition / goto-references / goto-implementation —
+# VS commands the USER maps to gd/gr/gI in VsVim; the e2e executes them via
+# DTE, independent of VsVim) gather the targets for the symbol at the caret:
+# exactly 1 hit opens it DIRECTLY (no overlay), multiple hits open the
+# Telescope overlay with the corresponding finder. Seeded symbols:
+#   - `Shared` (Reader.cs line 5) -> class Shared (Models/Shared.cs line 1):
+#     1 definition -> DIRECT.
+#   - `GotoProbe` (partial class in GotoProbe.cs + Models/GotoProbe.More.cs):
+#     2 defining locations -> OVERLAY (Definition finder, candidates=2).
+#   - `Value` (Models/Shared.cs line 3) -> decl + read (Reader.cs) + write
+#     (Writer.cs): >=2 references -> OVERLAY (References finder).
+#   - `IShape` (Models/IShape.cs line 1) -> class Shape : IShape (Shape.cs
+#     line 2): 1 implementation -> DIRECT.
+Register-Scenario 'telescope-goto' {
+    param($vs, $logPath)
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    # The canonical DTE command names — pinned by Section A (plan-goto.md D1).
+    # Re-read at execution: the Section A artifact + the built
+    # MyExtension/Package/Utils/TelescopeCommand.cs (CommandList) + the
+    # MyExtensionPackage registration. If DTE rejects a name, discover the
+    # actual canonical names (one-off ROT snippet filtering on the command-set
+    # GUID 3f0c5a2d-4f7e-4a2b-9c3e-8d1b7f0e6a2c) and re-pin HERE + in the docs.
+    $gotoDefCmd  = 'MyExtension.GotoDefinition'
+    $gotoRefCmd  = 'MyExtension.GotoReferences'
+    $gotoImplCmd = 'MyExtension.GotoImplementation'
+    # The direct-jump outcome literal — pinned by Section A/B (plan-goto.md
+    # D5). Suggested form: [Telescope] goto-direct finder=<f> file=<p> line=<n>.
+    # The existing [Telescope] goto line=<n> (DteFileOpener.OpenAtLine) also
+    # fires on the direct path and is asserted as the fallback oracle.
+
+    # ---- Part 1: goto-definition, 1 hit -> DIRECT jump ---------------------
+    # Reader.cs is:
+    #   1: class Reader
+    #   2: {
+    #   3:     public static int Read()
+    #   4:     {
+    #   5:         return Shared.Value;   <- Shared starts at 0-based col 15
+    #   6:     }
+    #   7: }
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Reader'
+    Assert-NewLogLine $logPath "promptChanged query='Reader'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Reader.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Reader\.cs" 'Enter opened Reader.cs'
+    Close-Telescope $vs $logPath
+
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'goto-definition caret positioning'
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 2
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 3
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 4
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 5
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> return
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> Shared
+
+    $idx = Get-LogCacheIndex $logPath
+    & $dteCmd -DevenvPid $vs.Id -Command $gotoDefCmd | Out-Null
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 'goto-definition single hit jumped directly' 15000
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto line=1$" 'the direct jump opened Models/Shared.cs at line 1' 15000
+    $doc = Wait-ActiveDocumentMatch $vs.Id 'Shared\.cs' 8000
+    if (-not $doc) { throw 'goto-definition direct jump did not activate Models/Shared.cs' }
+
+    # ---- Part 2: goto-definition, 2 hits -> OVERLAY (Definition finder) ----
+    # Both partial files declare `partial class GotoProbe` on line 1
+    # (GotoProbe at 0-based col 14):
+    #   1: partial class GotoProbe
+    #   2: {
+    #   3:     public void First() { }   (Second() in Models/GotoProbe.More.cs)
+    #   4: }
+    # NOTE (builder correction vs the artifact): the caret after opening is line 1
+    # col 0 — already the START of `partial` — so each `w` moves to the NEXT word
+    # (the proven-green telescope-implementation walk: 1 w from `interface` start
+    # lands on `IShape`). TWO w's land on GotoProbe (col 14); the artifact's third
+    # w would fall onto line 2's `{`.
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'GotoProbe'
+    Assert-NewLogLine $logPath "promptChanged query='GotoProbe'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=2 selected=0" 'filter rendered the two GotoProbe partial files'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*GotoProbe" 'Enter opened a GotoProbe partial file'
+    Close-Telescope $vs $logPath
+
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'goto-definition multi-hit caret positioning'
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> class
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> GotoProbe
+
+    $idx = Get-LogCacheIndex $logPath
+    & $dteCmd -DevenvPid $vs.Id -Command $gotoDefCmd | Out-Null
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)open finder=Definition candidates=2" 'goto-definition multi hit opened the Definition overlay' 15000
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)preview file=.*GotoProbe" 'the Definition overlay previews a GotoProbe partial file' 15000
+    Close-Telescope $vs $logPath
+
+    # ---- Part 3: goto-references, >=2 hits -> OVERLAY (References finder) --
+    # Models/Shared.cs is:
+    #   1: class Shared
+    #   2: {
+    #   3:     public static int Value;   <- 0-based cols: public=4, static=11, int=18, Value=22
+    #   4: }
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Shared'
+    Assert-NewLogLine $logPath "promptChanged query='Shared'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Shared.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Shared\.cs" 'Enter opened Models/Shared.cs'
+    Close-Telescope $vs $logPath
+
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'goto-references caret positioning'
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 2
+    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 3
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> public
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> static
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> int
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> Value
+
+    $idx = Get-LogCacheIndex $logPath
+    & $dteCmd -DevenvPid $vs.Id -Command $gotoRefCmd | Out-Null
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)open finder=References candidates=(\d+)" 'goto-references multi hit opened the References overlay' 15000
+    $cand = 0
+    foreach ($ln in (Get-Content $logPath)) { if ($ln -match 'open finder=References candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    if ($cand -lt 2) { throw "expected >=2 references, found $cand" }
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)references gathered reads=(\d+) writes=(\d+)" 'references gather summary logged' 15000
+    Close-Telescope $vs $logPath
+
+    # ---- Part 4: goto-implementation, 1 hit -> DIRECT jump -----------------
+    # Models/IShape.cs is:
+    #   1: interface IShape   <- IShape starts at 0-based col 10
+    #   2: {
+    #   3:     void Draw();
+    #   4: }
+    Reset-LogBaseline $logPath
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'IShape'
+    Assert-NewLogLine $logPath "promptChanged query='IShape'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single IShape.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*IShape\.cs" 'Enter opened Models/IShape.cs'
+    Close-Telescope $vs $logPath
+
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'goto-implementation caret positioning'
+    # Normalize the caret to line 1 col 0 before the walk: IShape.cs may ALREADY be open here
+    # (telescope-implementation runs immediately before in the full suite and leaves the caret ON
+    # `IShape`, line 1 col 10), and re-opening an open tab restores that last caret — the single
+    # `w` below would then move PAST the symbol (no symbol at caret -> gather 0 -> the 0-hits rule
+    # opens the overlay -> no direct jump; runs 165/166). `gg` (VsVim normal-mode motion; `g` is
+    # not hook-interesting, so it falls through to VsVim like w/j/k) lands on line 1 col 0 (the
+    # start of `interface`) regardless of the restored position — the same starting point as a
+    # fresh open, so the proven 1-w walk (interface -> IShape, col 10) is deterministic in both
+    # full-suite and subset runs.
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # g (pending two-key motion)
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> IShape
+
+    $idx = Get-LogCacheIndex $logPath
+    & $dteCmd -DevenvPid $vs.Id -Command $gotoImplCmd | Out-Null
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shape\.cs line=2$" 'goto-implementation single hit jumped directly' 15000
+    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto line=2$" 'the direct jump opened Shape.cs at line 2' 15000
+    $doc = Wait-ActiveDocumentMatch $vs.Id 'Shape\.cs' 8000
+    if (-not $doc) { throw 'goto-implementation direct jump did not activate Shape.cs' }
 }
 
 # --- telescope-grep -------------------------------------------------------

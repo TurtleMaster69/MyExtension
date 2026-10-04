@@ -11,7 +11,7 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 40 registered live E2E scenarios (37 GREEN +
+> test commands, the 41 registered live E2E scenarios (38 GREEN +
 > `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
 > `telescope-results-columns` (E2E-RC-1) queued unexecuted; no known-RED; a few flake on
 > retry), feature status/roadmap, and the hard requirements. This file covers the durable
@@ -78,7 +78,8 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Package/Utils/VsServices.cs` | `GetService` helpers (DTE, IVsUIShell) with null-safe access. |
 | `MyExtension/Package/Utils/Actions.cs` | Action-name → delegate table for leader/shortcut bindings. |
 | `MyExtension/Package/Utils/TelescopeLauncher.cs` | Opens the Telescope overlay from the leader binding. |
-| `MyExtension/Package/Utils/TelescopeCommand.cs` | VS command wiring for the Telescope finders. |
+| `Telescope/Finders/DefinitionFinder.cs` | Symbol-at-caret definition locations (Roslyn `DeclaringSyntaxReferences`, metadata-only symbols skipped, deterministic `OrderBy(FilePath).ThenBy(LineNumber)`; host-injected gatherer). |
+| `MyExtension/Package/Utils/TelescopeCommand.cs` | VS command wiring for the Telescope finders + the goto commands (goto-definition/goto-references/goto-implementation — DTE-executable VS commands the user maps in VsVim to gd/gr/gI; the single/multi-hit decision is the pure GotoDispatcher seam). |
 | `MyExtension/Vim/Utils/VimModeState.cs` | Pure owner of the Vim typing/mode state (single source of truth for `vim-mode=`). |
 | `MyExtension/Vim/Utils/VimModeSource.cs` | VsVim interop: resolves the buffer + subscribes `SwitchedMode` per view. |
 | `MyExtension/Vim/Utils/VimModeClassifier.cs` | Pure classification of a Vim ModeKind into the typing flag + friendly `vim-mode=` name (single owner of the Normal=1/Insert=2/Replace=7 truth table). |
@@ -89,7 +90,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Navigation/Utils/NavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `MyExtension/Navigation/Utils/WindowRect.cs` | Simple int `x, y, width, height` rect value object. |
 | `MyExtension/Navigation/Utils/NavigationSnapshot.cs` | Single-pass snapshot of navigation candidates (active rect derived from the candidate list — no N+1 COM rect calls). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `DefinitionFinder` + `DefinitionHit` symbol-at-caret definition locations via `DeclaringSyntaxReferences` (finder-side deterministic ordering), `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
 | `Telescope/Finders/Utils/HitOpener.cs` | Shared null/missing-file guard + open-at-line for the finders. |
 | `Telescope/Finders/Utils/FileContentCache.cs` | mtime-keyed file-content cache (LRU-capped). |
 | `Telescope/Finders/Utils/ProjectFileCache.cs` | Cached `ProjectFiles.Enumerate` enumeration. |
@@ -195,6 +196,11 @@ or `command:<VsCommandName>`. Telescope actions are derived from
 `default-keybindings.json` line); `ResolveAction` cases are only for
 non-telescope built-ins.
 
+The **goto commands** are NOT leader actions — they are VS commands (the
+`TelescopeCommand.cs` pattern, DTE-executable) the USER maps in VsVim to
+`gd`/`gr`/`gI`; the single-hit-direct / multi-hit-overlay decision lives in
+the pure `GotoDispatcher` seam, not in `ResolveAction`.
+
 ## The navigation algorithm (WindowNavigationEngine)
 
 `WindowNavigator.NavigateInDirection(Direction)` snapshots the active window's rect and the
@@ -262,10 +268,10 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (199) and
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (208) and
   `dotnet run --project tests/NeoVisual.Tests` (190), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (40 registered — 37 GREEN +
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — 38 GREEN +
   `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
   `telescope-results-columns` (E2E-RC-1)
   queued unexecuted — against the experimental

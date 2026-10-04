@@ -37,6 +37,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <VSCTCompile Include="MyExtensionPackage.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Allow the offline NeoVisual test project to exercise internal logic (KeybindingConfig,
          ToolWindowTypeResolver, GeneralToolWindowController, helpers) hermetically. -->
     <InternalsVisibleTo Include="NeoVisual.Tests" />

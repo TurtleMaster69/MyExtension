@@ -221,6 +221,21 @@ plus Git/build/terminal
 `command:` bindings. There is no save binding (save with Ctrl+S); `w` is a
 window-management prefix — a lone `Space+w` consumes and waits, firing nothing.
 
+The **goto commands** — `goto-definition`, `goto-references`,
+`goto-implementation` (VS commands registered in `MyExtensionPackage` via the
+`TelescopeCommand.cs` pattern, command IDs in `CommandList`; canonical DTE names:
+`MyExtension.GotoDefinition` / `MyExtension.GotoReferences` /
+`MyExtension.GotoImplementation`) — gather the targets for the symbol at
+the caret: **exactly 1 hit → open it directly** (no overlay; the shared
+`HitOpener`/`DteFileOpener` open-at-line path), **multiple hits → open the
+Telescope overlay** with the corresponding finder (`Definition`/`References`/
+`Implementation`) via the pure `GotoDispatcher.Decide(hitCount)` seam. They are
+NOT leader-bound: the USER maps them in **VsVim** to `gd`/`gr`/`gI` (the user's
+established flow — mapping a VS command in VsVim's keyboard options / vimrc;
+worked example: bind VsVim's `gd` to the goto-definition command's canonical
+name above). The e2e scenario `telescope-goto` executes the commands via DTE
+(`tools/harness/dte-command.ps1`), independent of VsVim.
+
 ## 4. Diagnostics = test contract
 
 The e2e harness asserts on deterministic runtime log lines. Every feature that
@@ -248,6 +263,8 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
 - `[Telescope] fzf hits=...` / `[Telescope] opened fzf: file=... line=...` / `[Telescope] fzf unavailable — literal fallback`
 - `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
+- `[Telescope] goto-direct finder=... file=... line=...` (the goto commands' single-hit DIRECT jump — the pinned Section A literal `[Telescope] goto-direct finder=… file=… line=…`; the existing `goto line=...` also fires on every open-at-line, incl. the direct-jump path)
+- `[Telescope] definitions gathered count=...` / `[Telescope] opened definition: file=... line=...` (the Definition finder — the goto commands' overlay path; the fault paths log `[Telescope] definitions gather failed: {msg}` / `[Telescope] open definition failed: {msg}`, and a command fault logs `[NeoVisual] goto failed: {finder}: {msg}`)
 - `[Telescope] focus target=List|Preview`
 - `[Telescope] result-mapper unknown display: {display}` (unknown-match warning when a display string has no payload)
 - `[Telescope] preview caret=... line=...`
@@ -280,14 +297,16 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **199 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **208 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
   prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
   fzf finder (`FzfFinder`/`FzfHit`/`FzfLineMapper`/`LiteralLineScanner`),
-  implementation finder (`ImplementationFinder`/`ImplementationHit`), the finder
+  implementation finder (`ImplementationFinder`/`ImplementationHit`), the goto
+  dispatcher (`GotoDispatcher`), the definition finder
+  (`DefinitionFinder`/`DefinitionHit`), the finder
   base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`),
   the shared preview index (`LineIndex`), the focus-target state machine
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
@@ -322,19 +341,19 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 40 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 41 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **40 registered scenarios** (37 GREEN with no known-RED — `neovisual-window-management`
+The **41 registered scenarios** (38 GREEN with no known-RED — `neovisual-window-management`
 (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and `telescope-results-columns`
 (E2E-RC-1) are registered but never executed;
 `explorer-open-searchbox` was
 GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
-`telescope-grep`, `telescope-implementation`, `telescope-fzf`,
+`telescope-grep`, `telescope-implementation`, `telescope-goto`, `telescope-fzf`,
 `telescope-open-file-searchbox`,
 `telescope-open-file-navigation`, `telescope-prompt-motions`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
@@ -347,6 +366,8 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `neovisual-editor-insert`, `neovisual-textinput-motions`, `seed-reset`,
 `seed-leak`, `explorer-open-navigation`, `explorer-open-searchbox`,
 `explorer-searchbox-motions`.
+
+- `telescope-goto` — the goto-definition/references/implementation commands: 1 hit → direct jump (`goto-direct` + `goto line=`), multi-hit → the Telescope overlay (`open finder=Definition candidates=2` / `open finder=References candidates=…` + `references gathered reads=… writes=…`)
 
 ### 5.3 E2E harness gotchas
 
@@ -475,9 +496,9 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (199) and
+- Offline units: `dotnet run --project tests/Telescope.Tests` (208) and
   `dotnet run --project tests/NeoVisual.Tests` (190).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (40 registered — 37 GREEN +
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — 38 GREEN +
   `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
   `telescope-results-columns` (E2E-RC-1) queued unexecuted; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

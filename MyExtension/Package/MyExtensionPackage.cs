@@ -39,6 +39,7 @@ namespace MyExtension.Package
     /// </summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [ProvideAutoLoad(UIContextGuids80.NoSolution, PackageAutoLoadFlags.BackgroundLoad)]
+    [ProvideMenuResource("Menus.ctmenu", 1)]
     [Guid(MyExtensionPackage.PackageGuidString)]
     public sealed class MyExtensionPackage : AsyncPackage
     {
@@ -107,6 +108,9 @@ namespace MyExtension.Package
                             hit => OpenHitAtLine(hit)));
                         _telescope.RegisterFinder(new ImplementationFinder(
                             () => _roslynGatherers!.GatherImplementations(),
+                            hit => OpenHitAtLine(hit)));
+                        _telescope.RegisterFinder(new DefinitionFinder(
+                            () => _roslynGatherers!.GatherDefinitions(),
                             hit => OpenHitAtLine(hit)));
                         return Task.CompletedTask;
                     }),
@@ -439,6 +443,56 @@ namespace MyExtension.Package
             var cmdId = new CommandID(GuidList.CommandSet, CommandList.TelescopeShow);
             var menuItem = new OleMenuCommand((_, _) => OpenTelescope(), cmdId);
             commandService.AddCommand(menuItem);
+
+            // Gap 6: the three goto commands (VSCT-declared canonical names MyExtension.GotoDefinition
+            // / GotoReferences / GotoImplementation — the user maps gd/gr/gI to them in VsVim).
+            // The "command" step runs AFTER "finders", so _roslynGatherers and _launcher are set.
+            AddGotoCommand(commandService, CommandList.GotoDefinition, "Definition", () => _roslynGatherers?.GatherDefinitions());
+            AddGotoCommand(commandService, CommandList.GotoReferences, "References", () => _roslynGatherers?.GatherReferences());
+            AddGotoCommand(commandService, CommandList.GotoImplementation, "Implementation", () => _roslynGatherers?.GatherImplementations());
+        }
+
+        /// <summary>
+        /// Registers one goto command (VSCT-declared + dynamically wired — the standard template
+        /// pattern): the .vsct gives the command its canonical DTE name; this wires the handler.
+        /// </summary>
+        private void AddGotoCommand(OleMenuCommandService commandService, int commandId, string finderName, Func<IReadOnlyList<IFileLocation>?> gather)
+        {
+            var cmdId = new CommandID(GuidList.CommandSet, commandId);
+            var menuItem = new OleMenuCommand((_, _) => ExecuteGoto(finderName, gather), cmdId);
+            commandService.AddCommand(menuItem);
+        }
+
+        /// <summary>
+        /// The shared goto-command action: gather the targets for the symbol at the caret, decide
+        /// via the pure GotoDispatcher (1 hit → direct jump, 0/multiple → overlay), then either
+        /// open the single hit at its line (logging the goto-direct outcome diagnostic) or open
+        /// the Telescope overlay with the named finder (which re-gathers at open — the
+        /// double-gather is accepted: the gatherers are cheap and the overlay's `open finder=`
+        /// line then reflects a FRESH candidate count). Never throws — a fault is logged and
+        /// swallowed (the DTE command path must never crash VS).
+        /// </summary>
+        private void ExecuteGoto(string finderName, Func<IReadOnlyList<IFileLocation>?> gather)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                var hits = gather() ?? Array.Empty<IFileLocation>();
+                if (GotoDispatcher.Decide(hits.Count) == GotoDecision.DirectJump)
+                {
+                    var hit = hits[0];
+                    HitOpener.OpenAtLine(hit, OpenFileAtLine);
+                    TelescopeLog.Log($"goto-direct finder={finderName} file={hit.FilePath} line={hit.LineNumber}");
+                }
+                else
+                {
+                    _launcher?.Open(finderName);
+                }
+            }
+            catch (Exception ex)
+            {
+                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}goto failed: {finderName}: {ex.Message}");
+            }
         }
 
         private void OpenTelescope()

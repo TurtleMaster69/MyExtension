@@ -568,5 +568,59 @@ namespace MyExtension.Input
             ThreadHelper.ThrowIfNotOnUIThread();
             ExecuteVsCommand(CloseWindowCommand.For(_windowManager.IsToolWindow));
         }
+
+        /// <summary>
+        /// Severity-filtered diagnostics navigation (Gap 3, LazyVim <c>]e</c>/<c>[e</c>/<c>]w</c>/<c>[,w</c>):
+        /// gathers the Error List entries for the requested severity in the ACTIVE document
+        /// (<see cref="ErrorListGatherer"/> — the CodeIssuesFinder-established DTE2 API), asks
+        /// the pure <see cref="DiagnosticNavigator"/> for the next/previous entry relative to
+        /// the caret line, and opens it at its line (the shared DteFileOpener.OpenAtLine).
+        /// Logs the <c>[NeoVisual] diagnostic-nav ...</c> outcome contract (m47-style: fired vs
+        /// no-op and why). Never crashes the hook: any gather/open failure is logged as
+        /// <c>diagnostic-nav failed: {msg}</c> and swallowed.
+        /// </summary>
+        internal void NavigateDiagnostic(bool forward, bool severityError)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                var dte = VsServices.Dte(_package);
+                var document = dte?.ActiveDocument;
+                if (dte == null || document == null)
+                {
+                    NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}diagnostic-nav no-op: no-active-document");
+                    return;
+                }
+
+                string activePath = document.FullName;
+                int caretLine = document.Selection is EnvDTE.TextSelection selection
+                    ? selection.ActivePoint.Line
+                    : 0;
+
+                var entries = ErrorListGatherer.Gather(dte, activePath, severityError);
+                if (entries.Count == 0)
+                {
+                    NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}diagnostic-nav no-op: no-entries");
+                    return;
+                }
+
+                var target = forward
+                    ? DiagnosticNavigator.Next(entries, caretLine)
+                    : DiagnosticNavigator.Prev(entries, caretLine);
+                if (target is not DiagnosticEntry hit)
+                {
+                    NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}diagnostic-nav no-op: at-end");
+                    return;
+                }
+
+                Telescope.Finders.DteFileOpener.OpenAtLine(dte, hit.FilePath, hit.Line);
+                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}diagnostic-nav direction={(forward ? "next" : "prev")} severity={(severityError ? "error" : "warning")} target={hit.FilePath} line={hit.Line}");
+            }
+            catch (Exception ex)
+            {
+                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}diagnostic-nav failed: {ex.Message}");
+            }
+        }
     }
 }

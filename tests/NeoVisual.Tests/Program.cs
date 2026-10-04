@@ -227,6 +227,34 @@ namespace NeoVisual.Tests
                 "the W save binding is removed (w is a prefix, not a binding)");
         }
 
+        public static void Run_Keybinding_DefaultFileHasDiagnosticNav()
+        {
+            // Gap 3 (AC1-AC5/D2): the shipped defaults gain the six LazyVim-style
+            // diagnostic-nav bindings. ],d/[,d are pure command: bindings (native in-file
+            // squiggle nav); the severity pairs are the new built-in actions. LoadDefaults
+            // reads ONLY the embedded resource (hermetic).
+            var cfg = KeybindingConfig.LoadDefaults();
+            Assert.True(cfg.Bindings.ContainsKey("],d"), "],d -> next-diagnostic binding present");
+            Assert.Equal("command:Edit.GotoNextIssueinFile", cfg.Bindings["],d"]);
+            Assert.True(cfg.Bindings.ContainsKey("[,d"), "[,d -> prev-diagnostic binding present");
+            Assert.Equal("command:Edit.GotoPreviousIssueinFile", cfg.Bindings["[,d"]);
+            Assert.True(cfg.Bindings.ContainsKey("],e"), "],e -> next-error binding present");
+            Assert.Equal("next-error", cfg.Bindings["],e"]);
+            Assert.True(cfg.Bindings.ContainsKey("[,e"), "[,e -> prev-error binding present");
+            Assert.Equal("prev-error", cfg.Bindings["[,e"]);
+            Assert.True(cfg.Bindings.ContainsKey("],w"), "],w -> next-warning binding present");
+            Assert.Equal("next-warning", cfg.Bindings["],w"]);
+            Assert.True(cfg.Bindings.ContainsKey("[,w"), "[,w -> prev-warning binding present");
+            Assert.Equal("prev-warning", cfg.Bindings["[,w"]);
+            // D2: NO bare ]/[ binding — the matcher's complete-match-before-prefix check means
+            // a bare binding would shadow every pair (] alone would execute instead of waiting
+            // for ,d).
+            Assert.False(cfg.Bindings.ContainsKey("]"),
+                "a bare ] binding would shadow the ] pairs (prefix trap)");
+            Assert.False(cfg.Bindings.ContainsKey("["),
+                "a bare [ binding would shadow the [ pairs (prefix trap)");
+        }
+
         public static void Run_KeybindingConfig_IsSimpleShortcut()
         {
             // m42: BuildBindings classifies any binding key containing "+" as a simple shortcut
@@ -251,11 +279,15 @@ namespace NeoVisual.Tests
         {
             // The printable-key contract shared by the leader and shortcut paths: the "/" key
             // (Keys.OemQuestion) must map to "/", "+" (Oemplus) to "+", "-" (OemMinus) to "-",
-            // and a plain letter to its enum name.
+            // and a plain letter to its enum name. Gap 3 (AC7/D1): the bracket keys map to
+            // their printable characters so the diagnostic-nav sequences are readable
+            // ("]"/"[" — not "OemCloseBrackets"/"OemOpenBrackets").
             Assert.Equal("/", KeyNames.ToString(Keys.OemQuestion));
             Assert.Equal("+", KeyNames.ToString(Keys.Oemplus));
             Assert.Equal("-", KeyNames.ToString(Keys.OemMinus));
             Assert.Equal("|", KeyNames.ToString(Keys.OemPipe));
+            Assert.Equal("]", KeyNames.ToString(Keys.OemCloseBrackets));
+            Assert.Equal("[", KeyNames.ToString(Keys.OemOpenBrackets));
             Assert.Equal("F", KeyNames.ToString(Keys.F));
         }
 
@@ -338,6 +370,47 @@ namespace NeoVisual.Tests
             var cfg = KeybindingConfig.LoadFromJson("{\"bindings\":{\"Ctrl+/\":\"navigate-left\"}}");
             Assert.True(cfg.Bindings.ContainsKey("Ctrl+/"), "the Ctrl+/ config key is preserved");
             Assert.Equal("Ctrl+/", "Ctrl+" + KeyNames.ToString(Keys.OemQuestion));
+        }
+
+        public static void Run_KeyNames_RoundTrip_DiagnosticNav()
+        {
+            // Gap 3 (AC1-AC5/AC7): all six diagnostic-nav sequences round-trip through the
+            // matcher — Space, the physical bracket key (OemCloseBrackets/OemOpenBrackets),
+            // then the letter builds the exact config sequence and fires. RED until D1's
+            // KeyNames cases exist: the bracket builds "OemCloseBrackets", the sequence
+            // "OemCloseBrackets,d" is neither a binding nor a prefix -> Abort (not Execute).
+            var sequences = new[]
+            {
+                new { Sequence = "],d", Bracket = Keys.OemCloseBrackets, Letter = Keys.D },
+                new { Sequence = "[,d", Bracket = Keys.OemOpenBrackets, Letter = Keys.D },
+                new { Sequence = "],e", Bracket = Keys.OemCloseBrackets, Letter = Keys.E },
+                new { Sequence = "[,e", Bracket = Keys.OemOpenBrackets, Letter = Keys.E },
+                new { Sequence = "],w", Bracket = Keys.OemCloseBrackets, Letter = Keys.W },
+                new { Sequence = "[,w", Bracket = Keys.OemOpenBrackets, Letter = Keys.W },
+            };
+            foreach (var s in sequences)
+            {
+                var executed = 0;
+                var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+                {
+                    [s.Sequence] = () => executed++,
+                };
+                var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+                matcher.HandleKey(Keys.Space, false, false, false, false);
+                var prefix = matcher.HandleKey(s.Bracket, false, false, false, false);
+                Assert.Equal(LeaderResultKind.Consume, prefix.Kind); // the bracket alone is a live prefix
+                var final = matcher.HandleKey(s.Letter, false, false, false, false);
+                Assert.Equal(LeaderResultKind.Execute, final.Kind);
+                Assert.Equal<string?>(s.Sequence, final.Sequence);
+                Assert.Equal(1, executed);
+            }
+
+            // Non-letters are shift-insensitive (the two-arg overload delegates to the printable
+            // mapping): Shift+bracket types '}'/'{' but builds the SAME sequence name — the
+            // documented ambiguity (no }/{ binding exists or is planned, per plan D1).
+            Assert.Equal("]", KeyNames.ToString(Keys.OemCloseBrackets, true));
+            Assert.Equal("[", KeyNames.ToString(Keys.OemOpenBrackets, true));
         }
 
         // ================================================================
@@ -1748,16 +1821,18 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionsRegistry_ContainsAllBuiltins()
         {
-            // The registry must hold exactly the 12 built-in action names, kept in sync with
+            // The registry must hold exactly the 16 built-in action names, kept in sync with
             // default-keybindings.json (the hand-sync bug this seam removes). Gap 1 (AC3/D5)
-            // adds the focus-aware "close-window" action.
-            Assert.Equal(12, Actions.Registry.Count);
+            // added the focus-aware "close-window" action; Gap 3 (AC3-AC5/D4) adds the four
+            // severity-filtered diagnostic-nav actions.
+            Assert.Equal(16, Actions.Registry.Count);
             var names = new[]
             {
                 "navigate-left", "navigate-right", "navigate-up", "navigate-down",
                 "telescope", "telescope-issues", "telescope-references",
                 "telescope-implementation", "telescope-grep", "telescope-fzf",
                 "toggle-solution-explorer", "close-window",
+                "next-error", "prev-error", "next-warning", "prev-warning",
             };
             foreach (string name in names)
             {
@@ -1814,6 +1889,149 @@ namespace NeoVisual.Tests
             // Window.CloseDocumentWindow.
             Assert.Equal("Window.CloseToolWindow", CloseWindowCommand.For(true));
             Assert.Equal("Window.CloseDocumentWindow", CloseWindowCommand.For(false));
+        }
+
+        // ================================================================
+        // DiagnosticNavigator — pure severity-filtered diagnostics navigation (Gap 3 D3)
+        // RED: `DiagnosticNavigator`/`DiagnosticEntry` do not exist yet -> compile error
+        // (CS0246). The seam mirrors CloseWindowCommand (Gap 1 D5): a dependency-free static
+        // decision the VS-coupled InputHandler.NavigateDiagnostic delegates to. Entries are
+        // pre-sorted ascending by Line (the caller's gather contract).
+        // ================================================================
+
+        public static void Run_DiagnosticNavigator_Next_PicksFirstBelowCaret()
+        {
+            // Happy path: Next returns the FIRST entry strictly AFTER the caret line.
+            var entries = new List<DiagnosticEntry>
+            {
+                new DiagnosticEntry(@"C:\p\A.cs", 10),
+                new DiagnosticEntry(@"C:\p\B.cs", 20),
+                new DiagnosticEntry(@"C:\p\C.cs", 30),
+            };
+
+            var first = DiagnosticNavigator.Next(entries, 5);
+            Assert.True(first.HasValue, "a caret above every entry finds the first one");
+            Assert.Equal(10, first.Value.Line);
+            Assert.Equal(@"C:\p\A.cs", first.Value.FilePath);
+
+            var mid = DiagnosticNavigator.Next(entries, 15);
+            Assert.True(mid.HasValue, "a caret between entries finds the next one");
+            Assert.Equal(20, mid.Value.Line);
+            Assert.Equal(@"C:\p\B.cs", mid.Value.FilePath);
+        }
+
+        public static void Run_DiagnosticNavigator_Prev_PicksLastAboveCaret()
+        {
+            // Happy path: Prev returns the LAST entry strictly BEFORE the caret line.
+            var entries = new List<DiagnosticEntry>
+            {
+                new DiagnosticEntry(@"C:\p\A.cs", 10),
+                new DiagnosticEntry(@"C:\p\B.cs", 20),
+                new DiagnosticEntry(@"C:\p\C.cs", 30),
+            };
+
+            var prev = DiagnosticNavigator.Prev(entries, 25);
+            Assert.True(prev.HasValue, "a caret below the last entry finds the previous one");
+            Assert.Equal(20, prev.Value.Line);
+            Assert.Equal(@"C:\p\B.cs", prev.Value.FilePath);
+
+            var last = DiagnosticNavigator.Prev(entries, 40);
+            Assert.True(last.HasValue, "a caret past every entry finds the last one");
+            Assert.Equal(30, last.Value.Line);
+            Assert.Equal(@"C:\p\C.cs", last.Value.FilePath);
+        }
+
+        public static void Run_DiagnosticNavigator_Next_AtEndReturnsNull()
+        {
+            // AC6: NO wrap — at/past the end the navigator returns null so the caller logs
+            // `[NeoVisual] diagnostic-nav no-op: at-end` (LazyVim buffer-local semantics).
+            var entries = new List<DiagnosticEntry>
+            {
+                new DiagnosticEntry(@"C:\p\A.cs", 10),
+                new DiagnosticEntry(@"C:\p\B.cs", 20),
+            };
+
+            Assert.False(DiagnosticNavigator.Next(entries, 20).HasValue,
+                "a caret ON the last entry has no next (no wrap)");
+            Assert.False(DiagnosticNavigator.Next(entries, 21).HasValue,
+                "a caret past the last entry has no next (no wrap)");
+        }
+
+        public static void Run_DiagnosticNavigator_Prev_AtStartReturnsNull()
+        {
+            // AC6: NO wrap at the start either.
+            var entries = new List<DiagnosticEntry>
+            {
+                new DiagnosticEntry(@"C:\p\A.cs", 10),
+                new DiagnosticEntry(@"C:\p\B.cs", 20),
+            };
+
+            Assert.False(DiagnosticNavigator.Prev(entries, 10).HasValue,
+                "a caret ON the first entry has no previous (no wrap)");
+            Assert.False(DiagnosticNavigator.Prev(entries, 1).HasValue,
+                "a caret before the first entry has no previous (no wrap)");
+        }
+
+        public static void Run_DiagnosticNavigator_EmptyReturnsNull()
+        {
+            // AC6: no entries in the file -> no-op (the caller logs
+            // `[NeoVisual] diagnostic-nav no-op: no-entries`).
+            var entries = new List<DiagnosticEntry>();
+            Assert.False(DiagnosticNavigator.Next(entries, 1).HasValue, "Next on an empty list is a no-op");
+            Assert.False(DiagnosticNavigator.Prev(entries, 1).HasValue, "Prev on an empty list is a no-op");
+        }
+
+        public static void Run_DiagnosticNavigator_CaretOnDiagnosticSkipsIt()
+        {
+            // LazyVim semantics: ]e with the caret ON a diagnostic moves to the NEXT one
+            // (strict inequality both directions) — it never re-selects the entry at the caret.
+            var entries = new List<DiagnosticEntry>
+            {
+                new DiagnosticEntry(@"C:\p\A.cs", 10),
+                new DiagnosticEntry(@"C:\p\B.cs", 20),
+                new DiagnosticEntry(@"C:\p\C.cs", 30),
+            };
+
+            var next = DiagnosticNavigator.Next(entries, 20);
+            Assert.True(next.HasValue, "a caret ON the middle entry still has a next");
+            Assert.Equal(30, next.Value.Line);
+
+            var prev = DiagnosticNavigator.Prev(entries, 20);
+            Assert.True(prev.HasValue, "a caret ON the middle entry still has a previous");
+            Assert.Equal(10, prev.Value.Line);
+        }
+
+        public static void Run_DiagnosticNavigator_SingleEntry_BothDirections()
+        {
+            var entries = new List<DiagnosticEntry> { new DiagnosticEntry(@"C:\p\A.cs", 10) };
+
+            var found = DiagnosticNavigator.Next(entries, 1);
+            Assert.True(found.HasValue, "the single entry is found from above");
+            Assert.Equal(10, found.Value.Line);
+            Assert.False(DiagnosticNavigator.Next(entries, 10).HasValue, "no next past the single entry");
+            Assert.False(DiagnosticNavigator.Prev(entries, 1).HasValue, "no previous before the single entry");
+            var fromBelow = DiagnosticNavigator.Prev(entries, 99);
+            Assert.True(fromBelow.HasValue, "the single entry is found from below");
+            Assert.Equal(10, fromBelow.Value.Line);
+        }
+
+        public static void Run_DiagnosticNavigator_UnsortedInput_ListOrderContract()
+        {
+            // The gather contract: the CALLER pre-sorts ascending by Line; the navigator does
+            // NOT sort. With unsorted input the scan is in LIST order — Next returns the first
+            // entry (in list order) whose Line is past the caret, even when a smaller line
+            // follows it. Pinning this keeps the navigator dependency-free (no OrderBy) and
+            // makes the gatherer's sort obligation observable.
+            var unsorted = new List<DiagnosticEntry>
+            {
+                new DiagnosticEntry(@"C:\p\C.cs", 30),
+                new DiagnosticEntry(@"C:\p\A.cs", 10),
+            };
+
+            var next = DiagnosticNavigator.Next(unsorted, 5);
+            Assert.True(next.HasValue, "an unsorted list still yields a next entry");
+            Assert.Equal(30, next.Value.Line);
+            Assert.Equal(@"C:\p\C.cs", next.Value.FilePath);
         }
 
         // ================================================================
@@ -2376,6 +2594,100 @@ namespace NeoVisual.Tests
             var abort = matcher.HandleKey(Keys.X, false, false, false, false);
             Assert.Equal(LeaderResultKind.Abort, abort.Kind);
             Assert.False(matcher.IsActive, "an unrelated key after the prefix aborts");
+            Assert.Equal(0, executed);
+        }
+
+        public static void Run_LeaderSequenceMatcher_ModifierChordTransparent()
+        {
+            // Gap 1 e2e defect (runs 152/153): '|' is typed with a Shift chord (Shift+0xDC). The
+            // Shift key-down arrived while the "w" prefix was pending and was APPENDED
+            // ("w,Shift" -> Abort), so the following 0xDC was pre-filter-rejected and "w,|" could
+            // never fire. While a sequence is active, a modifier key-down must be TRANSPARENT:
+            // consumed, not appended, not aborting.
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,|"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var w = matcher.HandleKey(Keys.W, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Consume, w.Kind);
+
+            // The Shift key-DOWN of the chord: transparent — consumed, sequence unchanged.
+            var shiftDown = matcher.HandleKey(Keys.ShiftKey, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Consume, shiftDown.Kind);
+            Assert.True(matcher.IsActive, "the Shift chord must not abort the pending sequence");
+
+            // The shifted key itself completes the binding.
+            var pipe = matcher.HandleKey(Keys.OemPipe, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Execute, pipe.Kind);
+            Assert.Equal<string?>("w,|", pipe.Sequence);
+            Assert.Equal(1, executed);
+            Assert.False(matcher.IsActive, "sequence ends after execution");
+        }
+
+        public static void Run_LeaderSequenceMatcher_AllModifiersTransparentDownAndUp()
+        {
+            // Every physical modifier VK (Shift/Ctrl/Alt/Win, left and right variants) is
+            // transparent while a sequence is active — key-DOWN and key-UP alike: consumed,
+            // never appended, never aborting. (The hook currently dispatches only key-downs,
+            // but the pure machine must stay coherent for both directions.)
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,|"] = () => executed++,
+            };
+            var modifiers = new[]
+            {
+                Keys.ShiftKey, Keys.LShiftKey, Keys.RShiftKey,
+                Keys.ControlKey, Keys.LControlKey, Keys.RControlKey,
+                Keys.Menu, Keys.LMenu, Keys.RMenu,
+                Keys.LWin, Keys.RWin,
+            };
+
+            foreach (var modifier in modifiers)
+            {
+                var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+                matcher.HandleKey(Keys.Space, false, false, false, false);
+                matcher.HandleKey(Keys.W, false, false, false, false);
+
+                var down = matcher.HandleKey(modifier, false, false, false, false);
+                Assert.Equal(LeaderResultKind.Consume, down.Kind);
+                Assert.True(matcher.IsActive, $"{modifier} key-down must not abort the pending sequence");
+
+                var up = matcher.HandleKey(modifier, false, false, false, false);
+                Assert.Equal(LeaderResultKind.Consume, up.Kind);
+                Assert.True(matcher.IsActive, $"{modifier} key-up must not abort the pending sequence");
+
+                // The sequence is untouched: the shifted member still completes the binding.
+                var pipe = matcher.HandleKey(Keys.OemPipe, false, true, false, false);
+                Assert.Equal(LeaderResultKind.Execute, pipe.Kind);
+                Assert.Equal<string?>("w,|", pipe.Sequence);
+            }
+            Assert.Equal(modifiers.Length, executed);
+        }
+
+        public static void Run_LeaderSequenceMatcher_LettersStillAppendAfterModifier()
+        {
+            // No over-broad change: a NON-modifier key after the transparent Shift still appends
+            // and can still abort — modifier transparency must not swallow sequence members.
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,d"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            matcher.HandleKey(Keys.W, false, false, false, false);
+            var shift = matcher.HandleKey(Keys.ShiftKey, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Consume, shift.Kind);
+
+            var x = matcher.HandleKey(Keys.X, false, false, false, false); // not a binding/prefix
+            Assert.Equal(LeaderResultKind.Abort, x.Kind);
+            Assert.False(matcher.IsActive, "a non-modifier non-prefix key still aborts");
             Assert.Equal(0, executed);
         }
 

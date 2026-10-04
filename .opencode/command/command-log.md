@@ -83,6 +83,7 @@
 | `tail ...` (bash) | `tail` is NOT installed on this machine (Unix tool) | other | `Select-Object -Last N` (pwsh) | no |
 | `pwsh -Command "<script with $vars>"` (double-quoted) | the OUTER shell interpolates the inner script's `$vars`/`$_` before the inner pwsh sees them → the inner script arrives mangled → `ParserError` | misuse | single-quote the `-Command` argument (`pwsh -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it | no |
 | `pwsh -Command '... [ref]$null ...'` (ParseFile tokens ref) | `InvalidOperation: [ref] cannot be applied to a variable that does not exist` — `[ref]$null` is invalid; the ParseFile tokens ref needs a real variable | misuse | use the harness's built-in `pwsh tools/harness/test-e2e.ps1 -SelfCheck` (parse + helper invariants + Assert-SeedConsistent), or assign `$tokens = $null` first | no |
+| `engine.summary()` / `complexity_hotspots()` / `subgraph()` / `preanalysis()` (trailmark 0.5.0 QueryEngine) | AttributeError on this install (`_graph` / `nodes_by_complexity` / `subgraph` missing from `CodeGraph`) | other | `parse_directory` + `len(graph.nodes)`/`len(graph.edges)` for counts; `callers_of` for callers; LSP for symbol-level; upgrade trailmark for the rest | no |
 
 ## Correct tool per task (avoid wrong-tool waste)
 
@@ -159,9 +160,68 @@
 - ALTERNATIVE: `read` the directory path (lists entries), or `rg --no-ignore` for content search under `.opencode/`
 - NEEDS-PERMISSION: no
 
+### 2026-10-04 — trailmark-recon (structural digest)
+- CMD: `uv run --with trailmark python -` — `from trailmark.query import QueryEngine` + `engine.summary()` / `engine.complexity_hotspots(threshold=8)` / `engine.subgraph("high_blast_radius")` (correct import per the 2026-10-02 CORRECTION; parse_directory succeeds, 0.4s)
+- RESULT: `summary()` → `AttributeError: 'CodeGraph' object has no attribute '_graph'`; `complexity_hotspots()` → `no attribute 'nodes_by_complexity'`; `subgraph("high_blast_radius")` → `no attribute 'subgraph'` — trailmark 0.5.0's QueryEngine query surface is broken beyond the already-logged preanalysis/to_json. Raw `graph.nodes`/`graph.edges` (len 2037/4961) and `callers_of` (per 10-02 correction) still work.
+- REASON: other — installed trailmark 0.5.0 QueryEngine internally accesses `store._graph`/`nodes_by_complexity`/`subgraph`, absent from `CodeGraph`
+- ALTERNATIVE: use `parse_directory(...)` + `len(graph.nodes)`/`len(graph.edges)` for counts; `callers_of` for callers; LSP for everything symbol-level; complexity/blast-radius/subgraph answers unavailable until trailmark is upgraded
+- NEEDS-PERMISSION: no — a trailmark version bump (`uv tool install trailmark` / pinned `--with trailmark==<newer>`) would likely fix it
+- AGENT: trailmark-recon
+- DATE: 2026-10-04
+
 ### 2026-10-04 — build-agent (Gap 1), logged by neovim_hub
 - OPERATION: `lsp` symbol queries (e.g. `workspaceSymbol`) against NEWLY CREATED files (e.g. `MyExtension/Input/Utils/CloseWindowCommand.cs` right after creation)
 - RESULT: stale-index false errors — the LSP reported the new symbol as non-existent until the next rebuild
 - REASON: server — the Roslyn language server's index lags newly created files until a build refreshes it
 - ALTERNATIVE: run `dotnet build` first (or re-query after the build); disprove a suspected LSP false negative with the compiler (`dotnet build` 0 errors), not the LSP index
 - NEEDS-PERMISSION: no
+
+### 2026-10-04 — skill-researcher (Gap 3 diagnostics-nav research)
+- CMD: `rg -n "..." <file> | Select-Object -First 60` (bash)
+- RESULT: permission denied — this agent's bash policy is `{"*": deny, "rg *": allow}`; the pipe to `Select-Object` broke the `rg *` pattern match
+- REASON: permission
+- ALTERNATIVE: run pure `rg` commands only (no pipes/other cmdlets); take the first N matches by reading the output, or use `rg -m <N>` to cap matches
+- NEEDS-PERMISSION: no — pure `rg` is allowed and sufficient
+
+### 2026-10-04 — implementation-planner (Section D rev 1)
+- OPERATION: `grep` tool with `path` set to a FILE (`tools/harness/harness-common.ps1` / `iterate-telescope.ps1`)
+- RESULT: no error, but the tool returned test-e2e.ps1's matches (wrong file) — silent wrong-result
+- REASON: wrong-tool — the grep tool's `path` is directory-scoped; a file path is not honored
+- ALTERNATIVE: `path` = the parent directory + `include` = the file name (verified working: PfxTel sanity hit in harness-common.ps1; true-negatives then trustworthy)
+- NEEDS-PERMISSION: no
+- AGENT: implementation-planner
+- DATE: 2026-10-04
+
+### 2026-10-04 — trailmark-recon (preview-pipeline digest)
+- OPERATION: `lsp incomingCalls file=Telescope/Overlay/Utils/PreviewRenderer.cs line=42 char=19` and `lsp findReferences file=MyExtension/Adornments/BlockCaretAdornment.cs line=92 char=37`
+- RESULT: "No results found" for both — but the symbols DO have callers (PreviewRenderer.Show ← TelescopeOverlay.cs:474; BlockCaretAdornment.Attach ← TextMotionHelper.cs:347)
+- REASON: misuse — the character position pointed at `void` (method return type, char 19) and at the type name `BlockCaretAdornment` (char 37), not at the method identifier. char is 1-based and must land INSIDE the identifier.
+- ALTERNATIVE: re-aim at the identifier: `incomingCalls ... char=21` ("Show") and `findReferences ... char=43` ("Attach") — both then returned correct results.
+- NEEDS-PERMISSION: no
+
+### 2026-10-04 — verification-agent (Gap 3 final gate)
+- CMD: inline JSON check using `-like '[*` / `-like ']*'` wildcard patterns on binding names
+- RESULT: `WildcardPatternException: The specified wildcard character pattern is not valid: [*` (repeated) — `[` opens a wildcard character class in PowerShell `-like`; the needed outputs (count/values) still printed
+- REASON: misuse — unescaped `[`/`]` in a `-like` pattern
+- ALTERNATIVE: use `-eq`/`-contains` for exact key checks, or escape with backticks (``-like '`[*``); `ConvertFrom-Json` + `.PSObject.Properties.Name` for the count
+- NEEDS-PERMISSION: no
+- AGENT: verification-agent
+- DATE: 2026-10-04
+
+### 2026-10-04 — debug-agent (Gap 1 e2e repair)
+- CMD: `rg -n "Save-AllDocuments \$vs\.Id|Enter-NormalContext \$vs" tools/harness/test-e2e.ps1` (DOUBLE-quoted bash-tool arg)
+- RESULT: `rg: regex parse error: (?:Save-AllDocuments \\.Id|...) — unclosed group` — the OUTER pwsh interpolated `$vs` to empty before rg saw the pattern (same mechanism as the known-bad `pwsh -Command "..."` row, via a plain double-quoted argument)
+- REASON: misuse — double-quoted shell argument containing `$var`
+- ALTERNATIVE: single-quote the whole rg pattern (`rg -n '...\$vs\.Id...'`) — verified working
+- NEEDS-PERMISSION: no
+- AGENT: debug-agent
+- DATE: 2026-10-04
+
+### 2026-10-04 — docs-reviewer (plan gate)
+- CMD: `rg -n '...' tests/Telescope.Tests/Program.cs | rg -n 'public static' | head -0`
+- RESULT: `head: The term 'head' is not recognized...` — pipe failed; the rg output before the pipe printed fine
+- REASON: misuse — piped to `head`, already a Known-bad Unix tool in this index (same class as the 2026-10-03 e2e-test-builder `tail` entry)
+- ALTERNATIVE: omit the pipe; cap with `rg -m <N>` or read the output directly
+- NEEDS-PERMISSION: no
+- AGENT: docs-reviewer
+- DATE: 2026-10-04

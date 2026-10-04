@@ -244,12 +244,10 @@ unit tests before the change exists. The new harness scenario is REGISTERED-unex
   `AGENTS.md`, `.opencode/skills/vs-extension-dev/SKILL.md`, `docs/progress.md` (D8).
 - **Created:** `MyExtension/Input/Utils/DiagnosticNavigator.cs` (D3), the gatherer (D4 —
   file placement the planner decides).
-- **Not touched:** `KeybindingConfig.cs`, `KeyNameBuilder.cs`
+- **Not touched:** `LeaderSequenceMatcher.cs`, `KeybindingConfig.cs`, `KeyNameBuilder.cs`
   (Gap 1's matcher refactor already supports everything needed), `Telescope/**` (unless the
   planner reuses `CodeIssuesFinder`'s gather — read-only reuse of its API pattern, no Telescope
-  edits), `GlobalKeyboardHook.cs`. *(Amended by BP-H1 — verify-time debug: `LeaderSequenceMatcher.cs`
-  IS touched — modifier keys became TRANSPARENT while a sequence is active; removed from this
-  list. See Phase 7.)*
+  edits), `GlobalKeyboardHook.cs`.
 
 ## Open risks / uncertainty
 
@@ -665,8 +663,7 @@ unit tests before the change exists. The new harness scenario is REGISTERED-unex
 > **Files: ONLY `tests/NeoVisual.Tests/Program.cs`.** Full per-test code with exact anchors:
 > `artifacts/section-c.md`. Execution order is BOTTOM-UP by file position (BP-C1 → BP-C6
 > insert/replace in descending line order) so every cited line number stays valid. Suite
-> arithmetic PINNED: **177 + 10 new − 0 removed = 187**. *(Amended by BP-H2 — verify-time
-> debug: 177 + 10 + 3 = **190**; 187 was the pre-debug total.)*
+> arithmetic PINNED: **177 + 10 new − 0 removed = 187**.
 
 - **BP-C1** — NEW `DiagnosticNavigator` section + 4 core tests (insert before the
   `// Helpers — WindowRect` banner, :1819): `Run_DiagnosticNavigator_Next_PicksFirstBelowCaret`,
@@ -700,8 +697,6 @@ unit tests before the change exists. The new harness scenario is REGISTERED-unex
   spot-checks: `-- DiagnosticNavigator` → 8, `-- Keybinding` → 12, `-- KeyNames` → 6,
   `-- ActionsRegistry` → 4. A failing PRE-EXISTING test name is a REGRESSION — trace the
   owning section, never weaken an assertion.
-  *(Amended by BP-H2 — verify-time debug: the gate is now `190 passed, 0 failed, 190 total.` /
-  190 `Run_*` lines; 187 was the pre-debug total. `-- LeaderSequenceMatcher` gains 3.)*
 
 **Existing tests audited — NONE can break** (additive change): the lowercase-leader loop in
 `Run_Keybinding_DefaultFileHasTelescopeAndNav` passes (all six new keys are non-simple +
@@ -746,9 +741,6 @@ new names don't match); no test pins the defaults' 30-count.
 sites (:704/:707/:731/:739/:749/:767/:781/:989) start with `w`/`e`/`b`; all six new sequences
 start with `]`/`[` — zero overlap, zero prefix relations; no scenario sends `[`/`]` today;
 `diagnostic-nav` appears nowhere. **No existing scenario needs any change.**
-*(Amended by BP-H3 — verify-time debug: two EXISTING scenarios WERE changed — the Gap-1 plan's
-BP-D6 `neovisual-editor-insert` save step → `Save-AllDocuments` (:1297) and BP-D4
-`neovisual-window-management` step 4 → `Enter-NormalContext` (:769); see Phase 7.)*
 
 ### Phase 5 — Docs sync + e2e queue (BP-E1 … BP-E11)
 
@@ -812,97 +804,9 @@ BP-D6 `neovisual-editor-insert` save step → `Save-AllDocuments` (:1297) and BP
   tests/NeoVisual.Tests` → **187 passed, 0 failed**; `dotnet run --project
   tests/Telescope.Tests` → **172 passed, 0 failed** (STAGGERED — never simultaneous, W11
   policy); then BP-D4's `-SelfCheck` + `-List` and BP-E11's lints + sweep.
-  *(Amended by BP-H2 — verify-time debug: the NeoVisual gate is now **190 passed, 0 failed**;
-  187 was the pre-debug total.)*
 - **Verify-with:** all of the above green. NO e2e run (deferred — E2E-GAP3-1..2).
 - **Fails-if:** any unit failure (map through the Verification Trace); a build error;
   `-List` ≠ 39; a lint failure.
-
-### Phase 7 — Verify-time debug fixes (executed)
-
-> **Added post-verification (8c re-plan).** The VERIFY pass surfaced two RED e2e scenarios and
-> a Gap-1 binding that could never fire; a verify-time DEBUG pass fixed all three. Every step
-> below is **EXECUTED** — evidence: fresh-boot **run 155** (`neovisual-window-management` +
-> `neovisual-editor-insert` both PASS; the run-155 log pins the full contract) and the unit
-> suites (**NeoVisual 190 passed, 0 failed; Telescope 172 passed, 0 failed**), `dotnet build`
-> 0 errors, `-SelfCheck` PASS, doc-refs 0 unresolved, doc-content PASS (12). No diagnostic
-> literal changed (M-M7 clean — no new literal).
-
-**BP-H1 — `LeaderSequenceMatcher`: modifier keys are TRANSPARENT while a sequence is active.**
-- **Files:** `MyExtension/Input/Utils/LeaderSequenceMatcher.cs`
-- **Change:** new private static helper `IsModifierKey(Keys)` (:119-125 — true for
-  `ShiftKey`/`LShiftKey`/`RShiftKey`/`ControlKey`/`LControlKey`/`RControlKey`/`Menu`/`LMenu`/
-  `RMenu`/`LWin`/`RWin`) + a modifier-transparency block at the TOP of the `_active` branch
-  (:64-74): while a leader sequence is in progress, a modifier key (key-down AND key-up) returns
-  `LeaderResult.Consume` WITHOUT being appended to the sequence and WITHOUT the prefix check —
-  it can no longer abort. Root cause fixed: the harness types `|` as a Shift chord
-  (harness-common.ps1 `'|' → @(0xDC, $true)`), and the Shift key-down arriving while `w` was
-  pending was appended (`"w,ShiftKey"` → Abort), so the Gap-1 binding `w,|` could NEVER fire
-  (0 hits in 155 runs). The production hook dispatches only key-downs
-  (`GlobalKeyboardHook.cs:103-148`), but the matcher treats key-ups the same so the pure
-  machine stays coherent for any caller.
-- **Verify-with:** unit `Run_LeaderSequenceMatcher_ModifierChordTransparent` +
-  `Run_LeaderSequenceMatcher_AllModifiersTransparentDownAndUp` +
-  `Run_LeaderSequenceMatcher_LettersStillAppendAfterModifier` (BP-H2); live:
-  `[NeoVisual] leader-binding executed: w,|` — first firing in run 155. No diagnostic literal
-  changed.
-- **Fails-if:** `leader-binding executed: w,|` absent while `w,-` still fires (transparency
-  block dropped or reordered after the append); a modifier key now EXECUTEs/PASSes through
-  mid-sequence (wrong branch); `Run_LeaderSequenceMatcher_CaseSensitive` or the
-  append/abort behavior regresses (over-broad transparency swallowing sequence members).
-
-**BP-H2 — 3 new matcher unit tests (suite 187 → 190).**
-- **Files:** `tests/NeoVisual.Tests/Program.cs`
-- **Change:** three tests in the LeaderSequenceMatcher section:
-  `Run_LeaderSequenceMatcher_ModifierChordTransparent` (:2600 — Space→Consume, W→Consume,
-  Shift-down→Consume with the sequence unchanged and `IsActive` true, then shifted
-  `OemPipe`→`Execute "w,|"`), `Run_LeaderSequenceMatcher_AllModifiersTransparentDownAndUp`
-  (:2631 — all 11 modifier VKs, key-down AND key-up each Consume without aborting, then the
-  shifted member still completes the binding),
-  `Run_LeaderSequenceMatcher_LettersStillAppendAfterModifier` (:2672 — after a transparent
-  Shift, a non-modifier non-prefix key still appends→Abort: transparency must not swallow
-  sequence members). `Run_LeaderSequenceMatcher_CaseSensitive` GREEN unchanged.
-- **Verify-with:** `dotnet run --project tests/NeoVisual.Tests` → **190 passed, 0 failed,
-  190 total** (177 + 10 Gap-3 + 3 debug); `-- LeaderSequenceMatcher` subset → 3 more than
-  pre-debug.
-- **Fails-if:** the suite prints ≠190 (a test missing or an extra); `AllModifiersTransparent...`
-  fails on one VK (the `IsModifierKey` list is incomplete — check LWin/RWin);
-  `LettersStillAppendAfterModifier` fails (transparency over-broad).
-
-**BP-H3 — harness amendments: DTE save + normal-context entry (amends the Gap-1 plan's BP-D6/BP-D4).**
-- **Files:** `tools/harness/test-e2e.ps1`
-- **Change:** (1) `neovisual-editor-insert`'s save step (:1297): `Send-Ctrl 0x53` →
-  `Save-AllDocuments $vs.Id` (the existing DTE ROT path → dte-command.ps1 → File.SaveAll —
-  synchronous, bounded). Root cause: the injected Ctrl+S chord passes the extension unbound
-  (`PassThrough`, InputHandler.cs:394-406) but is consumed inside VS by the focused editor's
-  key-processing chain (VsVim's processor sits in front of the shell shortcut dispatch;
-  `vim-mode=Normal` logged immediately before the chord) — runs 152/153 left the buffer dirty
-  until the cleanup SaveAll flushed it. The file-content check remains the ONLY oracle; the
-  typing/marker part is untouched; the leader-binding save assertion stays DROPPED.
-  (2) `neovisual-window-management` step 4 (:769): `Enter-NormalContext $vs` before
-  `Ensure-SolutionExplorerOpen`. Root cause (surfaced once BP-H1 let steps 3-4 execute for the
-  first time): step 3's `w,d` closed the only open document → VS focused the StartPage (a
-  text-input-type tool window, `GeneralToolWindowController.cs:101`, whose controller STARTS in
-  input mode) → `HandleKey` returns false for every key before the leader matcher
-  (InputHandler.cs:319-322) → the Space+E attempts were silently typed into that surface
-  (run 154: four silent attempts). `Enter-NormalContext` exits the input-mode controller
-  (`toolwindow-exit-input`) so the leader is reachable.
-  *(Amends the Gap-1 session plan's BP-D6 — the `neovisual-editor-insert` save block — and
-  BP-D4 — the `neovisual-window-management` registration — one line each: the save step is
-  `Save-AllDocuments`, step 4 gains `Enter-NormalContext`. Those steps live in
-  `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-085937/plans/plan.md`,
-  outside this file's edit scope, so the amendment is recorded here and in the Phase 4 note.)*
-- **Verify-with:** fresh-boot run 155: `neovisual-window-management` + `neovisual-editor-insert`
-  both PASS; the run-155 log pins the full contract — `w,-` / `w,|` (first firing in 155 runs) /
-  `w,d` + active-doc poll / `toolwindow-exit-input` / `solution-explorer toggled open` / `w,d`
-  (tool window) / the file-content marker; `-SelfCheck` PASS.
-- **Fails-if:** `neovisual-editor-insert` fails with "typed text was swallowed/not inserted"
-  again (the save didn't flush — check the `Save-AllDocuments` invocation);
-  `neovisual-window-management` step 4's `leader-binding executed: w,d` absent with
-  `toolwindow-exit-input` also absent (the StartPage input-mode exit didn't happen —
-  `Enter-NormalContext` placement/order); a `seed-leak` failure after this scenario (the DTE
-  save path wrote outside the recorded expectation — `Update-SeedExpected` must run after the
-  save, N53).
 
 ## Verification Trace
 
@@ -916,25 +820,19 @@ BP-D6 `neovisual-editor-insert` save step → `Save-AllDocuments` (:1297) and BP
 | Load-time diagnostic | BP-A2, BP-B4 | `[NeoVisual] Keybindings loaded: 36 binding(s), leader = Space ...`; NO `Unknown action '...' for binding '...' - ignored.` after A+B |
 | Runtime diagnostics (queued e2e) | BP-B2/B3/B4, BP-D2/D3 | `[NeoVisual] diagnostic-nav direction=next\|prev severity=error\|warning target=<path> line=<n>` / `no-op: <reason>` / `failed: {msg}` (BP-B5 shapes, byte-exact) + `leader-binding executed: ],d`/`[,d`/`],e`/`[,e`/`],w`/`[,w` |
 | AC6 no-op (never wraps) | BP-B1, BP-C1, BP-C2 | `no-op: at-end` / `no-op: no-entries` pinned by the at-end/empty tests |
-| e2e `neovisual-diagnostic-nav` (E2E-GAP3-1; QUEUED at plan time — Amended post-verify: EXECUTED + PASS in the verify-time full-suite run) | BP-D2, BP-D3 | the six leader lines + one tolerant `diagnostic-nav` outcome per custom pair, snapshot-attributed |
-| e2e `neovisual-window-management` (was RED at verify — E2E-GAP1-1) | BP-H1, BP-H2, BP-H3 | `[NeoVisual] leader-binding executed: w,\|` — first firing in run 155 — plus the full step 3-4 contract: `w,d` + active-doc poll, `toolwindow-exit-input`, `solution-explorer toggled open`, `w,d` (tool window) |
-| e2e `neovisual-editor-insert` (was RED at verify) | BP-H3 | the file-content marker found after `Save-AllDocuments $vs.Id` (DTE File.SaveAll bypasses the key pipeline); run 155 PASS |
+| e2e `neovisual-diagnostic-nav` (QUEUED, E2E-GAP3-1) | BP-D2, BP-D3 | the six leader lines + one tolerant `diagnostic-nav` outcome per custom pair, snapshot-attributed |
 | e2e full-suite re-run (QUEUED, E2E-GAP3-2) | all (additive-only) | all existing lines unchanged; the only new family is `diagnostic-nav` (+ the 36-binding count line) |
-| Full-suite count gate | BP-C7, BP-G1, BP-H2 | `190 passed, 0 failed` (NeoVisual = 177 + 10 Gap-3 + 3 debug); `172 passed, 0 failed` (Telescope, staggered) |
+| Full-suite count gate | BP-C7, BP-G1 | `187 passed, 0 failed` (NeoVisual); `172 passed, 0 failed` (Telescope, staggered) |
 | No-VS harness gates | BP-D4, BP-G1 | `-SelfCheck` PASS; `-List` = 39 (new scenario between window-management and toolwindow; seed-leak last) |
 | Lint + consistency gates | BP-E11, BP-G1 | check-doc-refs 0 unresolved; check-doc-content PASS (DOC-66-3 carry-forward procedure); count sweep 0 remnants |
 
-**Known-RED allowlist: NONE.** Both unit suites GREEN (post-debug **190/172**; pre-change
-172/177), all executed e2e GREEN. Expected RED = the new Section-C tests before Sections A/B
-land (CS0246 for the seam; assertion failures for the rest). The verification-agent must NOT
-flag: the mid-plan inert states (Unknown-action load line between A and B), the Phase 7
-verify-time debug fixes (BP-H1..H3 — EXECUTED, run-155 + 190/172 evidence), the
-`neovisual-diagnostic-nav` scenario (E2E-GAP3-1 — Amended post-verify: EXECUTED + PASS in
-the verify-time full-suite run), the queued full-suite re-run
-(E2E-GAP3-2), or the pre-existing spec.md §8 `(171)` drift (repaired by BP-E3.6).
-Post-debug status: `neovisual-window-management` (E2E-GAP1-1) and `neovisual-editor-insert`
-were RED at verify time and are FIXED + PASS in fresh-boot run 155 (BP-H1/H3) — a later
-failure in either maps through the Phase 7 rows above, not to the Gap-3 steps.
+**Known-RED allowlist: NONE.** Both unit suites GREEN pre-change (172/177), all 37 executed
+e2e GREEN. Expected RED = the new Section-C tests before Sections A/B land (CS0246 for the
+seam; assertion failures for the rest). The verification-agent must NOT flag: the mid-plan
+inert states (Unknown-action load line between A and B), the REGISTERED-unexecuted scenarios
+(`neovisual-window-management` pre-existing E2E-GAP1-1; `neovisual-diagnostic-nav` new
+E2E-GAP3-1), the queued full-suite re-run, or the pre-existing spec.md §8 `(171)` drift
+(repaired by BP-E3.6).
 
 ## Hub handoff steps (Step 7, on user approval — hub-owned, not build-agent steps)
 
@@ -950,59 +848,3 @@ failure in either maps through the Phase 7 rows above, not to the Gap-3 steps.
    falsified `Edit.NextError`/`Edit.PreviousError` backlog assumption.
 4. Workspace `e2e-queue.md`: the E2E-GAP3 rows flip QUEUED → READY only when this plan is
    GREEN in `docs/progress.md` (Step 8 reconciliation).
-
-## Execution Log
-
-### Attempt 1 — VERIFY FAIL (2026-10-04)
-
-- Build (BP-A1..E11 + BP-G1): all steps done in ONE pass (A→B→C→D→E; the mid-plan
-  inert-state expectations honored). `dotnet build` 0 errors; NeoVisual **187/0** (exactly
-  the pinned total); Telescope staggered **172/0**; `-SelfCheck` PASS; `-List` 39; both
-  lints PASS. DEVIATIONS: (1) `-- Keybinding` subset prints 13 not 12 (the substring filter
-  also matches `Run_LeaderMatcher_SingleKeyBindingExecutes`; section-c.md miscounted) —
-  ACCEPT (planning-artifact arithmetic; the authoritative 187 total held); (2) LSP
-  stale-index false errors on new files (known command-log pattern) — no action.
-- VERIFY round 1: **FAIL** — Gap 3's own gates all GREEN (incl. `neovisual-diagnostic-nav`
-  first live run: six leader lines + 4× `no-op: no-entries`, zero `failed:`), but the
-  full-suite gate surfaced TWO real fail-twice REDs in **Gap 1's** queued e2e gates:
-  `neovisual-window-management` (`w,|` could NEVER fire — the Shift chord's key-down was
-  appended into the pending sequence → Abort; 0 hits in 155 runs) and
-  `neovisual-editor-insert` (the Ctrl+S save chord never flushed the buffer — consumed by
-  the focused editor's key-processing chain; the anti-swallow behavior under test was
-  proven healthy).
-- `delegations: 3 | VS boots: 2 (runs 152, 153) | iterations: 0`
-
-### Attempt 2 — GREEN (2026-10-04)
-
-- **8a DEBUG (verify-time):** both REDs root-caused + minimally fixed (plan **Phase 7**,
-  BP-H1..H3): BP-H1 `LeaderSequenceMatcher` modifier keys TRANSPARENT while a sequence is
-  active (down+up, `IsModifierKey`); BP-H2 +3 matcher unit tests (NeoVisual 187→**190**);
-  BP-H3 harness — `neovisual-editor-insert` save step → `Save-AllDocuments $vs.Id` (DTE),
-  `neovisual-window-management` step 4 + `Enter-NormalContext $vs` (the StartPage's
-  input-mode controller swallowed the leader). Post-fix subset re-run (fresh boot, run 155):
-  both scenarios PASS; `w,|` fired for the FIRST time in 155 runs.
-- **8b adjudications (hub):** DEVIATION 1 (the step-4 `Enter-NormalContext` touch was
-  outside the named file scope but inside the authorized iterate-to-green scope) → ACCEPT;
-  DEVIATION 2 (VsVim consumption point pinned by evidence triangle, not source) → ACCEPT;
-  DEVIATION 3 (three observations) → filed as the HARDENING QUEUE in `docs/progress.md`
-  (a: window-management step-3 order-dependency; b: cleanup SaveAll after the seed-leak
-  check; c: Ensure-SolutionExplorerOpen vs input-mode controllers; d: documented
-  tab-group `Command is not available` — no action).
-- **8c RE-PLAN:** Phase 7 (BP-H1..H3, EXECUTED) + Verification Trace rows + the 190 pins
-  folded by `implementation-planner`; `DEVIATIONS RESOLVED: BP-H1/H2/H3 folded; the
-  Not-touched list corrected; BP-C7/BP-G1 gates re-pinned to 190`. **4a PLAN REVIEW:**
-  APPROVE (1 minor: the E2E-GAP3-1 trace row's stale QUEUED status — amended by the hub,
-  trace-table-only).
-- **VERIFY round 2 (final gate):** **PASS** — `dotnet build` 0 errors; NeoVisual **190/0**;
-  Telescope **172/0** (staggered); `-SelfCheck` PASS; `-List` 39; both lints PASS; FULL
-  39-scenario e2e suite on a fresh boot (run 156): **38/39 + 1 flaky** —
-  `neovisual-window-management` failed step 3's `w,d` document-close poll (the leader line
-  fired; harness order-dependency — the scenario never establishes editor focus at start),
-  PASS on the fresh-boot retry (run 157) → **FLAKY ×1** (1st strike of the 3-strike
-  budget; hardening item a filed — NOT a regression). `neovisual-diagnostic-nav` PASSED in
-  the full run; `seed-leak` clean; the 36-bindings load line + zero Unknown-action lines
-  confirmed. The queued gates **E2E-GAP1-1..5 + E2E-GAP3-1..2 are discharged** (canonical
-  `docs/e2e-queue.md` → ran-GREEN record; workspace rows flipped RUN-GREEN in place).
-- **failure-log sweep:** 10 entries read, 0 fixed, 0 queued, 0 annotated (all 10 already
-  carry FIXED annotations).
-- `delegations: 6 | VS boots: 4 (runs 152-157) | iterations: 1`

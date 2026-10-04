@@ -184,7 +184,8 @@ on the list, or `TextMotionNavigator` (vim motions) when focus is on the preview
 - Action names resolve in `InputHandler.ResolveAction`: `navigate-left/right/up/down`,
   `telescope`, `telescope-issues`, `telescope-references`, `telescope-grep`,
   `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`,
-  `close-window`, or `command:<VsCommandName>`.
+  `close-window`, `next-error`, `prev-error`, `next-warning`, `prev-warning`,
+  or `command:<VsCommandName>`.
 - Telescope actions are derived from `TelescopeLauncher.FinderNames` (add a `FinderNames`
   entry + a `default-keybindings.json` line); `ResolveAction` cases are only for
   non-telescope built-ins.
@@ -196,7 +197,13 @@ split right (`command:Window.NewVerticalTabGroup`); `Space+w,d` close-window
 via `Window.CloseDocumentWindow`); `Space+b,d` close; `Space+q` exit; `Space+e`
 toggle-solution-explorer; `Space+f,f` GoToFile; `Space+f,t` telescope;
 `Space+f,d` telescope-issues; `Space+f,r` telescope-references; `Space+f,g` telescope-grep;
-`Space+f,z` telescope-fzf; `Space+f,i` telescope-implementation; `Space+c,w` Command Window;
+`Space+f,z` telescope-fzf; `Space+f,i` telescope-implementation;
+`Space+],d`/`Space+[,d` next/prev diagnostic (`command:Edit.GotoNextIssueinFile` /
+`command:Edit.GotoPreviousIssueinFile` — native in-file squiggle nav);
+`Space+],e`/`Space+[,e` next/prev error and `Space+],w`/`Space+[,w` next/prev warning
+(the custom severity-filtered navigator: Error List entries for the ACTIVE document
+ordered by line, in-file, NO wrap — a no-op at the end or with no entries is logged,
+never a crash); `Space+c,w` Command Window;
 plus Git/build/terminal
 `command:` bindings. There is no save binding (save with Ctrl+S); `w` is a
 window-management prefix — a lone `Space+w` consumes and waits, firing nothing.
@@ -244,6 +251,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] results count=... selected=...` (filtered results rendered / selection moved)
 - `[Telescope] key=... mode=... handled=...` (overlay key handling)
 - `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>` (m47 — outcome diagnostic: the navigation fired vs was a no-op and why)
+- `[NeoVisual] diagnostic-nav direction=next|prev severity=error|warning target=<file> line=<n>` / `[NeoVisual] diagnostic-nav no-op: <reason>` (`no-entries` | `at-end` | `no-active-document` — Gap 3 severity-filtered diagnostics navigation: the `],e`/`[,e`/`],w`/`[,w` outcome diagnostic, fired vs no-op and why) / `[NeoVisual] diagnostic-nav failed: {msg}` (a gather/open failure is logged and swallowed — never crashes the hook)
 - `[NeoVisual] window rect unavailable; using empty rect` (n19 — logged once per adapter when the window rect cannot be read)
 - `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` / `[NeoVisual] IVsUIShell unavailable: SVsUIShell service returned null.` (m14 — null-guard fallbacks)
 - `[Hook] SetHook MainModule failed: {ex.Message}` (n18 — `SetHook` guards `Process.GetCurrentProcess().MainModule` and falls back to `IntPtr.Zero` for `hMod`); `[Hook]` lines are single-stamped (m6 — `LogFileWriter.FormatLine` is the only stamper)
@@ -268,7 +276,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), and the pane-failure fallback (`PaneFailureTracker`).
-- `dotnet run --project tests/NeoVisual.Tests` — **177 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **187 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -280,7 +288,8 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`), the vim-mode classifier
   (`VimModeClassifier` + `IVimModeSource`), the init orchestrator (`InitSteps`),
    the navigation snapshot (`NavigationSnapshot`), the focus-keeper schedule
-   (`FocusKeeperSchedule`), and the close-window seam (`CloseWindowCommand`).
+   (`FocusKeeperSchedule`), the close-window seam (`CloseWindowCommand`), and the
+   severity-filtered diagnostics navigator (`DiagnosticNavigator`).
 
 `InternalsVisibleTo` is set for these assemblies. Extract pure logic into
 dependency-free classes (the `OverlayKeyHandler` / `TextMotionNavigator` pattern) so
@@ -294,13 +303,14 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 38 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 39 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **38 registered scenarios** (37 GREEN with no known-RED — `neovisual-window-management`
-is registered but never executed, queued as E2E-GAP1-1; `explorer-open-searchbox` was
+The **39 registered scenarios** (37 GREEN with no known-RED — `neovisual-window-management`
+(E2E-GAP1-1) and `neovisual-diagnostic-nav` (E2E-GAP3-1) are registered but never executed;
+`explorer-open-searchbox` was
 GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
@@ -309,7 +319,7 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-open-file-navigation`, `telescope-prompt-motions`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
 `telescope-no-selection`, `telescope-preview`, `neovisual-window-nav`,
-`neovisual-leader`, `neovisual-window-management`, `neovisual-toolwindow`,
+`neovisual-leader`, `neovisual-window-management`, `neovisual-diagnostic-nav`, `neovisual-toolwindow`,
 `neovisual-explorer-toggle`,
 `neovisual-explorer-open`, `neovisual-explorer-open-o`,
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
@@ -421,12 +431,21 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
   `GrepFinder`) when fzf is unavailable; preview jumps to the hit line; Enter
   opens the file at the line. The existing `FileFinder` (`Space+f,t`) is the
   fuzzy file finder. — `telescope-fzf` live test passes.
+- Diagnostics navigation (`]`/`[` prefix): `],d`/`[,d` run the native in-file squiggle
+  commands (`command:Edit.GotoNextIssueinFile` / `command:Edit.GotoPreviousIssueinFile`);
+  `],e`/`[,e` and `],w`/`[,w` run the new `next-error`/`prev-error`/`next-warning`/
+  `prev-warning` built-in actions — the pure `DiagnosticNavigator` seam over the Error List
+  entries of the ACTIVE document (severity-filtered, in-file, NO wrap; a no-op at the end or
+  with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
+  (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
+  `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
 
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (172) and
-  `dotnet run --project tests/NeoVisual.Tests` (171).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (38 registered — 37 GREEN +
-  `neovisual-window-management` queued unexecuted; no known-RED; a few flake on retry);
+  `dotnet run --project tests/NeoVisual.Tests` (187).
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (39 registered — 37 GREEN +
+  `neovisual-window-management` (E2E-GAP1-1) and `neovisual-diagnostic-nav` (E2E-GAP3-1)
+  queued unexecuted; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

@@ -31,6 +31,12 @@
     "g,c": "command:Team.Git.Commit",
     "t,t": "command:View.Terminal",
     "b,b": "command:Build.BuildSolution",
-    "b,r": "command:Debug.Start"
+    "b,r": "command:Debug.Start",
+    "],d": "command:Edit.GotoNextIssueinFile",
+    "[,d": "command:Edit.GotoPreviousIssueinFile",
+    "],e": "next-error",
+    "[,e": "prev-error",
+    "],w": "next-warning",
+    "[,w": "prev-warning"
   }
 }

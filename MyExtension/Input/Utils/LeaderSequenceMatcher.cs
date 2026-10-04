@@ -61,6 +61,18 @@ namespace MyExtension.Input
             //    using prefix detection to keep waiting for multi-key sequences like "f f".
             if (_active)
             {
+                // Modifier keys (Shift/Ctrl/Alt/Win — down AND up) are TRANSPARENT while a
+                // sequence is in progress: consumed without being appended and without
+                // aborting. Typing a shifted sequence member (e.g. '|' = Shift+0xDC for the
+                // "w,|" binding) sends the Shift key-down while the prefix is pending; appending
+                // it built "w,Shift" and aborted, so the shifted key could never complete the
+                // binding. The hook dispatches only key-downs, but the matcher treats key-ups
+                // the same so the pure machine stays coherent for any caller.
+                if (IsModifierKey(key))
+                {
+                    return LeaderResult.Consume;
+                }
+
                 if (_sequenceBuilder.Length > 0)
                 {
                     _sequenceBuilder.Append(',');
@@ -97,6 +109,19 @@ namespace MyExtension.Input
 
             // 3. Not the leader key and no sequence in progress.
             return LeaderResult.PassThrough;
+        }
+
+        /// <summary>
+        /// True for the physical modifier virtual-keys (Shift/Ctrl/Alt/Win, left and right
+        /// variants) — the bare key-downs the hook delivers while a chord is being typed
+        /// (e.g. Shift+0xDC types '|'). These are never sequence members.
+        /// </summary>
+        private static bool IsModifierKey(Keys key)
+        {
+            return key == Keys.ShiftKey || key == Keys.LShiftKey || key == Keys.RShiftKey
+                || key == Keys.ControlKey || key == Keys.LControlKey || key == Keys.RControlKey
+                || key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu
+                || key == Keys.LWin || key == Keys.RWin;
         }
 
         /// <summary>Clears any in-progress sequence.</summary>

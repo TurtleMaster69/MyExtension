@@ -11,8 +11,9 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 38 registered live E2E scenarios (37 GREEN +
-> `neovisual-window-management` queued unexecuted; no known-RED; a few flake on retry), feature
+> test commands, the 39 registered live E2E scenarios (37 GREEN +
+> `neovisual-window-management` (E2E-GAP1-1) and `neovisual-diagnostic-nav` (E2E-GAP3-1)
+> queued unexecuted; no known-RED; a few flake on retry), feature
 > status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
@@ -174,7 +175,8 @@ shortcuts (e.g. `Ctrl+H`, distinguished by a `+`). Leader sequences are
 `InputHandler.ResolveAction`: `navigate-left/right/up/down`, `telescope`,
 `telescope-issues`, `telescope-references`, `telescope-grep`,
 `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`,
-`close-window`, or `command:<VsCommandName>`. Telescope actions are derived from
+`close-window`, `next-error`, `prev-error`, `next-warning`, `prev-warning`,
+or `command:<VsCommandName>`. Telescope actions are derived from
 `TelescopeLauncher.FinderNames` (add a `FinderNames` entry + a
 `default-keybindings.json` line); `ResolveAction` cases are only for
 non-telescope built-ins.
@@ -247,10 +249,11 @@ of any of these only when the task needs it.
 
 See **AGENTS.md** for the full picture. Summary:
 - Offline unit tests: `dotnet run --project tests/Telescope.Tests` (172) and
-  `dotnet run --project tests/NeoVisual.Tests` (177), with substring filter +
+  `dotnet run --project tests/NeoVisual.Tests` (187), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (38 registered — 37 GREEN +
-  `neovisual-window-management` queued unexecuted — against the experimental
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (39 registered — 37 GREEN +
+  `neovisual-window-management` (E2E-GAP1-1) and `neovisual-diagnostic-nav` (E2E-GAP3-1)
+  queued unexecuted — against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

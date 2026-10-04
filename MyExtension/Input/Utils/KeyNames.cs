@@ -18,6 +18,8 @@ namespace MyExtension.Input
                 case Keys.Oemplus: return "+";       // 187
                 case Keys.OemMinus: return "-";      // 189
                 case Keys.OemPipe: return "|";       // 220 (0xDC); Shift+OemPipe types '|'
+                case Keys.OemCloseBrackets: return "]";   // 221 (0xDD); Shift+OemCloseBrackets types '}'
+                case Keys.OemOpenBrackets: return "[";    // 219 (0xDB); Shift+OemOpenBrackets types '{'
                 default: return key.ToString();
             }
         }

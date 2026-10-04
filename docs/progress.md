@@ -7,16 +7,17 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 1 — window-management leader bindings (`w` prefix) + case-sensitive leader combos — GREEN 2026-10-04 (feature lane, **unit-only, e2e deferred**; both unit suites GREEN; e2e gates queued E2E-GAP1-1..5)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 3 — diagnostics navigation (`]`/`[` prefix) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 39-scenario suite + both unit suites GREEN; 1 flaky recorded)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
-> **Where we left off:** the build loop RESUMED and **Gap 1 (window-management leader
-> bindings + case-sensitive leader combos) is GREEN 2026-10-04** — executed in the
-> **unit-only lane** (e2e deferred; gates queued as E2E-GAP1-1..5 in `docs/e2e-queue.md`)
-> per the plan in `docs/implementation_plan.md` (6 phases, 46 BP steps, gate-APPROVED).
-> The next item is **Gap 3 (diagnostics navigation)**. Nothing is in flight; the working
-> tree is clean after the GREEN commit.
+> **Where we left off:** the build loop RESUMED and **Gap 3 (diagnostics navigation,
+> `]`/`[` prefix) is GREEN 2026-10-04** — executed per the plan in
+> `docs/implementation_plan.md` (6 phases + a verify-time Phase 7, 33 BP steps,
+> gate-APPROVED). **E2E was RE-AUTHORIZED by the user mid-session** ("u dont need to defer
+> them anymore") — the full 39-scenario suite ran GREEN (1 flaky recorded) and the queued
+> gates E2E-GAP1-1..5 + E2E-GAP3-1..2 are discharged. The next item is **Gap 11 (git
+> bindings)**. Nothing is in flight; the working tree is clean after the GREEN commit.
 
 ### User instructions that override the default loop (2026-10-04)
 
@@ -34,6 +35,10 @@ reads at the start of every loop iteration.
      (or, where no hermetic seam exists, the `bugfix (no-seam)`-style stated reason + a
      queued e2e gate). VERIFY runs the affected unit project(s) only; the final gate runs
      **both unit projects** (no e2e).
+   - **SUPERSEDED (2026-10-04, later):** the user re-authorized e2e (*"u dont need to
+     defer them anymore"* / *"u also have permissions to run e2e now"*). From that point:
+     e2e runs normally (the default loop's e2e gates apply); the queued gates were
+     discharged at the Gap 3 VERIFY (full 39-scenario suite GREEN).
 2. **NEW PLANNING TACTIC (user instruction 2026-10-04).** Instead of one planner writing
    the whole detailed plan, use a **two-stage, fan-out** approach:
    - **Stage 1 — general plan/architecture:** one `implementation-planner` task produces a
@@ -76,6 +81,10 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ### Completed this session
 
+- **Gap 3 — diagnostics navigation (`]`/`[` prefix)** — GREEN 2026-10-04 (e2e ENABLED;
+  full 39-scenario suite + NeoVisual 190 / Telescope 172; 1 flaky recorded). Includes the
+  verify-time fixes for two Gap 1 defects surfaced by the first live e2e execution
+  (`w,|` Shift-chord abort; the editor-insert Ctrl+S save oracle). See the Done section.
 - **Gap 1 — window-management leader bindings (`w` prefix) + case-sensitive leader
   combos** — GREEN 2026-10-04 (unit-only lane, e2e deferred; gates queued E2E-GAP1-1..5).
   NeoVisual 177 / Telescope 172. See the Done section.
@@ -91,33 +100,52 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 ### Next session — first actions
 
 1. Re-read this handoff + the `[2026-10-03]`/`[2026-10-04]` Decisions entries.
-2. Start **Gap 3 (diagnostics navigation)** — leader bindings for next/prev error via the
-   native `Edit.NextError` / `Edit.PreviousError` commands (triage EXTEND/REUSE native
-   2026-09-28; small feature; plan in `docs/plans/backlog-plans.md`). **Unit-only lane;
-   queue the e2e gate; do NOT run e2e.**
-3. Continue down the run order.
+2. Start **Gap 11 (git)** — leader bindings for the native git diff/blame/log/history
+   commands (triage EXTEND/REUSE native 2026-10-03; small feature; plan in
+   `docs/plans/backlog-plans.md`; **verify the exact command names live** — e2e is
+   authorized). Then continue down the run order.
+3. The harness-hardening queue items (below) can batch with a future harness touch.
 
 ## Current state
 
-- **In progress:** (none — **Gap 1 reached GREEN 2026-10-04** in the unit-only lane; see the
+- **In progress:** (none — **Gap 3 reached GREEN 2026-10-04** with e2e enabled; see the
   Done section. Nothing is in flight.)
-- **Next up:** **Gap 3 (diagnostics navigation)** — leader bindings for next/prev error via
-  the native `Edit.NextError` / `Edit.PreviousError` commands (triage EXTEND/REUSE native
-  2026-09-28; small feature; plan in `docs/plans/backlog-plans.md`). **Unit-only lane; queue
-  the e2e gate; do NOT run e2e.** Then the rest
+- **Next up:** **Gap 11 (git)** — leader bindings for the native git diff/blame/log/history
+  commands (triage EXTEND/REUSE native 2026-10-03; small feature; plan in
+  `docs/plans/backlog-plans.md`; **verify the exact command names live** — e2e is
+  authorized again). Then the rest
   of the user-chosen **"smallest first"** run order (2026-10-03):
-  gap 3 → gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
+  gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
-  gaps 8-11 triaged 2026-10-03). Gap 1 (window-management leader bindings + case-sensitive
-  leader combos) is **DONE** (GREEN 2026-10-04, unit-only; e2e gates queued E2E-GAP1-1..5 —
-  see the Done section). Feature 6 (Solution Explorer search-box vim motions)
-  is **DONE** (GREEN 2026-10-04; see the Done section). The Telescope `fzf` finder
-  (item 5) is **DONE** (GREEN 2026-10-03; see the Done section). The Architecture
-  backlog is now **CLOSED** — F13 and F43 were verified already-fixed and annotated
-  FIXED (2026-10-02). See the Pending queue + User-requested features sections below.
+  gaps 8-11 triaged 2026-10-03). Gap 3 (diagnostics navigation, `]`/`[` prefix) is
+  **DONE** (GREEN 2026-10-04, e2e enabled; the backlog's `Edit.NextError`/
+  `Edit.PreviousError` assumption was FALSIFIED — shipped instead: native
+  `Edit.GotoNextIssueinFile`/`Edit.GotoPreviousIssueinFile` for `],d`/`[,d` + the BUILT
+  severity-filtered `],e`/`[,e`/`],w`/`[,w` navigator; see the Done section). Gap 1
+  (window-management leader bindings + case-sensitive leader combos) is **DONE** (GREEN
+  2026-10-04; its queued e2e gates ran GREEN at the Gap 3 VERIFY — see the Done section).
+  Feature 6 (Solution Explorer search-box vim motions) is **DONE** (GREEN 2026-10-04; see
+  the Done section). The Telescope `fzf` finder (item 5) is **DONE** (GREEN 2026-10-03;
+  see the Done section). The Architecture backlog is now **CLOSED** — F13 and F43 were
+  verified already-fixed and annotated FIXED (2026-10-02). See the Pending queue +
+  User-requested features sections below.
 
 ## Decisions (append-only; newest on top)
 
+- [2026-10-04] DECIDED: **E2E RE-AUTHORIZED (user instruction).** *"u dont need to defer
+  them anymore"* / *"u also have permissions to run e2e now"* — supersedes the earlier
+  same-day deferral. The default loop's e2e gates apply again; the queued gates
+  E2E-GAP1-1..5 + E2E-GAP3-1..2 were discharged at the Gap 3 VERIFY (full 39-scenario
+  suite GREEN, 1 flaky). — status: ACTIVE.
+- [2026-10-04] DECIDED: **Gap 3 scope (user instruction).** *"check if there is a way we
+  can have ]w [w (for warnings) and [e ]e (for errors) if not try to find a way to create
+  that functionality"* — native VS has NO severity-specific commands (researcher-verified;
+  the backlog's `Edit.NextError`/`Edit.PreviousError` assumption is NOT verifiable in
+  modern VS — FALSIFIED), so: `],d`/`[,d` bind the verified native
+  `command:Edit.GotoNextIssueinFile`/`command:Edit.GotoPreviousIssueinFile`, and
+  `],e`/`[,e`/`],w`/`[,w` are a BUILT severity-filtered navigator (pure
+  `DiagnosticNavigator` + `ErrorListGatherer` + `InputHandler.NavigateDiagnostic`; in-file,
+  NO wrap, no-op logged). — status: DONE (GREEN 2026-10-04).
 - [2026-10-04] DECIDED: **Gap 1 scope (user instruction).** Window-management leader
   bindings: **skip zoom, skip resize**, **REMOVE the `Space+W` save binding** (the user
   saves with Ctrl+S), `w` becomes the **window-management prefix** (`w,-` split below via
@@ -207,15 +235,14 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **172 passed**; `tests/NeoVisual.Tests`
-  **177 passed** (after Feature 6 + Gap 1 — window-management leader bindings +
-  case-sensitive leader combos, 2026-10-04).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **38 scenarios** (incl. `seed-reset`,
-  `seed-leak`, `neovisual-explorer-move-editor-focus`, `telescope-fzf`,
-  `explorer-searchbox-motions`, and the NEW `neovisual-window-management` — registered but
-  never executed, queued as E2E-GAP1-1). **No known-RED remains** —
+  **190 passed** (after Feature 6 + Gap 1 + Gap 3 — diagnostics navigation, 2026-10-04).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **39 scenarios** — ALL executed GREEN
+  (full-suite fresh boot, 2026-10-04; the formerly queued `neovisual-window-management`
+  and `neovisual-diagnostic-nav` both passed their first live runs;
+  `neovisual-window-management` is flaky-on-retry ×1 — pass-on-retry, harness
+  order-dependency, hardening queued). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the 37 executed scenarios are GREEN; the 38th
-  (`neovisual-window-management`) is queued (E2E-GAP1-1).
+  `telescope-implementation` 7c6569b) - the full 39-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -286,7 +313,7 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## In-progress
 
-- (none — Gap 1 reached GREEN 2026-10-04 in the unit-only lane and
+- (none — Gap 3 reached GREEN 2026-10-04 with e2e enabled and
   `explorer-open-searchbox` reached GREEN 2026-09-27; see the Done section. No
   known-RED remains.)
 
@@ -335,12 +362,52 @@ were known-backlog assertion bugs, not regressions).
 Top of the queue, in priority order:
 
 > **RUN ORDER (user-chosen 2026-10-03, "smallest first"):** ~~feature 6~~ (**DONE** GREEN
-> 2026-10-04) → ~~gap 1~~ (**DONE** GREEN 2026-10-04) → **gap 3 (next)** →
-> gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
+> 2026-10-04) → ~~gap 1~~ (**DONE** GREEN 2026-10-04) → ~~gap 3~~ (**DONE** GREEN
+> 2026-10-04) → **gap 11 (next)** →
+> feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
 > feature 9 → which-key last. Gaps 8/9/10 are **custom-view builds** (feature lane); gap 11
 > is **native bindings** (small); gap 8 is **folded into feature 8**. The which-key item is
 > built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
 > (LazyVim-style) AND an inline popup variant, so both can be tested.
+
+> **HARDENING QUEUE (harness, filed 2026-10-04 from the Gap 3 VERIFY — batch with a future
+> harness touch; none blocks the queue):**
+> a. **`neovisual-window-management` step-3 order-dependency (flaky ×1).** In the full-suite
+>    ordering, the `w,d` document-close poll (3s) once found the active document unchanged —
+>    the scenario asserts VS focus but never ESTABLISHES editor focus at start, and the
+>    focus-aware close routes on the (documented-stale) `IsToolWindow` flag. Pass-on-retry
+>    (run 157). Fix direction: establish editor focus (Enter-NormalContext + an editor-focus
+>    assert) at scenario start before step 3's poll.
+> b. **Cleanup `Save-AllDocuments` writes seeds AFTER the `seed-leak` check** — the guard's
+>    window excludes end-of-run cleanup writes (harmless across boots — each boot reseeds —
+>    but a coverage gap). Fix direction: run the leak check after the final save, or save
+>    before the check.
+> c. **`Ensure-SolutionExplorerOpen` vs an input-mode tool-window controller** — the StartPage
+>    (a text-input-type tool window) starts in input mode and silently swallows Space+E; the
+>    Gap 3 debug added `Enter-NormalContext` to `neovisual-window-management` step 4 only —
+>    the helper's other 11 callers share the latent state. Fix direction: hammer Escape (or
+>    exit-input) inside `Ensure-SolutionExplorerOpen` itself.
+> d. **Documented, no action:** the tab-group DTE commands (`Window.NewHorizontalTabGroup`/
+>    `NewVerticalTabGroup`) log `Command ... is not available` on a fresh instance — the
+>    scenarios' contract is the `leader-binding executed:` line, not command success
+>    (documented at `test-e2e.ps1:718-720`).
+
+> **FIRST ITEM (2026-10-04):** ~~the **Gap 3 — diagnostics navigation (`]`/`[` prefix)**
+> plan~~ — **DONE** (GREEN 2026-10-04, feature lane, **e2e ENABLED**; see the Done section).
+> Executed A → B → C → D → E in one pass (the mid-plan inert-state expectations honored);
+> the full-suite gate then surfaced two REAL defects in Gap 1's queued e2e gates (both
+> fail-twice) — fixed at verify-time debug (plan Phase 7, BP-H1..H3): the leader matcher now
+> treats modifier keys as transparent while a sequence is active (`w,|` fired for the first
+> time in 155 runs), and `neovisual-editor-insert`'s save step uses the DTE
+> `Save-AllDocuments` (the injected Ctrl+S chord is consumed by the focused editor's
+> key-processing chain). Re-VERIFY: full 39-scenario fresh-boot suite GREEN (1 flaky:
+> `neovisual-window-management` pass-on-retry — hardening item a above); NeoVisual 190 /
+> Telescope 172. The queued gates **E2E-GAP1-1..5 + E2E-GAP3-1..2 are discharged** (removed
+> from `docs/e2e-queue.md` per its run-GREEN rule). Scope shipped per the user (2026-10-04):
+> `],d`/`[,d` → native `command:Edit.GotoNextIssueinFile`/`command:Edit.GotoPreviousIssueinFile`
+> (the backlog's `Edit.NextError`/`Edit.PreviousError` assumption was FALSIFIED);
+> `],e`/`[,e`/`],w`/`[,w` → the BUILT severity-filtered navigator (in-file, NO wrap, no-op
+> logged).
 
 > **FIRST ITEM (2026-10-04):** ~~the **Gap 1 — window-management leader bindings (`w` prefix)
 > + case-sensitive leader combos** plan~~ — **DONE** (GREEN 2026-10-04, feature lane,
@@ -481,10 +548,13 @@ Top of the queue, in priority order:
 6. ~~**Gap 1: Window management**~~ — **DONE** (GREEN 2026-10-04, unit-only; see the Done
    section): `w,-` split below, `w,|` split right, `w,d` focus-aware `close-window`;
    zoom/resize skipped per the user; `Space+W` save removed; leader combos case-sensitive.
-   e2e gates queued (E2E-GAP1-1..5).
-7. **Gap 3: Diagnostics navigation** (LazyVim gap-analysis, triage=EXTEND/REUSE native
-   2026-09-28) — next/prev error bindings via `Edit.NextError` / `Edit.PreviousError`.
-   Small feature. Plan in `docs/plans/backlog-plans.md`.
+   e2e gates ran GREEN at the Gap 3 VERIFY (E2E-GAP1-1..5 discharged).
+7. ~~**Gap 3: Diagnostics navigation**~~ — **DONE** (GREEN 2026-10-04, e2e enabled; see the
+   Done section): `],d`/`[,d` → native `command:Edit.GotoNextIssueinFile`/
+   `command:Edit.GotoPreviousIssueinFile` (the `Edit.NextError`/`Edit.PreviousError`
+   assumption was FALSIFIED — not verifiable in modern VS); `],e`/`[,e`/`],w`/`[,w` → the
+   BUILT severity-filtered navigator (pure `DiagnosticNavigator` + `ErrorListGatherer`,
+   in-file, NO wrap, no-op logged). e2e gates ran GREEN (E2E-GAP3-1..2 discharged).
 8. **Gap 4: Recent files finder** (LazyVim gap-analysis, triage=BUILD 2026-09-28) —
    Telescope-style recent-files finder. Feature lane. Plan in `docs/plans/backlog-plans.md`.
 9. **Gap 5: LSP symbols finder** (LazyVim gap-analysis, triage=BUILD 2026-09-28) —
@@ -618,6 +688,54 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Gap 3: Diagnostics navigation (`]`/`[` prefix)** (Lane: `feature`, e2e
+  ENABLED; 6 delegations, 4 VS boots, 1 iteration). LazyVim-style diagnostics navigation:
+  `Space ],d`/`[,d` fire the native in-file squiggle commands
+  (`command:Edit.GotoNextIssueinFile` / `command:Edit.GotoPreviousIssueinFile` — the
+  backlog's `Edit.NextError`/`Edit.PreviousError` assumption was FALSIFIED, not verifiable
+  in modern VS); `Space ],e`/`[,e`/`],w`/`[,w` fire the NEW built-in actions
+  `next-error`/`prev-error`/`next-warning`/`prev-warning` — a severity-filtered navigator
+  BUILT because native VS has no severity-specific commands: pure `DiagnosticNavigator`
+  seam (+ `DiagnosticEntry` readonly struct; strict `>`/`<` comparisons — standing on a
+  diagnostic and pressing `]e` moves to the NEXT one; NO wrap; no internal sort) +
+  `ErrorListGatherer` (the CodeIssuesFinder-established DTE2 Error List API:
+  `FileName`/`Line`/`ErrorLevel`/`vsBuildErrorLevelHigh|Medium`; file+severity filter,
+  sort+dedup) + `InputHandler.NavigateDiagnostic(forward, severityError)` (exactly ONE
+  outcome line per call; opens via the shared `DteFileOpener.OpenAtLine`). `KeyNames` gained
+  `OemCloseBrackets`→`]` / `OemOpenBrackets`→`[`; six new leader bindings (30 → 36; no bare
+  `]`/`[` — the prefix trap); Actions registry 12 → 16. NEW diagnostic family (M-M7):
+  `[NeoVisual] diagnostic-nav direction=next|prev severity=error|warning target=<file>
+  line=<n>` / `no-op: no-active-document|no-entries|at-end` / `failed: {msg}`. New e2e
+  scenario `neovisual-diagnostic-nav` (39th) — PASSED its first live run. Unit tests
+  177 → 190 (8 `Run_DiagnosticNavigator_*` + `Run_Keybinding_DefaultFileHasDiagnosticNav` +
+  `Run_KeyNames_RoundTrip_DiagnosticNav` + registry 16 + `]`/`[` mappings).
+  **Verify-time iteration (1):** the full-suite gate surfaced two REAL Gap 1 defects
+  (both fail-twice) — fixed in plan Phase 7 (BP-H1..H3): (1) `LeaderSequenceMatcher` now
+  treats modifier keys as TRANSPARENT while a sequence is active (down+up; the Shift chord
+  for `|` was appended into the pending sequence → Abort → `w,|` could never fire — first
+  firing in run 155) + 3 matcher unit tests; (2) `neovisual-editor-insert`'s save step →
+  `Save-AllDocuments $vs.Id` (the injected Ctrl+S chord is consumed by the focused editor's
+  key-processing chain — VsVim in front of the shell dispatch); (3)
+  `neovisual-window-management` step 4 gains `Enter-NormalContext` (the StartPage's
+  input-mode controller swallowed the leader). Final gates: `dotnet build` 0 errors;
+  NeoVisual.Tests **190 passed, 0 failed**; Telescope.Tests **172 passed, 0 failed**
+  (staggered); full 39-scenario e2e suite GREEN on a fresh boot (run 156: 38/39 —
+  `neovisual-window-management` flaky-on-retry ×1, PASS in run 157; harness
+  order-dependency, hardening queued — see the Pending queue's HARDENING block); lints
+  PASS; `-SelfCheck` PASS; `-List` 39. The queued gates **E2E-GAP1-1..5 + E2E-GAP3-1..2
+  are discharged** (removed from `docs/e2e-queue.md` per its run-GREEN rule).
+  **Change summary:** created `MyExtension/Input/Utils/DiagnosticNavigator.cs`,
+  `MyExtension/Package/Utils/ErrorListGatherer.cs`; modified
+  `MyExtension/Input/Utils/KeyNames.cs`, `MyExtension/Input/Utils/LeaderSequenceMatcher.cs`
+  (BP-H1), `MyExtension/Input/InputHandler.cs`, `MyExtension/Package/Utils/Actions.cs`,
+  `MyExtension/Resources/default-keybindings.json`, `tools/harness/test-e2e.ps1` (BP-H3),
+  `tests/NeoVisual.Tests/Program.cs`, docs. **If this regresses, look first at
+  `ErrorListGatherer.Gather` (severity/file filter + sort/dedup — a wrong filter logs
+  `no-op: no-entries` on a populated Error List) and `InputHandler.NavigateDiagnostic`'s
+  outcome-line contract (exactly one line per call) — the two places the e2e assertions
+  depend on; for leader-sequence regressions, look at BP-H1's modifier-transparency block
+  (a wrong comparer/veto there aborts every chord-typed binding like `w,|`).**
 
 - **2026-10-04 — Gap 1: Window-management leader bindings (`w` prefix) + case-sensitive
   leader combos** (Lane: `feature`, unit-only, e2e deferred; 3 delegations, 0 VS boots,

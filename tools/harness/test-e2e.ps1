@@ -26,6 +26,7 @@
 #   neovisual-window-nav  Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
 #   neovisual-leader      Space w - + Space+E fire leader bindings (leader-binding executed: w,- / e)
 #   neovisual-window-management  Space w - / w | / w d split + close (leader-binding executed: w,*)
+#   neovisual-diagnostic-nav  Space ]d/[d native + ]e/[e/]w/[w severity nav (leader-binding + diagnostic-nav)
 #   neovisual-toolwindow  Solution Explorer: hjkl navigation + i/Esc input-mode (search box)
 #   neovisual-explorer-toggle  Space+E opens, then closes, then reopens Solution Explorer
 #   neovisual-explorer-open    l expands the fold, j/k navigate, Enter opens a file
@@ -760,11 +761,95 @@ Register-Scenario 'neovisual-window-management' {
     #    Ensure Solution Explorer is open first (toggle until the open log appears), then
     #    close it. The close is a native VS command with no extension window-state
     #    diagnostic; the leader-binding line is the contract here (E2E-GAP1-1).
+    #    Step 3 closed the only open document, so VS focuses a text-input tool-window surface
+    #    (e.g. the Start Page) whose controller STARTS in input mode (m23 type classification):
+    #    HandleKey returns false for every key before the leader matcher is reached, so the
+    #    Space+E toggle could never fire (run 154: four silent attempts). Enter-NormalContext's
+    #    Escapes exit that input mode first (toolwindow-exit-input), making the leader reachable.
+    Enter-NormalContext $vs
     Ensure-SolutionExplorerOpen $vs $logPath
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix)
     Send-Tap $script:VkD; Start-Sleep -Milliseconds 800                # d -> close-window
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,d" 'Space w d fired close-window (tool window focused)'
+}
+
+# --- neovisual-diagnostic-nav --------------------------------------------
+# Gap 3 diagnostics-navigation leader bindings (the `]`/`[` prefixes): Space ] d / Space [ d
+# fire the NATIVE in-file squiggle navigation (Edit.GotoNextIssueinFile /
+# Edit.GotoPreviousIssueinFile — pure command: bindings, no extension diagnostic beyond the
+# leader-binding line), and Space ] e / Space [ e / Space ] w / Space [ w fire the custom
+# severity-filtered navigator (next/prev error/warning). QUEUED (e2e deferred): registered but
+# the live gate runs later (E2E-GAP3-1). The leader-binding executed: lines are asserted ALWAYS
+# (they prove the six bindings fire); the diagnostic-nav outcome lines are asserted with
+# TOLERANT patterns (target form OR no-op form — see the comment at each assertion) because the
+# seeded scratch solution's Error List state is not deterministic across machines (build /
+# IntelliSense analysis timing): the OUTCOME (fired vs no-op + why) is the contract, never a
+# specific target line. Key injection: '[' / ']' go through Send-Text, whose punct table maps
+# them UNSHIFTED ('[' -> @(0xDB, $false), ']' -> @(0xDD, $false) — harness-common.ps1:119); the
+# matcher's non-letter path is shift-insensitive, so the sequence names are ],d / [,d / ],e /
+# [,e / ],w / [,w (no Shift+bracket chord is sent — '{'/'}' would build the same names and no
+# such binding exists).
+Register-Scenario 'neovisual-diagnostic-nav' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'diagnostics navigation bindings'
+
+    # 1. Space ] d -> native next in-file diagnostic (Edit.GotoNextIssueinFile).
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Text ']'; Start-Sleep -Milliseconds 150               # ] (prefix — 0xDD unshifted)
+    Send-Tap $script:VkD; Start-Sleep -Milliseconds 800        # d -> Edit.GotoNextIssueinFile
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],d" 'Space ] d fired next-diagnostic'
+
+    # 2. Space [ d -> native previous in-file diagnostic (Edit.GotoPreviousIssueinFile).
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Text '['; Start-Sleep -Milliseconds 150               # [ (prefix — 0xDB unshifted)
+    Send-Tap $script:VkD; Start-Sleep -Milliseconds 800        # d -> Edit.GotoPreviousIssueinFile
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,d" 'Space [ d fired prev-diagnostic'
+
+    # The native ],d/[,d commands must not have moved focus (a popped dialog would swallow the
+    # custom pairs below).
+    Assert-VsFocused $vs 'diagnostics navigation (custom pairs)'
+
+    # 3. Space ] e -> next ERROR (custom navigator). The diagnostic-nav outcome is asserted from
+    #    a pre-key snapshot (Assert-NewLogLineAfter): the no-op form carries NO direction/severity,
+    #    so a baseline-window search could be satisfied by the PREVIOUS pair's no-op line — the
+    #    snapshot attributes the outcome to THIS key press (R5 discipline). Tolerant pattern:
+    #    direction+severity are KEY-DERIVED (deterministic, D5 contract order) and pinned; the
+    #    outcome form (target vs no-op) is Error-List-state-dependent and accepted either way.
+    #    The 'failed:' variant is deliberately NOT accepted — a gather failure on a healthy
+    #    instance is a defect the live gate must surface (M15 proves it cannot crash the hook).
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Text ']'; Start-Sleep -Milliseconds 150               # ]
+    $preNav = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkE; Start-Sleep -Milliseconds 800        # e -> next-error
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],e" 'Space ] e fired next-error'
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=next severity=error |no-op: )" '],e logged a diagnostic-nav outcome (target or no-op)'
+
+    # 4. Space [ e -> previous ERROR.
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Text '['; Start-Sleep -Milliseconds 150               # [
+    $preNav = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkE; Start-Sleep -Milliseconds 800        # e -> prev-error
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,e" 'Space [ e fired prev-error'
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=prev severity=error |no-op: )" '[,e logged a diagnostic-nav outcome (target or no-op)'
+
+    # 5. Space ] w -> next WARNING.
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Text ']'; Start-Sleep -Milliseconds 150               # ]
+    $preNav = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> next-warning
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],w" 'Space ] w fired next-warning'
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=next severity=warning |no-op: )" '],w logged a diagnostic-nav outcome (target or no-op)'
+
+    # 6. Space [ w -> previous WARNING.
+    Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
+    Send-Text '['; Start-Sleep -Milliseconds 150               # [
+    $preNav = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> prev-warning
+    Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,w" 'Space [ w fired prev-warning'
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=prev severity=warning |no-op: )" '[,w logged a diagnostic-nav outcome (target or no-op)'
 }
 
 # --- neovisual-toolwindow ------------------------------------------------
@@ -1198,18 +1283,22 @@ Register-Scenario 'neovisual-editor-insert' {
     Start-Sleep -Milliseconds 300
 
     # Exit insert mode and save the buffer; the file content is the ground-truth proof the text
-    # reached the editor (a swallowed Space/hjkl/i would have made the marker partial). The
-    # save is VS's native Ctrl+S (File.SaveSelectedItems) — the extension passes it through
-    # unbound (the `w` save binding was removed in Gap 1; `w` is now a window-management
-    # prefix), so the leader-binding assertion is DROPPED: the file-content check below is
-    # the only oracle.
+    # reached the editor (a swallowed Space/hjkl/i would have made the marker partial). The save
+    # goes through the harness's DTE ROT path (Save-AllDocuments -> dte-command.ps1 ->
+    # File.SaveAll — the same call the end-of-run cleanup uses): an INJECTED Ctrl+S chord is
+    # consumed inside VS by the focused editor's key-processing chain (VsVim's key processor
+    # sits in front of the shell shortcut dispatch) and never reaches File.SaveSelectedItems —
+    # runs 152/153 left the buffer dirty until the cleanup SaveAll flushed it. The extension
+    # passes Ctrl+S through unbound (the `w` save binding was removed in Gap 1; `w` is now a
+    # window-management prefix), so the leader-binding assertion stays DROPPED: the file-content
+    # check below is the only oracle.
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 300         # insert -> normal
     Assert-NewLogLine $logPath "$($script:PfxNeo)vim-mode=Normal" 'Esc switched the editor back to normal mode'
-    Send-Ctrl 0x53; Start-Sleep -Milliseconds 1000                   # Ctrl+S -> File.SaveSelectedItems (VS native)
+    Save-AllDocuments $vs.Id                                         # DTE File.SaveAll (bypasses the key pipeline)
 
     $probeDir = Join-Path (Join-Path $env:TEMP 'telescope_scratch') 'Probe'
     $file = Join-Path $probeDir 'Beta.cs'
-    # This scenario INTENTIONALLY writes Beta.cs (the Ctrl+S save above). N53: record the observed
+    # This scenario INTENTIONALLY writes Beta.cs (the DTE save above). N53: record the observed
     # post-save content as the expected RESULT ONLY on success — a FAILED marker assertion must NOT
     # record the wrong content as expected (that would mask the failure at seed-leak). On failure the
     # expected copy stays the bootstrap content, so seed-leak still catches the unvalidated write.

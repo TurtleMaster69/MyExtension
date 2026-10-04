@@ -26,6 +26,10 @@ namespace MyExtension.Package
                 ["navigate-down"] = (h, _) => () => h.Navigate(Direction.Down),
                 ["toggle-solution-explorer"] = (h, _) => () => h.ToggleSolutionExplorer(),
                 ["close-window"] = (h, _) => () => h.CloseWindow(),
+                ["next-error"] = (h, _) => () => h.NavigateDiagnostic(forward: true, severityError: true),
+                ["prev-error"] = (h, _) => () => h.NavigateDiagnostic(forward: false, severityError: true),
+                ["next-warning"] = (h, _) => () => h.NavigateDiagnostic(forward: true, severityError: false),
+                ["prev-warning"] = (h, _) => () => h.NavigateDiagnostic(forward: false, severityError: false),
             };
 
             // The telescope entries are derived from TelescopeLauncher.FinderNames (the single

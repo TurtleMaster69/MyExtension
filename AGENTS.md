@@ -108,12 +108,13 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   leader/shortcut matchers (`LeaderSequenceMatcher`, `SimpleShortcutMatcher`),
   the vim-mode classifier (`VimModeClassifier` + `IVimModeSource`), the
    init orchestrator (`InitSteps`), the navigation snapshot (`NavigationSnapshot`),
-   the focus-keeper schedule (`FocusKeeperSchedule`), and the close-window seam
-   (`CloseWindowCommand`).
-  `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
-  `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
-  `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-  run subsets. Currently **177 tests, all passing**.
+   the focus-keeper schedule (`FocusKeeperSchedule`), the close-window seam
+   (`CloseWindowCommand`), and the severity-filtered diagnostics navigator
+   (`DiagnosticNavigator`).
+   `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
+   `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
+   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
+   run subsets. Currently **187 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -129,14 +130,15 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 38 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 39 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (38 registered — 37 GREEN with no known-RED; `neovisual-window-management` is
-registered but never executed, queued as E2E-GAP1-1; `explorer-open-searchbox` was GREened
+Scenarios (39 registered — 37 GREEN with no known-RED; `neovisual-window-management` (E2E-GAP1-1)
+and `neovisual-diagnostic-nav` (E2E-GAP3-1) are registered but never executed;
+`explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -164,6 +166,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `neovisual-window-nav` — Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
 - `neovisual-leader` — Space+E and Space w - fire leader bindings (lowercase sequences; a lone Space+W consumes and waits — no binding fires)
 - `neovisual-window-management` — Space w -/w |/w d fire the `w`-prefix bindings (split below/right, focus-aware close; registered, never executed — queued as E2E-GAP1-1)
+- `neovisual-diagnostic-nav` — Space ]/[ d/e/w fire the six diagnostic-nav bindings (native `],d`/`[,d` + severity-filtered `],e`/`[,e`/`],w`/`[,w`; registered, never executed — queued as E2E-GAP3-1)
 - `neovisual-toolwindow` — Solution Explorer hjkl navigation + i/Esc input-mode
 - `neovisual-explorer-toggle` — Space+E opens/closes Solution Explorer (toggle)
 - `neovisual-explorer-open` — l expands fold, j/k navigate, Enter opens a file
@@ -206,6 +209,10 @@ Key facts that make this reliable:
 - Diagnostics added so the harness can assert each feature: `[NeoVisual] navigate direction=...`,
   `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>` (m47 — outcome
   diagnostic: the navigation fired vs was a no-op and why),
+  `[NeoVisual] diagnostic-nav direction=next|prev severity=error|warning target=<file> line=<n>` /
+  `[NeoVisual] diagnostic-nav no-op: <reason>` (Gap 3 — the severity-filtered diagnostics-nav
+  outcome diagnostic: fired vs no-op and why) / `[NeoVisual] diagnostic-nav failed: {msg}`
+  (a gather/open failure is logged and swallowed — never crashes the hook),
   `[NeoVisual] leader-binding executed: ...`, `[NeoVisual] shortcut-binding executed: ...`,
   `[NeoVisual] toolwindow-move key=... -> arrow vk=...` (bare contract — the arrow-fallback log was
   aligned to it, n10), `[NeoVisual] toolwindow-move failed: {msg}`
@@ -341,6 +348,14 @@ Done and tested (live + unit):
   `implementations gathered count=...` (gather summary) and
   `opened implementation: file=... line=...`. All Roslyn async calls run inside
   `ThreadHelper.JoinableTaskFactory.Run`. — `telescope-implementation` live test passes.
+- Diagnostics navigation (`]`/`[` prefix): `],d`/`[,d` run the native in-file squiggle
+  commands (`command:Edit.GotoNextIssueinFile` / `command:Edit.GotoPreviousIssueinFile`);
+  `],e`/`[,e` and `],w`/`[,w` run the new `next-error`/`prev-error`/`next-warning`/
+  `prev-warning` built-in actions — the pure `DiagnosticNavigator` seam over the Error List
+  entries of the ACTIVE document (severity-filtered, in-file, NO wrap; a no-op at the end or
+  with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
+  (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
+  `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
 
 ## Hard requirements that are easy to violate
 
@@ -368,7 +383,8 @@ Done and tested (live + unit):
   defaults in `MyExtension/Resources/default-keybindings.json` (embedded resource). Action
   names are resolved in `InputHandler.ResolveAction` (`navigate-left` etc.);
   `command:<VsCommandName>` runs any VS command by name (this is how the
-  LazyVim-style leader bindings like `w,-`→`Window.NewHorizontalTabGroup` are wired).
+  LazyVim-style leader bindings like `w,-`→`Window.NewHorizontalTabGroup` and
+  `],d`→`command:Edit.GotoNextIssueinFile` are wired).
   Leader sequences are **case-sensitive** (a capital letter in the config means
   Shift+letter; `s,g` ≠ `s,G`); simple shortcuts stay case-insensitive. To add a
   *new built-in action*, add a case there and a line in `default-keybindings.json`.

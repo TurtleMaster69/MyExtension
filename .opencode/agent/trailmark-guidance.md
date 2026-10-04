@@ -33,6 +33,16 @@ lookups where a graph adds nothing. Never silently fall back to manual code read
   `uv tool install trailmark` if missing).
 - Run Python snippets via `uv run --with trailmark python -` (a `uv tool` env is not
   importable).
+- **Build the engine ONLY via the canonical entry point:**
+  `engine = QueryEngine.from_directory(r"<repoRoot>", language="c_sharp")` — or, if a
+  raw `parse_directory` graph is already in hand, `engine = QueryEngine.from_graph(graph)`
+  (both wrap it in the `GraphStore` the query methods require; `from_graph` also runs
+  `ensure_proxy_nodes`). **NEVER `engine = QueryEngine(graph)`:** the ctor skips type
+  validation, the raw `CodeGraph` silently becomes the store, and every store-reaching
+  method (`preanalysis`/`summary`/`complexity_hotspots`/`subgraph`/`to_json`/`callers_of`)
+  raises `AttributeError: 'CodeGraph' object has no attribute '_graph' ...`. (Root cause
+  of the 2026-09-29, 2026-10-02, and 2026-10-04 failures — see `.opencode/AGENT-FAILURES.md`
+  and the command log's 2026-10-04 CORRECTION.)
 - Always run `engine.preanalysis()` before consuming blast-radius / taint /
   privilege-boundary / subgraph data.
 

@@ -26,6 +26,7 @@ permission:
     "hub-reviewer": allow
     "skill-researcher": allow
     "skill-verifier": allow
+    "trailmark-recon": allow
 ---
 
 # Hub-Creator — plan and create hub orchestrator agents for a target project

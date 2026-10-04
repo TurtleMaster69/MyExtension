@@ -82,8 +82,12 @@ further agents — never attempt to.
 1. Boot Trailmark per the canonical guidance at `.opencode/agent/trailmark-guidance.md`
    (`trailmark --version`; install with `uv tool install trailmark` if missing; run
    snippets via `uv run --with trailmark python -`).
-2. Parse the repo with `language="c_sharp"` — never the CLI default, because `python`
-   silently yields an empty graph on this repo — then call `engine.preanalysis()`.
+2. Build the engine with `QueryEngine.from_directory(<repoRoot>, language="c_sharp")`
+   (or `QueryEngine.from_graph(graph)` on a raw `parse_directory` graph) — never the
+   CLI-default `python` (it silently yields an empty graph on this repo) and NEVER
+   `QueryEngine(<raw graph>)` (the ctor skips type validation; the raw CodeGraph
+   silently becomes the store and every query method AttributeErrors — see the Boot
+   section of `.opencode/agent/trailmark-guidance.md`) — then call `engine.preanalysis()`.
 3. Query the baseline below, plus the slice members when a focus is given.
 4. Emit the digest in the format below.
 

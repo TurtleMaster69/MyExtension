@@ -83,7 +83,7 @@
 | `tail ...` (bash) | `tail` is NOT installed on this machine (Unix tool) | other | `Select-Object -Last N` (pwsh) | no |
 | `pwsh -Command "<script with $vars>"` (double-quoted) | the OUTER shell interpolates the inner script's `$vars`/`$_` before the inner pwsh sees them → the inner script arrives mangled → `ParserError` | misuse | single-quote the `-Command` argument (`pwsh -Command '...'`) so the outer shell does not interpolate; or write a temp `.ps1` and `-File` it | no |
 | `pwsh -Command '... [ref]$null ...'` (ParseFile tokens ref) | `InvalidOperation: [ref] cannot be applied to a variable that does not exist` — `[ref]$null` is invalid; the ParseFile tokens ref needs a real variable | misuse | use the harness's built-in `pwsh tools/harness/test-e2e.ps1 -SelfCheck` (parse + helper invariants + Assert-SeedConsistent), or assign `$tokens = $null` first | no |
-| `engine.summary()` / `complexity_hotspots()` / `subgraph()` / `preanalysis()` (trailmark 0.5.0 QueryEngine) | AttributeError on this install (`_graph` / `nodes_by_complexity` / `subgraph` missing from `CodeGraph`) | other | `parse_directory` + `len(graph.nodes)`/`len(graph.edges)` for counts; `callers_of` for callers; LSP for symbol-level; upgrade trailmark for the rest | no |
+| `QueryEngine(<raw CodeGraph>)` — e.g. `engine = QueryEngine(parse_directory(...))` | the ctor stores the raw graph AS the store with no type check; every store-reaching method then AttributeErrors (`_graph` / `nodes_by_complexity` / `subgraph` / `find_node_id` missing from `CodeGraph`) | misuse | `QueryEngine.from_directory(dir, language="c_sharp")` or `QueryEngine.from_graph(graph)` (both wrap in `GraphStore`); 0.5.0 is the LATEST release — no upgrade exists or is needed; `preanalysis`/`summary`/`complexity_hotspots`/`subgraph`/`to_json` then all work | no |
 
 ## Correct tool per task (avoid wrong-tool waste)
 
@@ -101,6 +101,9 @@
 | run live e2e tests | `pwsh tools/harness/test-e2e.ps1` | boots VS Experimental; use `-Tests <subset>` during a loop |
 | doc-reference lint | `pwsh tools/lint/check-doc-refs.ps1` | ~2s, no VS; unresolved backticked refs are blocking findings |
 | web research | `webfetch` tool, or delegate to `skill-researcher` | bash curl/wget prompts and is the wrong tool |
+| inventory/search under `.opencode/` (dot-directory) | `read` tool (directory) or `grep` tool; `rg --no-ignore` for content | the `glob` tool does not traverse dot-directories — returns "No files found" for existing `.opencode/...` paths (verified 2026-10-04: `glob .opencode/agent/*.md` → no files; `grep` on the same dir works) |
+| search ONE known file | `grep` tool with `path` = the PARENT DIRECTORY + `include` = the file name | the `grep` tool's `path` is directory-scoped; a file path silently falls back to the parent and returns OTHER files' matches (verified 2026-10-04: `path=harness-common.ps1` bled matches from `test-e2e.ps1` + `iterate-telescope.ps1`) |
+| disprove a suspected LSP false negative (newly created file, or `write`-tool diagnostics on untouched files) | `dotnet build` — 0 errors proves the symbol exists | the Roslyn index lags new files until the next build, and the `write` tool's LSP pass reports stale errors on files it did not touch (2026-10-04: build-agent + implementation-planner entries) |
 
 ## Failure log (append-only; newest at bottom)
 
@@ -164,7 +167,7 @@
 - CMD: `uv run --with trailmark python -` — `from trailmark.query import QueryEngine` + `engine.summary()` / `engine.complexity_hotspots(threshold=8)` / `engine.subgraph("high_blast_radius")` (correct import per the 2026-10-02 CORRECTION; parse_directory succeeds, 0.4s)
 - RESULT: `summary()` → `AttributeError: 'CodeGraph' object has no attribute '_graph'`; `complexity_hotspots()` → `no attribute 'nodes_by_complexity'`; `subgraph("high_blast_radius")` → `no attribute 'subgraph'` — trailmark 0.5.0's QueryEngine query surface is broken beyond the already-logged preanalysis/to_json. Raw `graph.nodes`/`graph.edges` (len 2037/4961) and `callers_of` (per 10-02 correction) still work.
 - REASON: other — installed trailmark 0.5.0 QueryEngine internally accesses `store._graph`/`nodes_by_complexity`/`subgraph`, absent from `CodeGraph`
-- ALTERNATIVE: use `parse_directory(...)` + `len(graph.nodes)`/`len(graph.edges)` for counts; `callers_of` for callers; LSP for everything symbol-level; complexity/blast-radius/subgraph answers unavailable until trailmark is upgraded
+- ALTERNATIVE: **SUPERSEDED 2026-10-04 — see the hub-creator CORRECTION entry at the bottom (constructor misuse, not a version issue; nothing is "unavailable").** Original: use `parse_directory(...)` + `len(graph.nodes)`/`len(graph.edges)` for counts; `callers_of` for callers; LSP for everything symbol-level; complexity/blast-radius/subgraph answers unavailable until trailmark is upgraded
 - NEEDS-PERMISSION: no — a trailmark version bump (`uv tool install trailmark` / pinned `--with trailmark==<newer>`) would likely fix it
 - AGENT: trailmark-recon
 - DATE: 2026-10-04
@@ -260,4 +263,67 @@
 - ALTERNATIVE: disprove with the compiler (`dotnet build` 0 errors), not the LSP index; ignore write-tool LSP diagnostics on untouched files when the baseline is GREEN
 - NEEDS-PERMISSION: no
 - AGENT: implementation-planner
+- DATE: 2026-10-04
+
+### 2026-10-04 — skill-researcher (trailmark 0.5.0 QueryEngine API research)
+- CMD: `uv run --with trailmark python -c '...'` (runtime confirmation: `from_directory` → `summary`/`complexity_hotspots`/`preanalysis`/`subgraph`/`to_json` on this repo)
+- RESULT: permission denied — this agent's bash policy is `{"*": deny, "rg *": allow}`
+- REASON: permission
+- ALTERNATIVE: GitHub v0.5.0-tag source (raw.githubusercontent.com/trailofbits/trailmark/v0.5.0/src/trailmark/query/api.py) — conclusive without a runtime run: the five methods DO work on 0.5.0; the failing sessions passed the raw `parse_directory` CodeGraph to `QueryEngine(...)`. Correct construction: `QueryEngine.from_directory(...)` or `QueryEngine.from_graph(graph)`. A user-run snippet would upgrade source-proof to runtime-proof.
+- NEEDS-PERMISSION: yes — allow `bash uv *` (i.e. `uv run --with trailmark python *`) to enable runtime verification
+- AGENT: skill-researcher
+- DATE: 2026-10-04
+
+### 2026-10-04 — skill-researcher (trailmark installed-source lookup)
+- CMD: `rg --files -g 'trailmark/query/api.py' -g 'trailmark/storage/graph_store.py' C:\Users\lojze\AppData\Local\uv\cache`
+- RESULT: no matches — the installed wheel is not unpacked as loose source under the default uv cache root (likely stored as `.whl` zips or under a different env layout); further local search skipped per bounded-research protocol
+- REASON: other
+- ALTERNATIVE: none needed — the GitHub v0.5.0 tag source was used instead (PyPI 0.5.0 was built from the same verified release commit 6ee0f22)
+- NEEDS-PERMISSION: no
+- AGENT: skill-researcher
+- DATE: 2026-10-04
+
+### 2026-10-04 — hub-creator — CORRECTION (root cause) to the 2026-10-02 arch-auditor + 2026-10-04 trailmark-recon trailmark entries
+- CMD: (no new command — source analysis) GitHub trailmark v0.5.0 tag: `src/trailmark/query/api.py`, `src/trailmark/storage/graph_store.py`, `src/trailmark/analysis/preanalysis.py` (fetched by skill-researcher; PyPI 0.5.0 was built from this exact release commit 6ee0f22)
+- RESULT: the five "broken" methods are NOT broken and 0.5.0 is the LATEST release (2026-07-17; zero post-0.5.0 commits touch `trailmark/query` — no upgrade exists or is needed). Root cause of every logged AttributeError: the engine was constructed as `QueryEngine(<raw CodeGraph from parse_directory>)`. `QueryEngine.__init__(store)` performs NO type validation, so the raw graph became `_store`; every method reaching `self._store._graph` / `nodes_by_complexity` / `subgraph` / `find_node_id` then raised exactly the observed errors. This is the SAME root cause `.opencode/AGENT-FAILURES.md` fixed on 2026-09-29 ("the canonical entry point is `QueryEngine.from_directory`") — it regressed because this index's Known-bad row still recommended "upgrade trailmark" (now corrected above).
+- REASON: misuse — wrong engine construction, not a broken wheel
+- ALTERNATIVE: build the engine ONLY via `QueryEngine.from_directory(r"<repoRoot>", language="c_sharp")` or `QueryEngine.from_graph(graph)` (both wrap the graph in the `GraphStore` the query methods require; `from_graph` also runs `ensure_proxy_nodes`, matching this proxy-heavy graph). Then `preanalysis()` → `summary()` / `complexity_hotspots(threshold=8)` / `subgraph("high_blast_radius")` / `to_json()` all work on 0.5.0. **Runtime-proof: CONFIRMED 2026-10-04 (user-run snippet, exact form in the log's chat record): `trailmark 0.5.0`; `summary()` → `{'total_nodes': 2261, 'functions': 949, 'classes': 126, 'proxies': 898, 'call_edges': 4350, 'dependencies': ['Microsoft', 'System', 'MyExtension', 'Telescope', 'EnvDTE', 'EnvDTE80', 'TestHarness'], 'entrypoints': 0}`; `complexity_hotspots(threshold=8)` → 24; `subgraph("high_blast_radius")` → 89; `to_json()` → 3758925 bytes; `preanalysis()` silent-success. `entrypoints: 0` matches AGENTS.md trap 3 (VSIX — no detected entrypoints): signal, not failure.**
+- NEEDS-PERMISSION: no (the fix itself is a snippet change); runtime-proof needs `bash uv *` for a spawnable agent or a user-run snippet
+- AGENT: hub-creator
+- DATE: 2026-10-04
+
+### 2026-10-04 — hub-creator (runtime-verification attempt denied)
+- CMD: `trailmark --version` + `uv run --with trailmark python -c '...'` (version check + runtime confirmation of the corrected construction)
+- RESULT: permission denied — hub-creator's bash policy is `{"*": deny, "rg *": allow}` (same class as skill-researcher's 2026-10-04 entry above)
+- REASON: permission
+- ALTERNATIVE: delegate the runtime proof to a uv-capable agent (trailmark-recon — requires a `task: "trailmark-recon": allow` rule in hub-creator's permission block + restart), or the user runs the snippet from the CORRECTION entry above
+- NEEDS-PERMISSION: yes — `bash "uv *"` / `"trailmark *"` allow for hub-creator, OR `task: "trailmark-recon": allow`
+- AGENT: hub-creator
+- DATE: 2026-10-04
+
+### 2026-10-04 — docs-reviewer (Feature 7 re-review)
+- CMD: `grep` tool, path = session dir (plans/ + artifacts/), include `*.md`, pattern `239|\b230\b|\+40|199`
+- RESULT: 8 matches — ONLY plans/*.md; the two artifacts (feature7-section-a.md ~1720 lines, -b.md ~684 lines) were silently SKIPPED despite containing 7 matches (proven by a re-run scoped to the artifacts dir) — no error surfaced
+- REASON: other — the grep tool's directory-scoped search silently omits large files; same silent-wrong-result class as the 2026-10-04 implementation-planner entry
+- ALTERNATIVE: scope `path` to the subdirectory holding the targets (verified working: artifacts dir + include `feature7-*.md` returned all 7 matches); treat a too-quiet directory-scoped grep as SUSPECT and re-run scoped
+- NEEDS-PERMISSION: no
+- AGENT: docs-reviewer
+- DATE: 2026-10-04
+
+### 2026-10-04 — e2e-test-builder (columns-ux compile-RED, test-authoring)
+- CMD: `dotnet build tests/Telescope.Tests/Telescope.Tests.csproj` with NEW tests referencing a PLANNED missing type (`ResultColumnTruncation`) in method SIGNATURES (a parameter type + a default parameter value)
+- RESULT: csc reported ONLY the 3 signature-level errors (CS0246 param types + CS0103 default value) and ABORTED before method-body binding — the body errors (CS0103 for the ~50 expression-position type references, CS1061 missing members, CS1729 ctor arity, CS1501 overload arity) never surfaced, so the RED error list looked 20x thinner than the plan's pinned expectation
+- REASON: misuse — Roslyn compiler phases: ANY error in the declaration phase (unknown type in a signature: param/return/base type, or an error-typed default parameter value, which cannot be encoded as a metadata constant) makes csc skip method-body binding entirely
+- ALTERNATIVE: in compile-RED tests, keep every missing-type reference OUT of signatures — body positions only (local vars, call arguments, expression member accesses). Where a helper NEEDS the missing type as a parameter, type it `object` (boxed-enum equality via `Assert.Equal<object>`) or drop the parameter and hard-code the kind in the body. Verified: signatures clean → the full 63-error list surfaces (CS0103/CS1729/CS1061/CS1501)
+- NEEDS-PERMISSION: no
+- AGENT: e2e-test-builder
+- DATE: 2026-10-04
+
+### 2026-10-04 — build-agent (columns-ux BUILD) — `-Docs` array binding + `-File` arg semantics
+- CMD: `pwsh tools/lint/check-doc-refs.ps1 -Docs docs/spec.md,.opencode/skills/vs-extension-dev/SKILL.md` (comma form via the bash tool); then `pwsh -File <temp>.ps1` whose body was `pwsh -NoProfile -File tools/lint/check-doc-refs.ps1 -Docs @('a','b')`
+- RESULT: (1) the comma form arrived as ONE string → "doc file not found (skipped)" for the joined path; (2) the `-File` nested call failed with "A positional parameter cannot be found" — `pwsh -File` passes arguments as LITERAL strings (no expression evaluation), so `@('a','b')` is never an array
+- REASON: misuse — same outer-shell/quoting class as the known-bad `pwsh -Command "..."` row, plus the `-File` literal-args nuance
+- ALTERNATIVE: inside a temp `.ps1`, invoke with the CALL OPERATOR, not `-File`: `& '.\tools\lint\check-doc-refs.ps1' -Docs @('a','b')` — verified working (2 docs, 0 unresolved)
+- NEEDS-PERMISSION: no
+- AGENT: build-agent
 - DATE: 2026-10-04

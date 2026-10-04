@@ -225,3 +225,39 @@
 - NEEDS-PERMISSION: no
 - AGENT: docs-reviewer
 - DATE: 2026-10-04
+
+### 2026-10-04 — skill-researcher (Gap 11 git-bindings research)
+- OPERATION: `grep` tool (ripgrep-backed) on a saved webfetch tool-output file (`C:\Users\lojze\.local\share\opencode\tool-output\tool_*.md` — single giant line)
+- RESULT: `Ripgrep JSON record exceeded 65536 bytes` — the file's lines exceed ripgrep's max record size, so the grep tool errors instead of matching
+- REASON: other — long-line file (minified/single-line webfetch dump), not a tool bug
+- ALTERNATIVE: bash `rg -o -N --max-columns 120 '<pattern>' <file>` — verified working (prints only matches, truncates long lines)
+- NEEDS-PERMISSION: no
+- AGENT: skill-researcher
+- DATE: 2026-10-04
+
+### 2026-10-04 — build-agent (results-columns docs resume)
+- CMD: multi-line inline PowerShell (function definition + calls) passed as one bash-tool command
+- RESULT: `ParserError: Unexpected token` — the multi-line script was mangled (same class as the known-bad `pwsh -Command "..."` row: the outer shell joins/interpolates before the inner pwsh parses)
+- REASON: misuse
+- ALTERNATIVE: write a temp `.ps1` and run `pwsh -NoProfile -File <temp>.ps1` — verified working
+- NEEDS-PERMISSION: no
+- AGENT: build-agent
+- DATE: 2026-10-04
+
+### 2026-10-04 — build-agent (results-columns docs resume)
+- CMD: added a bare-leaf entry `'SyntaxHighlighter.cs'` to `$intentionallyAbsent` in check-doc-refs.ps1 to silence a deleted-file ref
+- RESULT: lint still FAILed — `Test-PathRef` compares the FULL cited path (`$intentionallyAbsent -contains $p` where `$p` is the doc's trimmed path, e.g. `Overlay/Utils/SyntaxHighlighter.cs`), so a bare-leaf entry never matches a directory-prefixed citation
+- REASON: misuse
+- ALTERNATIVE: add the entry in the EXACT form the doc cites it (the archives cite `Overlay/Utils/SyntaxHighlighter.cs` without the `Telescope/` prefix) — verified working; note the M23 `LinqExtensionMethods.cs` entry only works because that doc cites it as a bare filename
+- NEEDS-PERMISSION: no
+- AGENT: build-agent
+- DATE: 2026-10-04
+
+### 2026-10-04 — implementation-planner (preview-buffer artifact)
+- OPERATION: `write` tool (a Markdown artifact under `.opencode/workspaces/.../artifacts/`) — its automatic LSP pass then reported CS0246-style errors in UNTOUCHED files (`InputHandler.cs` CloseWindowCommand/ErrorListGatherer/DiagnosticNavigator, `TelescopeOverlay.cs` ResultColumn/ColumnVisibilityModel/IPreviewEditor, `TelescopeController.cs`/`MyExtensionPackage.cs` IPreviewEditor, `tests/NeoVisual.Tests/Program.cs`)
+- RESULT: stale-index false errors — every named type EXISTS in the repo (IPreviewEditor.cs, DiagnosticNavigator, ResultColumn read directly; the 2026-10-04 baseline is all-GREEN per docs/progress.md) and no source file was modified (a .md artifact only)
+- REASON: server — same stale-index class as the 2026-10-04 build-agent entry, surfaced via the write tool's LSP side-channel on files that were not touched
+- ALTERNATIVE: disprove with the compiler (`dotnet build` 0 errors), not the LSP index; ignore write-tool LSP diagnostics on untouched files when the baseline is GREEN
+- NEEDS-PERMISSION: no
+- AGENT: implementation-planner
+- DATE: 2026-10-04

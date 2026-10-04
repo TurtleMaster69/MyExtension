@@ -7,7 +7,7 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Gap 3 — diagnostics navigation (`]`/`[` prefix) — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 39-scenario suite + both unit suites GREEN; 1 flaky recorded)
+> **Status:** ACTIVE · **Updated:** 2026-10-04 · **Last item:** Telescope results columns + preview-as-editor — GREEN 2026-10-04 (feature lane, **e2e ENABLED**; full 40-scenario suite + both unit suites GREEN; 1 flaky recorded; the preview-classifier limitation documented, fix owned by the planning hub)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -108,12 +108,15 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **Gap 3 reached GREEN 2026-10-04** with e2e enabled; see the
-  Done section. Nothing is in flight.)
-- **Next up:** **Gap 11 (git)** — leader bindings for the native git diff/blame/log/history
-  commands (triage EXTEND/REUSE native 2026-10-03; small feature; plan in
-  `docs/plans/backlog-plans.md`; **verify the exact command names live** — e2e is
-  authorized again). Then the rest
+- **In progress:** (none — **Telescope results columns + preview-as-editor reached GREEN
+  2026-10-04** with e2e enabled; see the Done section. Nothing is in flight.)
+- **Next up:** **the goto commands plan** (`gd`/`gI`/`gr` →
+  `MyExtension.GotoDefinition/GotoReferences/GotoImplementation`; 1 hit → direct, multiple →
+  the overlay; a new DefinitionFinder; the user maps the keys in VsVim; gate-APPROVED round 2;
+  plan at
+  `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-124602/plans/plan-goto.md`
+  — written to `docs/implementation_plan.md` when it becomes the first item; **e2e ENABLED**).
+  Then the rest
   of the user-chosen **"smallest first"** run order (2026-10-03):
   gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
@@ -234,15 +237,16 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **172 passed**; `tests/NeoVisual.Tests`
-  **190 passed** (after Feature 6 + Gap 1 + Gap 3 — diagnostics navigation, 2026-10-04).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **39 scenarios** — ALL executed GREEN
-  (full-suite fresh boot, 2026-10-04; the formerly queued `neovisual-window-management`
-  and `neovisual-diagnostic-nav` both passed their first live runs;
-  `neovisual-window-management` is flaky-on-retry ×1 — pass-on-retry, harness
-  order-dependency, hardening queued). **No known-RED remains** —
+- Offline units: `tests/Telescope.Tests` **199 passed**; `tests/NeoVisual.Tests`
+  **190 passed** (after Feature 6 + Gap 1 + Gap 3 + the Telescope columns/preview item,
+  2026-10-04).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **40 scenarios** — ALL executed GREEN
+  (full-suite fresh boot, 2026-10-04; the new `telescope-results-columns` passed its first
+  live run; `neovisual-window-management` is flaky-on-retry ×2 cumulative — pass-on-retry,
+  harness order-dependency, hardening queued, ONE more flake = 3rd-strike upgrade).
+  **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 39-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the full 40-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -370,14 +374,43 @@ Top of the queue, in priority order:
 > built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
 > (LazyVim-style) AND an inline popup variant, so both can be tested.
 
+> **FIRST ITEM (2026-10-04):** ~~the **Telescope results columns + preview-as-editor**
+> plan~~ — **DONE** (GREEN 2026-10-04, feature lane, e2e ENABLED; see the Done section).
+> Full e2e lane executed: the scenario `telescope-results-columns` was CREATED + PROVEN RED
+> (the missing `results columns=` contract) before the build, then the full 40-scenario
+> suite ran GREEN at VERIFY (1 flaky: `neovisual-window-management` pass-on-retry —
+> cumulative flaky count 2, hardening item a). Shipped: the results TextBox → a real
+> ListView+GridView (23 catalog columns, the user's marks default-ON, right-click header
+> chooser, abbreviated values W/R + err/warn + imp/func/inf…, the NEW
+> `[Telescope] results columns={ids}` diagnostic, the byte-stable `results count=` form);
+> the preview RichTextBox + custom SyntaxHighlighter RETIRED → a real read-only VS editor
+> view (no VsVim insert — the `Editable` role excluded). **KNOWN LIMITATION (documented,
+> fix OWNED BY THE PLANNING HUB — in flight):** the workspace-detached preview buffer gets
+> NO Roslyn C# classifier → `preview tokens=0` (no semantic highlighting); the harness
+> asserts the line's PRESENCE only until the workspace-attach fix lands. Telescope.Tests
+> 172 → 199; NeoVisual 190.
+
+> **SECOND ITEM (2026-10-04):** the **goto commands** plan (the user's request; gate-APPROVED
+> round 2). Lane: **feature (e2e ENABLED)**. Three VS commands —
+> MyExtension.GotoDefinition / MyExtension.GotoReferences / MyExtension.GotoImplementation
+> (a NEW .vsct — none existed): 1 hit → jump directly, multiple hits → the Telescope overlay
+> with the corresponding finder; a NEW DefinitionFinder (Roslyn `DeclaringSyntaxReferences`);
+> a GotoDispatcher seam in `Telescope/Controller/`; the USER maps `gd`/`gI`/`gr` to the
+> commands in VsVim themselves (their explicit wiring decision — no hook/leader changes).
+> Plan at
+> `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-124602/plans/plan-goto.md`
+> (written to `docs/implementation_plan.md` when it becomes the first item); Telescope.Tests
+> +9; e2e `telescope-goto` (4 parts via DTE command execution).
+
 > **HARDENING QUEUE (harness, filed 2026-10-04 from the Gap 3 VERIFY — batch with a future
 > harness touch; none blocks the queue):**
-> a. **`neovisual-window-management` step-3 order-dependency (flaky ×1).** In the full-suite
->    ordering, the `w,d` document-close poll (3s) once found the active document unchanged —
+> a. **`neovisual-window-management` step-3 order-dependency (flaky ×2 cumulative — ONE more
+>    flake triggers the 3rd-strike REGRESSION upgrade).** In the full-suite ordering, the
+>    `w,d` document-close poll (3s) intermittently finds the active document unchanged —
 >    the scenario asserts VS focus but never ESTABLISHES editor focus at start, and the
 >    focus-aware close routes on the (documented-stale) `IsToolWindow` flag. Pass-on-retry
->    (run 157). Fix direction: establish editor focus (Enter-NormalContext + an editor-focus
->    assert) at scenario start before step 3's poll.
+>    (runs 157, 160, 163). Fix direction: establish editor focus (Enter-NormalContext + an
+>    editor-focus assert) at scenario start before step 3's poll.
 > b. **Cleanup `Save-AllDocuments` writes seeds AFTER the `seed-leak` check** — the guard's
 >    window excludes end-of-run cleanup writes (harmless across boots — each boot reseeds —
 >    but a coverage gap). Fix direction: run the leak check after the final save, or save
@@ -391,6 +424,14 @@ Top of the queue, in priority order:
 >    `NewVerticalTabGroup`) log `Command ... is not available` on a fresh instance — the
 >    scenarios' contract is the `leader-binding executed:` line, not command success
 >    (documented at `test-e2e.ps1:718-720`).
+
+> **KNOWN LIMITATION (2026-10-04, user-owned — the fix is IN FLIGHT IN THE PLANNING HUB; do
+> not pick this up as a queue item):** the preview's workspace-detached buffer
+> (`ITextDocumentFactoryService.CreateAndLoadTextDocument`) gets **NO Roslyn C# classifier**
+> → `preview tokens=0` and no semantic highlighting in the hosted read-only editor preview
+> (the plan's D9 caveat realized). The harness asserts the line's PRESENCE only
+> (`preview tokens=\d+`) until the workspace-attach fix lands; spec §4 + AGENTS.md document
+> the limitation in place.
 
 > **FIRST ITEM (2026-10-04):** ~~the **Gap 3 — diagnostics navigation (`]`/`[` prefix)**
 > plan~~ — **DONE** (GREEN 2026-10-04, feature lane, **e2e ENABLED**; see the Done section).
@@ -688,6 +729,59 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-04 — Telescope results columns + preview-as-editor** (Lane: `feature`, e2e
+  ENABLED — full pipeline: e2e RED before the build, executed at VERIFY; 7 delegations,
+  5 VS boots, 1 iteration). The overlay's results list migrated from a read-only TextBox
+  (`> `-marked rows) to a real **ListView+GridView** (headers visible, `Focusable=false`,
+  selection programmatic): 23 catalog columns across the 6 finders (Files 3, Issues 4,
+  References 6, Grep 3, Fzf 3, Implementation 4), the user's marks default-ON (Files:
+  name+dir; Issues: kind+file+message; References: access+file; Grep/Fzf: file+line+text;
+  Implementation: kind+file), **right-click a header → the full-catalog chooser menu**
+  (toggle any column; catalog order stable; the LAST visible column cannot be hidden);
+  abbreviated cell values (access W/R; issues todo/err/warn/info; implementation
+  cls/inf/str/enm/func/prop/evt/imp… + the ≤4-char fallback). NEW diagnostic (M-M7):
+  `[Telescope] results columns={ids}` (logged on render + on every chooser toggle); the
+  `results count=N selected=M boxText=L` line kept BYTE-STABLE (the length = the rendered
+  row text from the visible cells — zero harness edits at the 22 sites). The preview
+  RichTextBox + custom SyntaxHighlighter/PreviewRenderer/PreviewTokenCache **RETIRED**
+  (deleted, no fallback) → a REAL read-only VS editor view hosted via the new
+  `IPreviewEditor` seam (`MyExtension/Package/Utils/PreviewEditorHost.cs`:
+  `CreateAndLoadTextDocument` + content type by extension + roles
+  Document+Interactive+Zoomable EXCLUDING `Editable` — VsVim never attaches; mtime
+  create-or-reuse; dispose-on-close) + the pure `PreviewCaretMap`/`PreviewDiagnostics`
+  seams (the navigator computes the target; the editor caret moves; `preview file=`/
+  `preview caret=` byte-identical). fzf/ResultMapper untouched (Display stays the filter
+  ordinal; payload by index). New e2e scenario `telescope-results-columns` (40th) — created
+  + PROVEN RED (the missing `results columns=` contract) before the build, PASSED its first
+  live run. Unit tests: Telescope 172 → **199** (−12 tokenizer − 4 legacy formatter
+  + 25 columns + 5 KindAbbrev + 8 formatter seams + 5 preview); NeoVisual 190 untouched.
+  **KNOWN LIMITATION (documented; the fix is OWNED BY THE PLANNING HUB — in flight):** the
+  workspace-detached preview buffer gets NO Roslyn C# classifier → `preview tokens=0` (no
+  semantic highlighting); the harness asserts the line's PRESENCE only (`tokens=\d+`) until
+  the workspace-attach fix lands (spec §4 + AGENTS.md document it in place).
+  Final gates: `dotnet build` 0 errors; Telescope.Tests **199 passed, 0 failed**;
+  NeoVisual.Tests **190 passed, 0 failed** (staggered); full 40-scenario e2e suite GREEN on
+  a fresh boot (run 162: 39/40 + 1 flaky — `neovisual-window-management` pass-on-retry,
+  cumulative flaky count 2, hardening queued); both lints PASS; `-SelfCheck` PASS;
+  `-List` 40.
+  **Change summary:** created `Telescope/Overlay/Utils/ResultColumn.cs` (+ColumnVisibilityModel),
+  `KindAbbreviations.cs`, `FinderColumns.cs`, `ResultRowCells.cs`, `IPreviewEditor.cs`,
+  `PreviewCaretMap.cs`, `PreviewDiagnostics.cs`,
+  `MyExtension/Package/Utils/PreviewEditorHost.cs`; modified
+  `Telescope/Overlay/TelescopeOverlay.cs` (the ListView swap + chooser + preview hosting),
+  `Telescope/Overlay/Utils/ResultsFormatter.cs` (ToText deleted → RenderedTextLength +
+  ColumnsIdList), `Telescope/Controller/TelescopeController.cs` (the factory injection),
+  `MyExtension/Package/MyExtensionPackage.cs`, `tools/harness/test-e2e.ps1` (the scenario +
+  6 extensions + the tokens presence relaxation), `tests/Telescope.Tests/Program.cs`,
+  `tools/lint/check-doc-content.ps1`   (the DOC-67-2 seam swap), `tools/lint/check-doc-refs.ps1`
+  (the deleted-path allowlist for the historical archives), docs; DELETED the retired
+  SyntaxHighlighter / PreviewRenderer / PreviewTokenCache sources (plain names — the files
+  no longer exist). **If this regresses,
+  look first at `TelescopeOverlay`'s render path (`RebuildColumns`/`RebuildRows`/
+  `RenderResults` — the `results columns=` + byte-stable `count=` contract) and
+  `PreviewEditorHost` (the role set must never include `Editable`; the mtime reuse key) —
+  the two highest-risk changes.**
 
 - **2026-10-04 — Gap 3: Diagnostics navigation (`]`/`[` prefix)** (Lane: `feature`, e2e
   ENABLED; 6 delegations, 4 VS boots, 1 iteration). LazyVim-style diagnostics navigation:

@@ -93,11 +93,12 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   the shared preview index (`LineIndex`), the focus-target state machine
   (`FocusTargetModel`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
-  (`PromptMotionRouter`), the syntax tokenizer (`SyntaxHighlighter.Tokenize`),
-  and the pane-failure fallback (`PaneFailureTracker`).
-  `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
-  `-- LineIndex`, `-- FocusTarget`, `-- Syntax` run subsets.
-  Currently **172 tests, all passing**.
+   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
+   results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
+   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`).
+   `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
+   `-- LineIndex`, `-- FocusTarget` run subsets.
+   Currently **199 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -114,7 +115,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
    `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
    `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-   run subsets. Currently **187 tests, all passing**.
+   run subsets. Currently **190 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -130,14 +131,15 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 39 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 40 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (39 registered — 37 GREEN with no known-RED; `neovisual-window-management` (E2E-GAP1-1)
-and `neovisual-diagnostic-nav` (E2E-GAP3-1) are registered but never executed;
+Scenarios (40 registered — 37 GREEN with no known-RED; `neovisual-window-management` (E2E-GAP1-1),
+`neovisual-diagnostic-nav` (E2E-GAP3-1), and `telescope-results-columns` (E2E-RC-1) are
+registered but never executed;
 `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
@@ -162,6 +164,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-q-close` — q closes the overlay in normal mode
 - `telescope-open-file-normal` — Enter selects the match in NORMAL mode
 - `telescope-no-selection` — j/k on an empty result list is a no-op (selection stays 0)
+- `telescope-results-columns` — the columned results list renders (default columns, headers visible) + selection moves; registered, never executed — queued as E2E-RC-1
 - `telescope-preview` — preview shows selected file; Ctrl+L/Ctrl+H switch list<->preview; vim motions in preview; syntax-highlighted tokens
 - `neovisual-window-nav` — Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
 - `neovisual-leader` — Space+E and Space w - fire leader bindings (lowercase sequences; a lone Space+W consumes and waits — no binding fires)
@@ -227,8 +230,8 @@ Key facts that make this reliable:
   (text-input window motions + Solution Explorer search-box motions via the shared `TextMotionHelper`),
   `[NeoVisual] block-caret active=True|False` (editor-view block caret),
   `[NeoVisual] solution-explorer search-focus` (i focused the search box),
-  `[Telescope] opened file: ...`, `[Telescope] overlay closed`, `[Telescope] preview file=...`,
-  `[Telescope] preview tokens=...` (syntax-highlighted segment count),
+   `[Telescope] opened file: ...`, `[Telescope] overlay closed`, `[Telescope] preview file=...`,
+   `[Telescope] preview tokens=...` (the hosted editor view's classifier span count; KNOWN LIMITATION (2026-10-04): the count reads 0 on the workspace-detached preview buffer — no Roslyn C# classifier, no semantic highlighting — until the workspace-attach fix lands, in flight in the planning hub),
   `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...` (code-issues finder),
   `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
   (references finder — read/write access from Roslyn FindReferences),
@@ -241,8 +244,10 @@ Key facts that make this reliable:
   (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
   `[Telescope] focus target=List|Preview`, `[Telescope] result-mapper unknown display: {display}`
   (unknown-match warning when a display string has no payload), `[Telescope] preview caret=... line=...`,
-  `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions),
-  `[NeoVisual] stale-toolwindow sentinel active` (M3 — the injected stale-frame fault is
+   `[Telescope] prompt-motion key=... caret=...` (normal-mode prompt h/l/w/b/e/0/$ motions),
+   `[Telescope] results columns={ids}` (the visible column-id list — logged on every
+   results render and on every header-chooser toggle),
+   `[NeoVisual] stale-toolwindow sentinel active` (M3 — the injected stale-frame fault is
   active, not skipped), `[NeoVisual] leader-binding failed: {seq}: {msg}` /
   `[NeoVisual] shortcut-binding failed: {simple}: {msg}` (M15 — binding action exceptions
   are caught and logged, never escaping the hook path), `[NeoVisual] output pane unavailable: {reason}`
@@ -266,10 +271,14 @@ Done and tested (live + unit):
 - Telescope overlay: open, search, navigate, insert/normal mode, open-file, wrap, preview pane.
 - Solution Explorer controller: `o`/`Enter` open, `r` rename, `m` move, `a` add, `h`/`l` collapse/expand folds, j/k navigate, i/Esc input mode, `g` programmatically selects the first source file (`solution-explorer select file=...`, DTE `UIHierarchyItem.Select` — escapes the injected-key csproj-open trap; the tree is expanded first, and the file is opened + the selection re-asserted for ~1.5s to defeat VS's hover-preview focus steal).
 - `Space+e` toggles Solution Explorer open/close (action `toggle-solution-explorer`).
-- Telescope preview pane: `TextMotionNavigator` (shared pure vim motions h/l/j/k/w/b/e/0/$/gg/G
-  + a/A/I insert placements), Ctrl+H/L focus switch between List/Preview, read-only (no insert),
-  and **syntax highlighting** (`SyntaxHighlighter` tokenizer → colored runs in a RichTextBox) —
-  `telescope-preview` live test passes and asserts `preview tokens=...`.
+- Telescope preview pane: a REAL read-only VS editor view hosted in the overlay
+  (VS's own classifier highlighting; the Editable view role excluded — VsVim never
+  attaches, no insert mode), Ctrl+H/L focus switch between List/Preview,
+  `TextMotionNavigator` (shared pure vim motions h/l/j/k/w/b/e/0/$/gg/G) moving the
+  editor view's caret; a/A/I insert placements are no-ops (the view is not editable);
+  the custom SyntaxHighlighter tokenizer and its RichTextBox rendering are RETIRED —
+  `telescope-preview` asserts the post-migration preview diagnostics (per Section D
+  rev 1's pinned forms).
 - Telescope prompt vim motions: in NORMAL mode the prompt box supports h/l/w/b/e/0/$ caret motions
   (`TryPromptMotion`, logged `prompt-motion key=... caret=...`) and draws a **white block caret**
   (`ApplyPromptCaretStyle`), line caret in insert — matching the tool-window surfaces.
@@ -354,8 +363,17 @@ Done and tested (live + unit):
   `prev-warning` built-in actions — the pure `DiagnosticNavigator` seam over the Error List
   entries of the ACTIVE document (severity-filtered, in-file, NO wrap; a no-op at the end or
   with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
-  (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
-  `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
+   (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
+   `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
+- Telescope results columns: the overlay's results list is a columned ListView
+  (GridView, headers visible) — one row = multiple columns from per-finder column
+  sets (every catalog column implemented and toggleable; the user-marked subset
+  default-visible), right-click a column header to toggle any column (catalog order
+  stable); narrow columns render compact values (Access W/R; Issues Kind
+  err/warn/todo/info; Implementation Kind imp/func/inf + cls/str/enm/prop/evt);
+  selection/preview/Enter stay payload-by-index (fzf + `ResultMapper` untouched).
+  New diagnostic `results columns={ids}`; unit-tested in `tests/Telescope.Tests`
+  (the column-set/visibility tests); live e2e registered, queued as E2E-RC-1..2.
 
 ## Hard requirements that are easy to violate
 

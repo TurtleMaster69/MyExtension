@@ -421,12 +421,7 @@ BP-D4 the byte-stable verification (ZERO edits to the 22 `results count=` sites 
 the format); BP-D6 the no-VS gates; BP-D7 the handoff notes. REV 1: BP-D8 the 37-site preview
 enumeration (14 `preview file=` + 22 `preview caret=` + 1 `preview tokens=`); BP-D9 the
 byte-stability pass (36 of 37 sites need ZERO edits); BP-D10 the CONDITIONAL `preview tokens=`
-update (1 site + 2 comments — per BP-P's pinned decision; **Amended post-verify (2026-10-04,
-user instruction): the workspace-detached preview buffer gets NO Roslyn C# classifier, so the
-count reads 0 — the D9 caveat realized. The classifier/workspace-attach fix is OWNED BY THE
-PLANNING HUB (in flight); this item only relaxed the ONE harness assertion to presence-only
-(`tokens=\d+`) + documented the limitation in the harness comments, spec §4, and AGENTS.md.
-No product change.**); BP-D11 the scenario-survival
+update (1 site + 2 comments — per BP-P's pinned decision); BP-D11 the scenario-survival
 verification (telescope-preview 4+1; telescope-preview-motions 19 byte-stable); BP-D12 the
 no-VS gates re-run.
 
@@ -476,7 +471,7 @@ retirement sweeps). Retired symbols stay UNBACKTICKED in docs until they resolve
 | `Run_ResultMapper_*` + the 5 display pins | BP-B4 (must stay GREEN) | Display still produced; the fzf path untouched |
 | unit gate | BP-C14, BP-G1 | `199 passed, 0 failed` (Telescope, staggered); NeoVisual per the post-Gap-3 actual |
 | e2e `telescope-results-columns` (RED then GREEN) | BP-E2E-1/E2E-2 | RED before the source lands; GREEN after: `results columns=file,dir` (the Files default) + the per-finder default lines + the byte-stable `results count=` |
-| e2e full suite (40 registered) | BP-E2E-2 | all pre-existing scenarios GREEN (36/37 preview sites byte-stable; the 1 `preview tokens=` site Amended post-verify: presence-only `\d+` — the classifier limitation is documented, the workspace-attach fix is owned by the planning hub) |
+| e2e full suite (40 registered) | BP-E2E-2 | all pre-existing scenarios GREEN (36/37 preview sites byte-stable; the 1 `preview tokens=` site updated per BP-D10) |
 | no-VS harness gates | BP-D6/D12, BP-E2E-1 | `-SelfCheck` PASS; `-List` = 40 (seed-leak last) |
 | lints + sweeps | BP-E11/E12, BP-G1 | check-doc-refs 0 unresolved; check-doc-content PASS (the DOC-67-2 seam swap recorded as a DEVIATION); the retirement/count sweeps 0 remnants |
 
@@ -494,55 +489,3 @@ BP-C1b; the 12 tokenizer tests between BP-P5 and BP-C11; the chooser toggle's no
    deferral instructions anymore); the Done entry at GREEN; the Baseline/Decisions updates.
 4. The e2e queues: E2E-RC-1..2 appended (they execute at this plan's VERIFY — the queue drains
    inline now); the READY E2E-GAP1-1..5 + Gap 3's gates drain at their VERIFY points.
-
-## Execution Log
-
-### Attempt 1 — VERIFY FAIL (2026-10-04)
-
-- **RED (BP-E2E-1):** `e2e-test-builder` created `telescope-results-columns` (+6 one-line
-  extensions; +29/−0 in the harness only), `-List` 40, `-SelfCheck` PASS, and PROVED RED for
-  the RIGHT reason: "never saw: ... (pattern: \[Telescope\] results columns=file,dir$)" — the
-  literal did not exist (0 hits in the log) while every pre-existing assertion passed
-  (`results count=19 selected=0 boxText=235` emitted). 1 VS boot.
-- **BUILD (Phases 1-6, three dispatches — the first two hit the step cap mid-edit, the third
-  finished):** BP-A1..A6 (the pure column model + the 23-column audit), BP-B1..B6 (the
-  ResultsFormatter shrink + the ListView swap + the chooser), BP-P1..P6 (the IPreviewEditor
-  seam + PreviewEditorHost + the retirement), BP-C1..C14 (Telescope 172 → **199**; the
-  BP-C10 mid-point 206 was unobservable in the resumed state — arithmetic verified by subset
-  counts), BP-D8..D12 (the preview-site byte-stability pass; the tokens comments), BP-E1R..E12
-  (the docs sync + the DOC-67-2 seam swap + the deleted-path refs allowlist for the historical
-  archives). `dotnet build` 0 errors; Telescope **199/0**; NeoVisual **190/0**; `-SelfCheck`
-  PASS; `-List` 40; both lints PASS.
-- **DEVIATION adjudications (hub):** BP-B2 ScrollViewer static setters (the plan's
-  object-initializer attached-property syntax is invalid C#) → ACCEPT ·
-  PreviewEditorHost `using Microsoft.VisualStudio.Utilities` + `_host.Close()` (SDK 17.14
-  has Close, not Dispose) → ACCEPT · the DOC-67-2 seam swap (PreviewRenderer →
-  IPreviewEditor, hub-sanctioned by BP-E11) → ACCEPT · the check-doc-refs
-  `$intentionallyAbsent` addition for the 2 deleted-path refs in the HISTORICAL review
-  archives (the M23 precedent; BP-E12.1's own procedure; no blanket symbol masking) → ACCEPT.
-- **VERIFY round 1: FAIL** — `telescope-preview` real RED (fail-twice): `preview tokens=0`
-  on every emission — the workspace-detached buffer gets NO Roslyn C# classifier (the D9
-  caveat realized). `neovisual-window-management` flaky ×1 (pass-on-retry). Everything else
-  GREEN (units 199/190, the new scenario's first live run PASSED, the 5 columns id-lists
-  correct, 120 byte-stable count lines).
-- `delegations: 5 | VS boots: 3 (runs 158-160) | iterations: 0`
-
-### Attempt 2 — GREEN (2026-10-04)
-
-- **8a DEBUG (narrowed by the USER — the classifier fix is OWNED BY THE PLANNING HUB, in
-  flight; do not fix it here):** the documented-limitation bookkeeping only — the ONE
-  `preview tokens=` harness assertion relaxed to presence-only (`tokens=\d+`) + the
-  limitation documented in the harness comments, spec §4, and AGENTS.md. NO product change.
-  Both affected scenarios PASS on a fresh boot (run 161); build 0 errors; lints PASS.
-- **8c RE-PLAN (hub, trace-table-only):** BP-D10 + the full-suite trace row amended with the
-  realized limitation (no 4a re-gate — trace-table-only).
-- **VERIFY round 2 (final gate):** **PASS** — `dotnet build` 0 errors; Telescope **199/0**;
-  NeoVisual **190/0** (staggered); `-SelfCheck` PASS; `-List` 40; both lints PASS; FULL
-  40-scenario e2e suite on a fresh boot (run 162): **39/40 + 1 flaky** —
-  `neovisual-window-management` pass-on-retry (run 163) → **cumulative flaky count 2**
-  (hardening item a; ONE more flake = 3rd-strike upgrade). The five `results columns=`
-  id-lists + 102 byte-stable count lines + 49 tokens presence-matches confirmed; zero
-  `preview editor unavailable` lines.
-- **failure-log sweep:** 12 entries read, 0 fixed, 0 queued, 0 annotated (all carry FIXED
-  annotations).
-- `delegations: 7 | VS boots: 5 (runs 158-163) | iterations: 1`

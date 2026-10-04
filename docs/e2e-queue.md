@@ -55,3 +55,30 @@ in run 155/157)** — every gate was exercised and passed on the VS-capable mach
   (`neovisual-diagnostic-nav` first live run — the six `leader-binding executed:` lines +
   4× `diagnostic-nav no-op: no-entries`, the expected fresh-instance outcome; zero
   `failed:` lines), `E2E-GAP3-2` (full-suite re-run, 39/39 with the flaky above).
+
+## Queued gates — Telescope columns + preview (2026-10-04)
+
+Plan: `docs/implementation_plan.md` — **Telescope results columns + preview-as-editor**
+(the FIRST pending item; feature lane, **e2e ENABLED** — the gates run at VERIFY, nothing is
+deferred). Two gates:
+
+- **E2E-RC-1** — the NEW `telescope-results-columns` scenario (created + proven RED by
+  `e2e-test-builder` before the build). Asserts the columned render; `results columns=file,dir`
+  (the Files default) + the per-finder default columns lines; the byte-stable
+  `results count=/selected=`; j→`selected=1`. The chooser toggle is unit-pinned + manual
+  (the harness injects keys, not mouse).
+- **E2E-RC-2** — full-suite regression re-run at VERIFY (40 registered scenarios): no
+  regression across all telescope-* scenarios (36/37 preview sites byte-stable; the 1
+  `preview tokens=` site updated per the plan's BP-D10).
+
+## Queued gates — goto commands (2026-10-04)
+
+Plan: `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-124602/plans/plan-goto.md`
+(the SECOND pending item; written to `docs/implementation_plan.md` when it becomes first) —
+**e2e ENABLED**. Two gates:
+
+- **E2E-GOTO-1** — the NEW `telescope-goto` scenario (created + proven RED before the build).
+  4 parts via DTE command execution: goto-definition 1-hit→direct; goto-definition 2-hit→the
+  Definition overlay; goto-references ≥2-hit→the References overlay; goto-implementation
+  1-hit→direct. The VsVim key mapping (`gd`/`gI`/`gr`) is the USER's step — not e2e-dependent.
+- **E2E-GOTO-2** — full-suite regression re-run at VERIFY.

@@ -120,6 +120,11 @@ $intentionallyAbsent = @(
     # review-hub agent docs (.opencode/agent/code-review-hub.md, neovim_review_hub.md) still
     # list it among the files to review — file-path analog of the "recently removed" allowlist.
     'LinqExtensionMethods.cs'
+    # Results-columns/preview-as-editor (2026-10-04): `SyntaxHighlighter.cs` was deleted with
+    # the preview editor-view migration; the same review-hub agent docs still list it among
+    # the files to review (historical review-scope enumerations) — same file-path analog.
+    # Cited there WITHOUT the Telescope/ prefix (the archives' project-relative shorthand).
+    'Overlay/Utils/SyntaxHighlighter.cs'
 )
 
 # Hub-created runtime artifacts (not in the repo until the loop creates them).

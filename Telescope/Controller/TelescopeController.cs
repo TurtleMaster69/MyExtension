@@ -25,10 +25,19 @@ namespace Telescope.Controller
         private readonly FzfFilter _fzf;
         private readonly Dictionary<string, IFinder> _finders = new(StringComparer.OrdinalIgnoreCase);
         private TelescopeOverlay? _overlay;
+        private readonly Func<IPreviewEditor>? _previewEditorFactory;
 
-        public TelescopeController()
+        /// <param name="previewEditorFactory">
+        /// Optional factory for the preview pane's editor-view host (Section P). The overlay invokes
+        /// it ONCE per open (a fresh overlay is built per open) and disposes the product on close.
+        /// Null = no preview content (the overlay degrades gracefully). The host supplies
+        /// <c>() => new PreviewEditorHost(this)</c> — the VS-SDK-coupled implementation stays in
+        /// MyExtension per the layering note.
+        /// </param>
+        public TelescopeController(Func<IPreviewEditor>? previewEditorFactory = null)
         {
             _fzf = new FzfFilter();
+            _previewEditorFactory = previewEditorFactory;
         }
 
         /// <summary>True while the overlay is open and owns keyboard focus.</summary>
@@ -69,7 +78,7 @@ namespace Telescope.Controller
             // Build a fresh overlay every open: a WPF Window cannot be shown again after Close(),
             // so reusing the cached instance would throw InvalidOperationException on a second
             // open. The abandoned closed window is simply garbage-collected.
-            _overlay = new TelescopeOverlay(_fzf);
+            _overlay = new TelescopeOverlay(_fzf, _previewEditorFactory);
             // N38/BP-52: the open path awaits the async fzf availability probe (off the UI thread).
             // JoinableTaskFactory.Run pumps the UI thread while the probe runs on the thread pool.
             ThreadHelper.JoinableTaskFactory.Run(async () => await _overlay.ShowOverlayAsync(finder, centerRect, ownerHwnd));

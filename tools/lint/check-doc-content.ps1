@@ -28,7 +28,7 @@ Assertions (each maps to a BP step):
                         (open finder=, Focus prompt => True, mode=insert,
                         results count=... selected=..., key=... mode=... handled=...).
   DOC-67-2  (BP-67/m69) spec.md §2.2 contains the 13 seam-file rows (OverlayShowState,
-                        FocusTargetModel, LineIndex, TryDispatch, PreviewRenderer,
+                        FocusTargetModel, LineIndex, TryDispatch, IPreviewEditor,
                         BlockCaretStyle, VimModeClassifier, InitSteps, SimpleShortcutMatcher,
                         NavigationSnapshot, FilterFailureLog, TelescopeLog, PaneFailureTracker).
 
@@ -176,7 +176,7 @@ Add-Check 'DOC-67-1' 'spec.md §4 contains the 4 harness-asserted diagnostic lin
     ($missing4.Count -eq 0) ("missing: " + ($missing4 -join ' | '))
 
 $sec22 = Get-Section $specPath '### 2.2 Key files' '### 2.3'
-$seams = @('OverlayShowState','FocusTargetModel','LineIndex','TryDispatch','PreviewRenderer',
+$seams = @('OverlayShowState','FocusTargetModel','LineIndex','TryDispatch','IPreviewEditor',
            'BlockCaretStyle','VimModeClassifier','InitSteps','SimpleShortcutMatcher',
            'NavigationSnapshot','FilterFailureLog','TelescopeLog','PaneFailureTracker')
 $missingSeams = @($seams | Where-Object { $sec22 -notmatch [regex]::Escape($_) })

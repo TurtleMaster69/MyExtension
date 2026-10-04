@@ -100,27 +100,444 @@ namespace Telescope.Tests
             public void Dispose() { }
         }
 
-        public static void Run_ResultsFormatter_Empty()
+        // ================================================================
+        // Results columns (D6 + D2a) — per-finder column catalog, visibility
+        // model, row cells. Getter assertions expect the ABBREVIATED cell
+        // values (Section A rev 1's table): access W/R; issues kind
+        // err/warn/todo/info; implementation kind inf/func/prop/….
+        // RED: ResultColumn / FinderColumns / ColumnVisibilityModel /
+        //      ResultRowCells do not exist yet -> compile error (CS0246).
+        // ================================================================
+
+        // Joins the columns' ids with ',' — the exact format the
+        // "[Telescope] results columns=<ids>" diagnostic uses.
+        private static string JoinIds(IReadOnlyList<ResultColumn> columns)
+            => string.Join(",", columns.Select(c => c.Id));
+
+        private static string JoinDefaultVisible(IReadOnlyList<ResultColumn> columns)
+            => string.Join(",", columns.Where(c => c.DefaultVisible).Select(c => c.Id));
+
+        private static string CellOf(IReadOnlyList<ResultColumn> columns, string id, object? payload)
+            => columns.First(c => c.Id == id).Getter(payload);
+
+        public static void Run_ResultsFormatter_RenderedTextLength_Empty()
         {
-            Assert.Equal("", ResultsFormatter.ToText(new List<FinderEntry>(), 0));
+            // The byte-stable boxText= seam: empty input -> 0.
+            Assert.Equal(0, ResultsFormatter.RenderedTextLength(new string[][] { }));
+            Assert.Equal(0, ResultsFormatter.RenderedTextLength(null!));
         }
 
-        public static void Run_ResultsFormatter_SingleSelected()
+        public static void Run_ResultsFormatter_RenderedTextLength_SingleRowSingleCell()
         {
-            var list = new List<FinderEntry> { E("alpha") };
-            Assert.Equal("> alpha", ResultsFormatter.ToText(list, 0));
+            // One row: the 2-char marker allowance + the cell length (no separator).
+            Assert.Equal(7, ResultsFormatter.RenderedTextLength(new[] { new[] { "alpha" } }));
         }
 
-        public static void Run_ResultsFormatter_SelectionMarkerOnIndex()
+        public static void Run_ResultsFormatter_RenderedTextLength_MultiRow()
         {
-            var list = new List<FinderEntry> { E("a"), E("b"), E("c") };
-            Assert.Equal("  a\n> b\n  c", ResultsFormatter.ToText(list, 1));
+            // Two rows: one '\n' separator between them (the legacy ToText layout).
+            Assert.Equal(7, ResultsFormatter.RenderedTextLength(new[] { new[] { "a" }, new[] { "b" } }));
         }
 
-        public static void Run_ResultsFormatter_NewlinesBetween()
+        public static void Run_ResultsFormatter_RenderedTextLength_MultiCell()
         {
-            var list = new List<FinderEntry> { E("a"), E("b"), E("c") };
-            Assert.Equal("> a\n  b\n  c", ResultsFormatter.ToText(list, 0));
+            // One row, two cells: the cells concatenate (the legacy row layout had no column gap).
+            Assert.Equal(5, ResultsFormatter.RenderedTextLength(new[] { new[] { "a", "bb" } }));
+        }
+
+        public static void Run_ResultsFormatter_RenderedTextLength_EmptyCells()
+        {
+            // Empty cell strings still count the marker + separator width.
+            Assert.Equal(5, ResultsFormatter.RenderedTextLength(new[] { new[] { "" }, new[] { "" } }));
+        }
+
+        public static void Run_ResultsFormatter_ColumnsIdList_Empty()
+        {
+            // Empty/null set -> the empty string (the line reads "results columns=").
+            Assert.Equal("", ResultsFormatter.ColumnsIdList(new string[] { }));
+            Assert.Equal("", ResultsFormatter.ColumnsIdList(null!));
+        }
+
+        public static void Run_ResultsFormatter_ColumnsIdList_Single()
+        {
+            Assert.Equal("access", ResultsFormatter.ColumnsIdList(new[] { "access" }));
+        }
+
+        public static void Run_ResultsFormatter_ColumnsIdList_Multiple()
+        {
+            // Comma-joined, NO spaces, caller's order (the model supplies catalog order).
+            Assert.Equal("access,file", ResultsFormatter.ColumnsIdList(new[] { "access", "file" }));
+        }
+
+        public static void Run_ResultsColumns_Files_Catalog()
+        {
+            // ALL catalog columns present, in catalog order (AC2) + the default-visible set is
+            // EXACTLY the user's marks (AC3): file + dir ON, path OFF.
+            var files = FinderColumns.ForFinder("Files");
+            Assert.Equal("file,dir,path", JoinIds(files));
+            Assert.Equal("File|Directory|Path",
+                string.Join("|", files.Select(c => c.Header)));
+            Assert.Equal("file,dir", JoinDefaultVisible(files));
+        }
+
+        public static void Run_ResultsColumns_Files_Getters()
+        {
+            var files = FinderColumns.ForFinder("Files", @"C:\proj");
+            var hit = new FileHit(@"C:\proj\Services\Foo.cs", 0);
+            Assert.Equal("Foo.cs", CellOf(files, "file", hit));
+            Assert.Equal("Services", CellOf(files, "dir", hit));   // root-tail trimmed
+            Assert.Equal(@"C:\proj\Services\Foo.cs", CellOf(files, "path", hit));
+        }
+
+        public static void Run_ResultsColumns_Files_DirWithoutRoot()
+        {
+            // No root: the dir cell is the FULL containing directory.
+            var files = FinderColumns.ForFinder("Files");
+            Assert.Equal(@"C:\proj\Services", CellOf(files, "dir", new FileHit(@"C:\proj\Services\Foo.cs", 0)));
+            // A file directly in the root yields the empty cell.
+            var rooted = FinderColumns.ForFinder("Files", @"C:\proj");
+            Assert.Equal("", CellOf(rooted, "dir", new FileHit(@"C:\proj\Foo.cs", 0)));
+            // A file outside the root yields the full directory.
+            Assert.Equal(@"C:\other\Dir", CellOf(rooted, "dir", new FileHit(@"C:\other\Dir\Foo.cs", 0)));
+        }
+
+        public static void Run_ResultsColumns_Issues_Catalog()
+        {
+            var issues = FinderColumns.ForFinder("Issues");
+            Assert.Equal("kind,file,message,line", JoinIds(issues));
+            Assert.Equal("Kind|File|Message|Line",
+                string.Join("|", issues.Select(c => c.Header)));
+            // User's marks: Kind, File, Message ON; Line OFF (the position stays in the chooser).
+            Assert.Equal("kind,file,message", JoinDefaultVisible(issues));
+        }
+
+        public static void Run_ResultsColumns_Issues_Getters()
+        {
+            var issues = FinderColumns.ForFinder("Issues");
+            var todo = new CodeIssue(CodeIssueKind.Todo, @"C:\p\A.cs", 3, "fix this");
+            // D2a ABBREVIATED kinds (Section A rev 1): Todo->todo, Error->err, Warning->warn,
+            // Info->info. NOT the legacy display markers (ERR/WARN/TODO) and NOT enum ToString.
+            Assert.Equal("todo", CellOf(issues, "kind", todo));
+            Assert.Equal("A.cs", CellOf(issues, "file", todo));
+            Assert.Equal("fix this", CellOf(issues, "message", todo));
+            Assert.Equal("3", CellOf(issues, "line", todo));
+
+            Assert.Equal("err", CellOf(issues, "kind",
+                new CodeIssue(CodeIssueKind.Error, @"C:\p\A.cs", 1, "boom")));
+            Assert.Equal("warn", CellOf(issues, "kind",
+                new CodeIssue(CodeIssueKind.Warning, @"C:\p\A.cs", 2, "hmm")));
+            Assert.Equal("info", CellOf(issues, "kind",
+                new CodeIssue(CodeIssueKind.Info, @"C:\p\A.cs", 4, "fyi")));
+        }
+
+        public static void Run_ResultsColumns_References_Catalog()
+        {
+            var refs = FinderColumns.ForFinder("References");
+            Assert.Equal("access,file,symbol,column,line,text", JoinIds(refs));
+            Assert.Equal("Access|File|Symbol|Column|Line|Line text",
+                string.Join("|", refs.Select(c => c.Header)));
+            // User's marks: Access + File ON; Symbol/Column/Line/Line text OFF.
+            // This is the exact id list AC5 pins in the default "results columns=" line.
+            Assert.Equal("access,file", JoinDefaultVisible(refs));
+        }
+
+        public static void Run_ResultsColumns_References_Getters()
+        {
+            var refs = FinderColumns.ForFinder("References");
+            var read = new ReferenceHit(@"C:\p\Reader.cs", 5, 16, isWrite: false, "Value", "return Shared.Value;");
+            // D2a ABBREVIATED access (Section A rev 1): read -> R, write -> W (user-specified).
+            // NOT the long "read"/"write" the Display keeps (pin at 2167-2171).
+            Assert.Equal("R", CellOf(refs, "access", read));
+            Assert.Equal("Reader.cs", CellOf(refs, "file", read));
+            Assert.Equal("Value", CellOf(refs, "symbol", read));
+            Assert.Equal("16", CellOf(refs, "column", read));
+            Assert.Equal("5", CellOf(refs, "line", read));
+            Assert.Equal("return Shared.Value;", CellOf(refs, "text", read));
+
+            // The write side.
+            var write = new ReferenceHit(@"C:\p\Writer.cs", 5, 5, isWrite: true, "Value", "Shared.Value = 1;");
+            Assert.Equal("W", CellOf(refs, "access", write));
+        }
+
+        public static void Run_ResultsColumns_Grep_Catalog()
+        {
+            var grep = FinderColumns.ForFinder("Grep");
+            Assert.Equal("file,line,text", JoinIds(grep));
+            Assert.Equal("File|Line|Line text", string.Join("|", grep.Select(c => c.Header)));
+            // Grep keeps ALL THREE ON (the user's marks — unlike Issues/References/Implementation).
+            Assert.Equal("file,line,text", JoinDefaultVisible(grep));
+        }
+
+        public static void Run_ResultsColumns_Grep_Getters()
+        {
+            var grep = FinderColumns.ForFinder("Grep");
+            var hit = new GrepHit(@"C:\p\src\A.cs", 2, "NEEDLE here");
+            Assert.Equal("A.cs", CellOf(grep, "file", hit));
+            Assert.Equal("2", CellOf(grep, "line", hit));
+            Assert.Equal("NEEDLE here", CellOf(grep, "text", hit));
+        }
+
+        public static void Run_ResultsColumns_Fzf_Catalog()
+        {
+            var fzf = FinderColumns.ForFinder("Fzf");
+            Assert.Equal("file,line,text", JoinIds(fzf));
+            Assert.Equal("File|Line|Line text", string.Join("|", fzf.Select(c => c.Header)));
+            // Fzf keeps ALL THREE ON (the user's marks).
+            Assert.Equal("file,line,text", JoinDefaultVisible(fzf));
+        }
+
+        public static void Run_ResultsColumns_Fzf_Getters()
+        {
+            var fzf = FinderColumns.ForFinder("Fzf");
+            var hit = new FzfHit(@"C:\p\src\A.cs", 2, "NEEDLE here");
+            Assert.Equal("A.cs", CellOf(fzf, "file", hit));
+            Assert.Equal("2", CellOf(fzf, "line", hit));
+            Assert.Equal("NEEDLE here", CellOf(fzf, "text", hit));
+        }
+
+        public static void Run_ResultsColumns_Implementation_Catalog()
+        {
+            var impl = FinderColumns.ForFinder("Implementation");
+            Assert.Equal("kind,file,symbol,line", JoinIds(impl));
+            Assert.Equal("Kind|File|Symbol|Line", string.Join("|", impl.Select(c => c.Header)));
+            // User's marks: Kind + File ON; Symbol/Line OFF.
+            Assert.Equal("kind,file", JoinDefaultVisible(impl));
+        }
+
+        public static void Run_ResultsColumns_Implementation_Getters()
+        {
+            var impl = FinderColumns.ForFinder("Implementation");
+            // D2a ABBREVIATED kinds — RE-PINNED to Section A REV 1's table (gate round 2, finding 4):
+            // Interface -> inf (the user's spelling), Method -> func (the user's function=func carried
+            // onto Roslyn's function-like kind), Class -> cls, Struct -> str, Property -> prop,
+            // Unknown -> unk (A-rev's 32-entry ImplMap — NOT verbatim lowercase). The real Kind strings
+            // come from RoslynGatherers.cs:141-144 (TypeKind.ToString() / SymbolKind.ToString()) —
+            // there is NO "Override" token; overrides arrive as Method/Property.
+            Assert.Equal("cls", CellOf(impl, "kind", new ImplementationHit(@"C:\p\Shape.cs", 2, "Shape", "Class")));
+            Assert.Equal("inf", CellOf(impl, "kind", new ImplementationHit(@"C:\p\IShape.cs", 1, "IShape", "Interface")));
+            Assert.Equal("func", CellOf(impl, "kind", new ImplementationHit(@"C:\p\Shape.cs", 4, "Draw", "Method")));
+            Assert.Equal("prop", CellOf(impl, "kind", new ImplementationHit(@"C:\p\Shape.cs", 9, "Area", "Property")));
+            Assert.Equal("str", CellOf(impl, "kind", new ImplementationHit(@"C:\p\P.cs", 1, "P", "Struct")));
+            Assert.Equal("unk", CellOf(impl, "kind", new ImplementationHit(@"C:\p\X.cs", 1, "X", "Unknown")));
+
+            var hit = new ImplementationHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            Assert.Equal("Shape.cs", CellOf(impl, "file", hit));
+            Assert.Equal("Shape", CellOf(impl, "symbol", hit));
+            Assert.Equal("2", CellOf(impl, "line", hit));
+        }
+
+        public static void Run_KindAbbrev_Issue_AllValues()
+        {
+            // All 4 CodeIssueKind values (CodeIssue.cs:4-17) — D2a's Issues column.
+            Assert.Equal("todo", KindAbbreviations.Issue(CodeIssueKind.Todo));
+            Assert.Equal("err", KindAbbreviations.Issue(CodeIssueKind.Error));
+            Assert.Equal("warn", KindAbbreviations.Issue(CodeIssueKind.Warning));
+            Assert.Equal("info", KindAbbreviations.Issue(CodeIssueKind.Info));
+        }
+
+        public static void Run_KindAbbrev_Implementation_Realistic()
+        {
+            // The Roslyn-reachable set (SymbolFinder.FindImplementationsAsync): types + members.
+            Assert.Equal("cls", KindAbbreviations.Implementation("Class"));
+            Assert.Equal("inf", KindAbbreviations.Implementation("Interface"));
+            Assert.Equal("str", KindAbbreviations.Implementation("Struct"));
+            Assert.Equal("enm", KindAbbreviations.Implementation("Enum"));
+            Assert.Equal("func", KindAbbreviations.Implementation("Method"));
+            Assert.Equal("prop", KindAbbreviations.Implementation("Property"));
+            Assert.Equal("evt", KindAbbreviations.Implementation("Event"));
+        }
+
+        public static void Run_KindAbbrev_Implementation_DefensiveUnion()
+        {
+            // The remaining Roslyn TypeKind/SymbolKind union names + the 2 user-literal entries —
+            // A-rev's complete 32-entry ImplMap (no raw long form may leak into the narrow column).
+            Assert.Equal("del", KindAbbreviations.Implementation("Delegate"));
+            Assert.Equal("errt", KindAbbreviations.Implementation("ErrorType"));
+            Assert.Equal("typ", KindAbbreviations.Implementation("TypeParameter"));
+            Assert.Equal("unk", KindAbbreviations.Implementation("Unknown"));
+            Assert.Equal("arr", KindAbbreviations.Implementation("Array"));
+            Assert.Equal("arrt", KindAbbreviations.Implementation("ArrayType"));
+            Assert.Equal("dyn", KindAbbreviations.Implementation("Dynamic"));
+            Assert.Equal("dynt", KindAbbreviations.Implementation("DynamicType"));
+            Assert.Equal("mod", KindAbbreviations.Implementation("Module"));
+            Assert.Equal("nmod", KindAbbreviations.Implementation("NetModule"));
+            Assert.Equal("ptr", KindAbbreviations.Implementation("Pointer"));
+            Assert.Equal("ptrt", KindAbbreviations.Implementation("PointerType"));
+            Assert.Equal("sub", KindAbbreviations.Implementation("Submission"));
+            Assert.Equal("fnptr", KindAbbreviations.Implementation("FunctionPointer"));
+            Assert.Equal("fnpt", KindAbbreviations.Implementation("FunctionPointerType"));
+            Assert.Equal("fld", KindAbbreviations.Implementation("Field"));
+            Assert.Equal("loc", KindAbbreviations.Implementation("Local"));
+            Assert.Equal("ntyp", KindAbbreviations.Implementation("NamedType"));
+            Assert.Equal("ns", KindAbbreviations.Implementation("Namespace"));
+            Assert.Equal("asm", KindAbbreviations.Implementation("Assembly"));
+            Assert.Equal("lbl", KindAbbreviations.Implementation("Label"));
+            Assert.Equal("par", KindAbbreviations.Implementation("Parameter"));
+            Assert.Equal("rng", KindAbbreviations.Implementation("RangeVariable"));
+            Assert.Equal("imp", KindAbbreviations.Implementation("Implementation"));
+            Assert.Equal("func", KindAbbreviations.Implementation("Function"));
+        }
+
+        public static void Run_KindAbbrev_Implementation_Fallback()
+        {
+            // Any value not in the map: lowercase, truncated to <= 4 chars. Null/empty -> "".
+            Assert.Equal("some", KindAbbreviations.Implementation("SomethingNew"));
+            Assert.Equal("ab", KindAbbreviations.Implementation("Ab"));
+            Assert.Equal("", KindAbbreviations.Implementation(""));
+            Assert.Equal("", KindAbbreviations.Implementation(null!));
+        }
+
+        public static void Run_KindAbbrev_Implementation_UnionDistinct()
+        {
+            // The 30 REAL union values abbreviate to 30 DISTINCT cells (no within-column collision;
+            // `inf` vs `info` is a CROSS-finder collision only — different finders, different columns).
+            var union = new[] { "Class", "Interface", "Struct", "Enum", "Method", "Property", "Event",
+                "Delegate", "ErrorType", "TypeParameter", "Unknown", "Array", "ArrayType", "Dynamic",
+                "DynamicType", "Module", "NetModule", "Pointer", "PointerType", "Submission",
+                "FunctionPointer", "FunctionPointerType", "Field", "Local", "NamedType", "Namespace",
+                "Assembly", "Label", "Parameter", "RangeVariable" };
+            var cells = union.Select(k => KindAbbreviations.Implementation(k)).ToList();
+            Assert.Equal(30, cells.Count);
+            Assert.Equal(30, cells.Distinct().Count());
+        }
+
+        public static void Run_ResultsColumns_ForFinder_UnknownName_Empty()
+        {
+            // An unknown IFinder.Name yields an EMPTY catalog (the pure model stays total; the
+            // overlay falls back). Ordinal, case-sensitive: "files" must NOT match "Files".
+            Assert.Equal(0, FinderColumns.ForFinder("Nope").Count);
+            Assert.Equal(0, FinderColumns.ForFinder("files").Count);
+        }
+
+        public static void Run_ResultsColumns_WidthKinds()
+        {
+            // Section A BP-A1's invariant: exactly one Flexible column per finder at most;
+            // Flexible => WidthChars 0; Fixed => WidthChars > 0. The exact WidthChars values are
+            // Section-B tuning hints and are NEVER asserted here.
+            foreach (var name in new[] { "Files", "Issues", "References", "Grep", "Fzf", "Implementation" })
+            {
+                var cols = FinderColumns.ForFinder(name);
+                Assert.True(cols.Count > 0, $"{name} has a catalog");
+                Assert.True(cols.Count(c => c.Width == ResultColumnWidth.Flexible) <= 1,
+                    $"{name}: at most one Flexible column");
+                foreach (var c in cols)
+                {
+                    Assert.True(
+                        c.Width == ResultColumnWidth.Flexible ? c.WidthChars == 0 : c.WidthChars > 0,
+                        $"{name}/{c.Id}: Flexible => WidthChars 0, Fixed => WidthChars > 0");
+                }
+            }
+        }
+
+        public static void Run_ColumnVisibility_ToggleOff()
+        {
+            var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
+            Assert.Equal("access,file", model.VisibleIdsJoined);
+
+            // Toggle a visible column OFF -> it leaves VisibleIds; the others keep their order.
+            Assert.True(model.Toggle("access"));
+            Assert.Equal("file", model.VisibleIdsJoined);
+        }
+
+        public static void Run_ColumnVisibility_ToggleOn()
+        {
+            var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
+            // Toggle a hidden-by-default column ON (symbol was off) -> appended at its CATALOG
+            // position (after file), not the end of the toggle order.
+            Assert.True(model.Toggle("symbol"));
+            Assert.Equal("access,file,symbol", model.VisibleIdsJoined);
+        }
+
+        public static void Run_ColumnVisibility_OrderStability()
+        {
+            // A toggled-off-then-on column returns to its CATALOG position (AC4's "order stable").
+            var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
+            Assert.True(model.Toggle("access"));   // off   -> visible: file
+            Assert.True(model.Toggle("column"));   // on    -> file,column
+            Assert.True(model.Toggle("text"));     // on    -> file,column,text
+            Assert.Equal("file,column,text", model.VisibleIdsJoined);
+
+            // access (catalog index 0) comes back BEFORE file — a naive append-to-end
+            // implementation would yield "file,column,text,access" and fail here.
+            Assert.True(model.Toggle("access"));
+            Assert.Equal("access,file,column,text", model.VisibleIdsJoined);
+        }
+
+        public static void Run_ColumnVisibility_AllOffRule()
+        {
+            // PINNED RULE (Section A P3): the LAST visible column cannot be hidden — the chooser
+            // may never leave zero columns (the ListView always keeps >= 1 column and the
+            // "[Telescope] results columns=" diagnostic is never empty).
+            var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
+            Assert.True(model.Toggle("access"));            // visible: file (now the last one)
+            Assert.False(model.Toggle("file"), "the last visible column cannot be hidden");
+            Assert.True(model.IsVisible("file"));
+            Assert.Equal("file", model.VisibleIdsJoined);   // unchanged
+
+            // Hiding is possible again once another column is visible.
+            Assert.True(model.Toggle("symbol"));
+            Assert.True(model.Toggle("file"));
+            Assert.Equal("symbol", model.VisibleIdsJoined);
+        }
+
+        public static void Run_ColumnVisibility_UnknownIdNoOp()
+        {
+            var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
+            Assert.False(model.Toggle("no-such-column"));
+            Assert.Equal("access,file", model.VisibleIdsJoined);   // unchanged, no throw
+        }
+
+        public static void Run_ColumnVisibility_IdFormat()
+        {
+            // The "[Telescope] results columns=<ids>" literal (D5/M-M7): the id list is
+            // comma-separated with NO spaces, in the model's visible (catalog) order. The
+            // overlay's log line (Section B) must embed EXACTLY VisibleIdsJoined.
+            var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
+            Assert.Equal("access,file", model.VisibleIdsJoined);
+            Assert.True(model.Toggle("symbol"));
+            Assert.Equal("access,file,symbol", model.VisibleIdsJoined);
+        }
+
+        public static void Run_ResultRowCells_OrderedCells()
+        {
+            // The row's cells are computed from the entry's PAYLOAD via the VISIBLE columns'
+            // getters — one cell per visible column, in VISIBLE-column order (a hidden middle
+            // column shifts the cells left). D3: presentation-only; Display is untouched.
+            var visible = FinderColumns.ForFinder("References").Where(c => c.DefaultVisible).ToList();
+            var hit = new ReferenceHit(@"C:\p\Writer.cs", 5, 5, isWrite: true, "Value", "Shared.Value = 1;");
+            var cells = ResultRowCells.Compute(new FinderEntry("Value (write) Writer.cs:5:5 — Shared.Value = 1;", hit), visible);
+
+            Assert.Equal(2, cells.Count);
+            Assert.Equal("W", cells[0]);          // D2a: write -> W (Section A rev 1)
+            Assert.Equal("Writer.cs", cells[1]);
+        }
+
+        public static void Run_ResultRowCells_NullPayloadEmptyCells()
+        {
+            // A payload-less entry (the E("alpha") shape) must not crash the row computation:
+            // every cell is the empty string.
+            var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();
+            var cells = ResultRowCells.Compute(new FinderEntry("alpha"), visible);
+            Assert.Equal(2, cells.Count);
+            Assert.True(cells.All(c => c.Length == 0), "every cell is empty for a null payload");
+        }
+
+        public static void Run_ResultRowCells_ForeignPayloadEmptyCells()
+        {
+            // A payload of the WRONG hit type yields empty cells — never a throw (the getters'
+            // Cell<THit> type test).
+            var visible = FinderColumns.ForFinder("References").Where(c => c.DefaultVisible).ToList();
+            var cells = ResultRowCells.Compute(new FinderEntry("a file row", new FileHit(@"C:\p\A.cs", 0)), visible);
+            Assert.Equal(2, cells.Count);
+            Assert.True(cells.All(c => c.Length == 0), "a foreign payload yields empty cells");
+        }
+
+        public static void Run_ResultRowCells_NullEntryEmptyCells()
+        {
+            var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();
+            var cells = ResultRowCells.Compute(null, visible);
+            Assert.Equal(2, cells.Count);
+            Assert.True(cells.All(c => c.Length == 0), "a null entry yields empty cells");
         }
 
         public static void Run_LogFileWriter_WritesAndClearsFile()
@@ -1883,168 +2300,57 @@ namespace Telescope.Tests
         }
 
         // ================================================================
-        // SyntaxHighlighter — preview syntax coloring (keywords/strings/comments/numbers)
+        // Preview -> real editor view (D9/D10, Section P). The pure pieces the
+        // migration keeps unit-testable: the navigator-target -> editor-caret
+        // mapping (clamped to the editor text — the mtime-drift guard) and the
+        // preview diagnostic formats (byte-stable under the migration).
+        // RED: PreviewCaretMap / PreviewDiagnostics do not exist yet -> CS0246.
         // ================================================================
 
-        public static void Run_Syntax_KeywordsAndIdentifiers()
+        public static void Run_PreviewCaret_OffsetClampedToEditorText()
         {
-            // m24: exact-sequence assertion — pins the ordered (Text, Category) pairs Tokenize
-            // produces for "public class Foo { }" (the weak presence checks are gone).
-            var segs = SyntaxHighlighter.Tokenize("public class Foo { }");
-            var pairs = segs.Select(s => (s.Text, s.Category)).ToList();
-            var expected = new (string Text, SyntaxCategory Category)[]
-            {
-                ("public", SyntaxCategory.Keyword),
-                (" ", SyntaxCategory.Default),
-                ("class", SyntaxCategory.Keyword),
-                (" ", SyntaxCategory.Default),
-                ("Foo", SyntaxCategory.Default),
-                (" { }", SyntaxCategory.Default),
-            };
-            Assert.Equal(expected.Length, pairs.Count);
-            for (int i = 0; i < expected.Length; i++)
-            {
-                Assert.Equal(expected[i].Text, pairs[i].Text);
-                Assert.Equal(expected[i].Category, pairs[i].Category);
-            }
+            // The editor buffer may be SHORTER than the navigator's text (the file changed on
+            // disk between navigator.SetText and the document load). The offset must clamp to
+            // the editor text's length or new SnapshotPoint(snapshot, offset) throws
+            // ArgumentOutOfRangeException.
+            Assert.Equal(3, PreviewCaretMap.Offset("abc", 99));
+            Assert.Equal(0, PreviewCaretMap.Offset("abc", -5));
+            Assert.Equal(2, PreviewCaretMap.Offset("abc", 2));
         }
 
-        public static void Run_Syntax_LineComment()
+        public static void Run_PreviewCaret_LineOfClampedOffset()
         {
-            var segs = SyntaxHighlighter.Tokenize("int x = 1; // hello");
-            var comment = segs.FirstOrDefault(s => s.Category == SyntaxCategory.Comment);
-            Assert.True(comment.Text == "// hello", $"line comment captured, got '{comment.Text}'");
+            // 1-based line of the CLAMPED offset — the scroll target and the
+            // "preview caret= line=" diagnostic's line value. An offset AT a '\n' belongs to
+            // the line it ENDS (matches the retired CaretToPointer's "land at the end of the
+            // line" behavior, PreviewRenderer.cs:236-238).
+            Assert.Equal(3, PreviewCaretMap.Line("one\ntwo\nthree", 8));
+            Assert.Equal(2, PreviewCaretMap.Line("one\ntwo\nthree", 5));
+            Assert.Equal(1, PreviewCaretMap.Line("one\ntwo\nthree", 3));   // the '\n' after "one"
+            Assert.Equal(3, PreviewCaretMap.Line("one\ntwo\nthree", 99));  // clamped -> last line
         }
 
-        public static void Run_Syntax_BlockCommentSpansLines()
+        public static void Run_PreviewCaret_EmptyEditorText()
         {
-            var segs = SyntaxHighlighter.Tokenize("a /* one\ntwo */ b");
-            var comment = segs.FirstOrDefault(s => s.Category == SyntaxCategory.Comment);
-            Assert.True(comment.Text.Contains('\n'), "block comment spans lines");
-            Assert.True(comment.Text.StartsWith("/*") && comment.Text.EndsWith("*/"), "block comment includes delimiters");
+            // The empty-preview case: no crash, line 1.
+            Assert.Equal(0, PreviewCaretMap.Offset("", 0));
+            Assert.Equal(1, PreviewCaretMap.Line("", 0));
         }
 
-        public static void Run_Syntax_Strings()
+        public static void Run_PreviewDiagnostics_CaretFormat()
         {
-            var segs = SyntaxHighlighter.Tokenize("var s = \"hi \\\"there\\\"\";");
-            var str = segs.FirstOrDefault(s => s.Category == SyntaxCategory.String);
-            Assert.True(str.Text == "\"hi \\\"there\\\"\"", $"string captured with escapes, got '{str.Text}'");
+            // Byte-stable under the migration (D10): the EXACT current format
+            // (PreviewRenderer.cs:58 / TelescopeOverlay.cs:574). TelescopeLog supplies the
+            // "[Telescope] " prefix; the helper returns the message body only.
+            Assert.Equal("preview caret=12 line=3", PreviewDiagnostics.Caret(12, 3));
+            Assert.Equal("preview caret=0 line=1", PreviewDiagnostics.Caret(0, 1));
         }
 
-        public static void Run_Syntax_VerbatimStringSpansLines()
+        public static void Run_PreviewDiagnostics_FileFormat()
         {
-            var segs = SyntaxHighlighter.Tokenize("var s = @\"line1\nline2\"\"quote\";");
-            var str = segs.FirstOrDefault(s => s.Category == SyntaxCategory.String);
-            Assert.True(str.Text.StartsWith("@\""), "verbatim string captured");
-            Assert.True(str.Text.Contains("line1"), "verbatim string spans lines");
-        }
-
-        public static void Run_Syntax_InterpolatedVerbatimString()
-        {
-            // N67 (BP-63): $@"..." (interpolated verbatim) must tokenize as a String. RED today:
-            // the '$' + '"' branch misses it (next is '@', not '"'), so '$' renders as Default and
-            // the string starts at '@'.
-            var segs = SyntaxHighlighter.Tokenize("var s = $@\"line1\nline2\";");
-            var str = segs.FirstOrDefault(s => s.Category == SyntaxCategory.String);
-            Assert.True(str.Text.StartsWith("$@\""), $"interpolated verbatim string captured, got '{str.Text}'");
-            Assert.True(str.Text.Contains("line1"), "interpolated verbatim string spans lines");
-        }
-
-        public static void Run_Syntax_Numbers()
-        {
-            var segs = SyntaxHighlighter.Tokenize("var x = 42; var y = 0xFF; var z = 1.5e3; var f = 100L;");
-            var nums = segs.Where(s => s.Category == SyntaxCategory.Number).Select(s => s.Text).ToList();
-            Assert.True(nums.Contains("42"), "decimal literal");
-            Assert.True(nums.Contains("0xFF"), "hex literal");
-            Assert.True(nums.Contains("1.5e3"), "exponent literal");
-            Assert.True(nums.Contains("100L"), "suffixed literal");
-        }
-
-        public static void Run_Syntax_RoundTripsText()
-        {
-            const string code = "using System;\n\npublic class Probe\n{\n    // note\n    static int X = 42;\n    string s = \"hello\";\n}";
-            var segs = SyntaxHighlighter.Tokenize(code);
-            var rebuilt = string.Concat(segs.Select(s => s.Text));
-            Assert.Equal(code, rebuilt);
-        }
-
-        // ================================================================
-        // Preview/motion correctness (Phase 3 — M9). RED: ReadQuoted's
-        // `i += 2` escape advance pushes i past text.Length on an unterminated
-        // string ending in a backslash -> ArgumentOutOfRangeException from
-        // text.Substring(start, i - start).
-        // ================================================================
-
-        public static void Run_Syntax_UnterminatedStringEndingInBackslash()
-        {
-            const string code = "var s = \"abc\\";
-            var segs = SyntaxHighlighter.Tokenize(code);
-            var rebuilt = string.Concat(segs.Select(s => s.Text));
-            Assert.Equal(code, rebuilt);
-        }
-
-        // ================================================================
-        // PreviewTokenCache (BP-5/M4) — pure mtime-keyed cache of the tokenized
-        // segments, so PreviewRenderer.SetContent re-tokenizes only on content
-        // change (the FlowDocument rebuild stays the renderer's job — the cache
-        // holds NO WPF types). Keyed by LastWriteTimeUtc; injected timestamp +
-        // content reader keep the tests hermetic (mirrors FileContentCache).
-        // RED: `Telescope.Overlay.PreviewTokenCache` does not exist yet
-        //      -> compile error (CS0246).
-        // ================================================================
-
-        public static void Run_PreviewTokenCache_UnchangedMtimeCached()
-        {
-            int tokenizeCount = 0;
-            // Fixed timestamp (not DateTime.UtcNow): two consecutive calls must return the SAME
-            // timestamp, or a clock-tick boundary between them makes the cache miss and re-tokenize
-            // (tokenizeCount=2) — the same test-hermeticity flake as FileContentCache.
-            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            var cache = new PreviewTokenCache(
-                timestamp: _ => fixedTime,
-                contentReader: _ => "int x = 1; // c");
-
-            var first = cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
-            var second = cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
-
-            // Unchanged mtime -> the tokenizer must NOT re-run; the SAME cached segments are
-            // returned (no re-tokenize on a cache hit).
-            Assert.Equal(1, tokenizeCount);
-            Assert.True(ReferenceEquals(first, second), "unchanged mtime returns the SAME cached segments (no re-tokenize)");
-        }
-
-        public static void Run_PreviewTokenCache_ChangedMtimeRetokenizes()
-        {
-            var timestamps = new Dictionary<string, DateTime> { ["a.cs"] = DateTime.UtcNow };
-            int tokenizeCount = 0;
-            var cache = new PreviewTokenCache(
-                timestamp: p => timestamps[p],
-                contentReader: _ => "int x = 1; // c");
-
-            cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
-            timestamps["a.cs"] = timestamps["a.cs"].AddSeconds(1);
-            cache.GetSegments("a.cs", content => { tokenizeCount++; return SyntaxHighlighter.Tokenize(content); });
-
-            // A changed LastWriteTimeUtc must force a re-tokenize (tokenizer invoked twice).
-            Assert.Equal(2, tokenizeCount);
-        }
-
-        public static void Run_PreviewDocumentCache_UnchangedMtimeSkipsRebuild()
-        {
-            // R2 (BP-2) + N33/BP-46: the preview rebuilds the whole FlowDocument + LineIndex + line
-            // pointers + ScrollToHome() on every selection change — only the TOKENIZATION is
-            // mtime-cached (PreviewTokenCache). The rebuild decision is now served from the
-            // surviving PreviewTokenCache (ShouldRebuild), which subsumes the deleted
-            // PreviewDocumentCache. This test pins the mtime-keyed decision: an unchanged mtime
-            // must NOT re-run the (document) build.
-            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            var cache = new PreviewTokenCache(
-                timestamp: _ => fixedTime,
-                contentReader: _ => "int x = 1; // c");
-
-            Assert.True(cache.ShouldRebuild("a.cs"), "first call must rebuild (no cached mtime)");
-            cache.GetSegments("a.cs", SyntaxHighlighter.Tokenize);
-            Assert.False(cache.ShouldRebuild("a.cs"), "unchanged mtime must skip the rebuild");
+            // Byte-stable under the migration (D10): the EXACT current format
+            // (PreviewRenderer.cs:60).
+            Assert.Equal(@"preview file=C:\p\A.cs chars=123", PreviewDiagnostics.File(@"C:\p\A.cs", 123));
         }
 
         // ================================================================

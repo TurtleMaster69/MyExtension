@@ -11,10 +11,10 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 39 registered live E2E scenarios (37 GREEN +
-> `neovisual-window-management` (E2E-GAP1-1) and `neovisual-diagnostic-nav` (E2E-GAP3-1)
-> queued unexecuted; no known-RED; a few flake on retry), feature
-> status/roadmap, and the hard requirements. This file covers the durable
+> test commands, the 40 registered live E2E scenarios (37 GREEN +
+> `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
+> `telescope-results-columns` (E2E-RC-1) queued unexecuted; no known-RED; a few flake on
+> retry), feature status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
 
 ## Trailmark (structural queries)
@@ -89,7 +89,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Navigation/Utils/NavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `MyExtension/Navigation/Utils/WindowRect.cs` | Simple int `x, y, width, height` rect value object. |
 | `MyExtension/Navigation/Utils/NavigationSnapshot.cs` | Single-pass snapshot of navigation candidates (active rect derived from the candidate list — no N+1 COM rect calls). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `SyntaxHighlighter` preview syntax coloring, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
 | `Telescope/Finders/Utils/HitOpener.cs` | Shared null/missing-file guard + open-at-line for the finders. |
 | `Telescope/Finders/Utils/FileContentCache.cs` | mtime-keyed file-content cache (LRU-capped). |
 | `Telescope/Finders/Utils/ProjectFileCache.cs` | Cached `ProjectFiles.Enumerate` enumeration. |
@@ -115,9 +115,23 @@ handles that. **net472 has no `IReadOnlySet<T>`** — `ActionKeys` is
 ## Telescope overlay (newer)
 
 `TelescopeOverlay` is a WPF modal Window: title bar (finder + mode), prompt
-TextBox (insert filter), results list, and a read-only **preview pane** on the
-right. Keys route via `OverlayKeyHandler` (list navigation/modes) when focus is
-on the list, or `TextMotionNavigator` (vim motions h/l/j/k/w/b/e/0/$/gg/G) when
+TextBox (insert filter), a **columned results list** (WPF ListView + GridView,
+headers visible; one row = multiple columns from per-finder column sets —
+`ResultColumn` definitions, a default-visible subset per the column catalog;
+right-clicking a column header opens the chooser menu to toggle any column,
+catalog order stable), and a read-only **preview pane** on the right — a REAL
+read-only VS editor view hosted in the overlay (VS's own classifier highlighting;
+the Editable view role is excluded, so VsVim never attaches and there is no insert
+mode; the custom SyntaxHighlighter tokenizer and its RichTextBox rendering are
+retired). Narrow columns render compact cell values: Access write → W, read → R;
+Issues Kind Error → err, Warning → warn, Todo → todo, Info → info; Implementation
+Kind Class → cls, Interface → inf, Struct → str, Enum → enm, Method → func,
+Property → prop, Event → evt (the user-specified imp/func/inf among them; defensive
+entries + the ≤4-char fallback rule pinned by the column model). Selection, preview
+and Enter read the row's hit payload by index — display- and column-independent (fzf
+filters the `Display` strings; `ResultMapper` re-associates payloads). Keys route via
+`OverlayKeyHandler` (list navigation/modes) when focus is on the list, or
+`TextMotionNavigator` (vim motions h/l/j/k/w/b/e/0/$/gg/G) when
 focus is on the preview. **Ctrl+H / Ctrl+L switch `_focusTarget` between List and
 Preview.** The overlay **closes on focus loss** (`Deactivated` → `CloseOverlay`).
 
@@ -248,11 +262,12 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (172) and
-  `dotnet run --project tests/NeoVisual.Tests` (187), with substring filter +
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (199) and
+  `dotnet run --project tests/NeoVisual.Tests` (190), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (39 registered — 37 GREEN +
-  `neovisual-window-management` (E2E-GAP1-1) and `neovisual-diagnostic-nav` (E2E-GAP3-1)
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (40 registered — 37 GREEN +
+  `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
+  `telescope-results-columns` (E2E-RC-1)
   queued unexecuted — against the experimental
   instance), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded

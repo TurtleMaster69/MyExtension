@@ -85,7 +85,7 @@ namespace MyExtension.Package
                 {
                     ("telescope", () =>
                     {
-                        _telescope = new TelescopeController();
+                        _telescope = new TelescopeController(() => new PreviewEditorHost(this));
                         _launcher = new TelescopeLauncher(this, _telescope);
                         return Task.CompletedTask;
                     }),

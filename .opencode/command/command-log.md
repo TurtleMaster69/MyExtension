@@ -363,3 +363,21 @@
 - NEEDS-PERMISSION: no
 - AGENT: docs-reviewer
 - DATE: 2026-10-04
+
+### 2026-10-04 — verification-agent (Gap 11 final gate)
+- CMD: `rg -n "Team\.Git|\"g," MyExtension/Resources/default-keybindings.json` (double-quoted pwsh arg containing `\"`)
+- RESULT: NO output, NO error — silent empty result. In pwsh a backslash does NOT escape a quote inside a double-quoted string (`"` terminates it), so the pattern arrived truncated (`Team\.Git|\`) plus a bogus bareword `g,` file arg; rg matched nothing in a file that contains `Team.Git` on lines 30-33
+- REASON: misuse — the same outer-shell quoting class as the known-bad `pwsh -Command "..."` row, manifested as a SILENT empty rg result (worst kind: looks like a true negative)
+- ALTERNATIVE: single-quote the whole rg pattern (`rg -n 'Team\.Git|"g,' <file>`), or use the `read`/`grep` tools — the `read` tool resolved it (BP-1 verified: 38 bindings, the three git pairs present, no `Team.Git.Branches`)
+- NEEDS-PERMISSION: no
+- AGENT: verification-agent
+- DATE: 2026-10-04
+
+### 2026-10-05 — docs-reviewer (Gap 11 build-plan re-plan gate)
+- CMD: two `dotnet run --project tests/...` builds launched IN PARALLEL (NeoVisual.Tests + Telescope.Tests)
+- RESULT: the Telescope build failed `CS2012: Cannot open 'Telescope\obj\Debug\net472\Telescope.dll' for writing -- being used by another process; file may be locked by 'Microsoft Defender Antivirus Service'` — transient; the sequential retry passed (224/0)
+- REASON: misuse — concurrent MSBuild over the same repo's obj/bin (plus Defender scanning the fresh DLL) locks the output; repo `dotnet` builds must run SEQUENTIALLY
+- ALTERNATIVE: run `dotnet run --project tests/...` one at a time; on a CS2012 Defender lock, one sequential retry suffices (do not misread it as a code failure)
+- NEEDS-PERMISSION: no
+- AGENT: docs-reviewer
+- DATE: 2026-10-05

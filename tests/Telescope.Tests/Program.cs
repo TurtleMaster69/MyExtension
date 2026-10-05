@@ -418,7 +418,7 @@ namespace Telescope.Tests
             // Section A BP-A1's invariant: exactly one Flexible column per finder at most;
             // Flexible => WidthChars 0; Fixed => WidthChars > 0. The exact WidthChars values are
             // Section-B tuning hints and are NEVER asserted here.
-            foreach (var name in new[] { "Files", "Issues", "References", "Grep", "Fzf", "Implementation" })
+            foreach (var name in new[] { "Files", "Issues", "References", "Grep", "Fzf", "Implementation", "Recent" })
             {
                 var cols = FinderColumns.ForFinder(name);
                 Assert.True(cols.Count > 0, $"{name} has a catalog");
@@ -4443,6 +4443,173 @@ namespace Telescope.Tests
             }
 
             Assert.True(threw, "TempDir.Dispose must surface a failed recursive delete (m21)");
+        }
+
+        // ================================================================
+        // RecentFilesFinder — the VS MRU, most-recent-first
+        // (hermetic seams: injected gatherer Func<IReadOnlyList<string>> + opener
+        // Action<string>, mirroring ReferencesFinder; File.Exists pass-cases use real temp files)
+        // RED: RecentFilesFinder / RecentFileHit do not exist yet -> compile error (CS0246).
+        // ================================================================
+
+        // Temp-file discipline: File.Exists is a real filesystem call, so the pass-cases
+        // create real temp files (tiny, deleted in finally).
+        private static string RecentTestDir()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "telescope_recent_tests", Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        public static void Run_RecentFilesFinder_DisplayIsFileName()
+        {
+            string dir = RecentTestDir();
+            try
+            {
+                string p = Path.Combine(dir, "Order.cs");
+                File.WriteAllText(p, "// x\n");
+                var finder = new RecentFilesFinder(() => new[] { p }, _ => { });
+
+                var entries = finder.GetCandidates();
+                Assert.Equal(1, entries.Count);
+                Assert.Equal("Order.cs", entries[0].Display);   // the Files display contract
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        }
+
+        public static void Run_RecentFilesFinder_PreservesMostRecentFirstOrder()
+        {
+            string dir = RecentTestDir();
+            try
+            {
+                string a = Path.Combine(dir, "A.cs"), b = Path.Combine(dir, "B.cs");
+                File.WriteAllText(a, "// x\n");
+                File.WriteAllText(b, "// x\n");
+                // The gatherer's order IS the MRU order (b opened last → b first). The finder must
+                // preserve it — never re-sort alphabetically.
+                var finder = new RecentFilesFinder(() => new[] { b, a }, _ => { });
+
+                var entries = finder.GetCandidates();
+                Assert.Equal("B.cs", entries[0].Display);
+                Assert.Equal("A.cs", entries[1].Display);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        }
+
+        public static void Run_RecentFilesFinder_FiltersMissingFiles()
+        {
+            string dir = RecentTestDir();
+            try
+            {
+                string existing = Path.Combine(dir, "Exists.cs");
+                File.WriteAllText(existing, "// x\n");
+                string missing = Path.Combine(dir, "Missing.cs");   // never created
+                var finder = new RecentFilesFinder(() => new[] { missing, existing }, _ => { });
+
+                var entries = finder.GetCandidates();
+                Assert.Equal(1, entries.Count);
+                Assert.Equal("Exists.cs", entries[0].Display);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        }
+
+        public static void Run_RecentFilesFinder_CapsAt200()
+        {
+            string dir = RecentTestDir();
+            try
+            {
+                var paths = new List<string>();
+                for (int i = 0; i < 201; i++)
+                {
+                    string p = Path.Combine(dir, $"F{i:000}.cs");
+                    File.WriteAllText(p, "// x\n");
+                    paths.Add(p);
+                }
+
+                var finder = new RecentFilesFinder(() => paths, _ => { });
+
+                var entries = finder.GetCandidates();
+                Assert.Equal(200, entries.Count);
+                // Most-recent-first truncation: the FIRST 200 of the gather order survive.
+                Assert.Equal("F000.cs", entries[0].Display);
+                Assert.Equal("F199.cs", entries[199].Display);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        }
+
+        public static void Run_RecentFilesFinder_PayloadRoundTrips()
+        {
+            string dir = RecentTestDir();
+            try
+            {
+                string p = Path.Combine(dir, "Writer.cs");
+                File.WriteAllText(p, "// x\n");
+                var finder = new RecentFilesFinder(() => new[] { p }, _ => { });
+
+                var entry = finder.GetCandidates()[0];
+                var payload = entry.Payload as RecentFileHit;
+                Assert.True(payload != null, "payload is a RecentFileHit");
+                Assert.Equal(p, payload!.FilePath);
+                Assert.Equal(0, payload.LineNumber);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        }
+
+        public static void Run_RecentFilesFinder_OnSelectedOpensPath()
+        {
+            string dir = RecentTestDir();
+            try
+            {
+                string p = Path.Combine(dir, "Opened.cs");
+                File.WriteAllText(p, "// x\n");
+                string? opened = null;
+                var finder = new RecentFilesFinder(() => new[] { p }, path => opened = path);
+
+                finder.OnSelected(finder.GetCandidates()[0]);
+                Assert.Equal(p, opened);
+            }
+            finally { Directory.Delete(dir, recursive: true); }
+        }
+
+        public static void Run_RecentFilesFinder_EmptyGatherYieldsNoEntries()
+        {
+            // A null gatherer result (the probe AND the session floor both empty) → 0 entries.
+            var finder = new RecentFilesFinder(() => null!, _ => { });
+            Assert.Equal(0, finder.GetCandidates().Count);
+        }
+
+        public static void Run_RecentFilesFinder_LineNumberIsZeroForTopReset()
+        {
+            // The model contract the overlay's preview branch relies on (TelescopeOverlay.cs:731):
+            // LineNumber==0 → MoveTo(0) (top reset), never a line jump.
+            var hit = new RecentFileHit(@"C:\p\Anywhere.cs");
+            Assert.Equal(0, hit.LineNumber);
+            Assert.Equal(@"C:\p\Anywhere.cs", hit.FilePath);
+        }
+
+        // ================================================================
+        // Recent column set — the Files shape (file+dir visible, path hidden)
+        // RED: RecentFileHit does not exist yet -> compile error (CS0246);
+        //      FinderColumns.ForFinder("Recent") returns the EMPTY catalog until BP-7 lands.
+        // ================================================================
+
+        public static void Run_ResultsColumns_Recent_Catalog()
+        {
+            var cols = FinderColumns.ForFinder("Recent");
+            Assert.Equal("file,dir,path", JoinIds(cols));
+            Assert.Equal("File|Directory|Path", string.Join("|", cols.Select(c => c.Header)));
+            Assert.Equal("file,dir", JoinDefaultVisible(cols));   // the Files shape: path hidden
+        }
+
+        public static void Run_ResultsColumns_Recent_Getters()
+        {
+            var cols = FinderColumns.ForFinder("Recent");
+            var hit = new RecentFileHit(@"C:\other\solution\Deep\Dir\Order.cs");
+            Assert.Equal("Order.cs", CellOf(cols, "file", hit));
+            Assert.Equal(@"C:\other\solution\Deep\Dir", CellOf(cols, "dir", hit));   // FULL dir — no root trim
+            Assert.Equal(@"C:\other\solution\Deep\Dir\Order.cs", CellOf(cols, "path", hit));
+            // Type disjointness: a Files payload (FileHit) renders EMPTY cells in the Recent catalog.
+            Assert.Equal(string.Empty, CellOf(cols, "file", new FileHit(@"C:\x\File.cs", 0)));
         }
     }
 }

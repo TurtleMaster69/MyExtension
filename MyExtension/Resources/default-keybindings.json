@@ -20,6 +20,7 @@
     "f,b": "command:Window.NavigateTo",
     "f,r": "telescope-references",
     "f,i": "telescope-implementation",
+    "f,e": "telescope-recent",
     "c,w": "command:View.CommandWindow",
     "c,a": "command:View.QuickActions",
     "c,r": "command:Refactor.Rename",

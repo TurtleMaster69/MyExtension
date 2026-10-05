@@ -17,6 +17,7 @@
 #   telescope-goto        goto-definition/references/implementation commands: 1 hit -> direct jump, multi-hit -> Telescope overlay
 #   telescope-grep      Space F G: grep finder searches files for the query, previews + opens at the hit line
 #   telescope-fzf       Space F Z: fzf finder fuzzy-matches file contents, previews + opens at the hit line
+#   telescope-recent    Space F E: recent-files finder (VS MRU), previews + opens the file
 #   telescope-prompt-motions  normal-mode prompt h/l/w/b/e/0/$ caret motions over the query
 #   telescope-preview-motions preview pane h/l/j/k/w/b/e/0/$/g/G motions over a seeded file
 #   telescope-q-close    q closes the overlay in normal mode
@@ -1822,17 +1823,37 @@ Register-Scenario 'telescope-goto' {
     Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Reader\.cs" 'Enter opened Reader.cs'
     Close-Telescope $vs $logPath
 
-    Enter-NormalContext $vs
-    Assert-VsFocused $vs 'goto-definition caret positioning'
-    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 2
-    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 3
-    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 4
-    Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 5
-    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> return
-    Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> Shared
+    # BP-B7 (the M-M2 3rd-strike regression fix — run 183): normalize the caret to line 1
+    # col 0 before the walk (Part 4's proven fix: re-opening an ALREADY-OPEN tab restores
+    # the last caret, so the j/w walk from a stale position lands off the symbol and the
+    # gather returns 0 -> 'definitions gathered count=0' -> 'open finder=Definition
+    # candidates=0' instead of the direct jump), then fire; if the gather STILL returns 0
+    # (the Roslyn-readiness residual), re-walk ONCE. `g` is not hook-interesting, so gg
+    # falls through to VsVim like w/j/k (Part 4's comment). The re-walk is IN-CONTRACT: a
+    # pass after it is a PASS, not a runner-level flake. Enter-NormalContext's escapes
+    # also close the attempt-1 0-candidate overlay before the re-walk.
+    foreach ($attempt in 1..2) {
+        Enter-NormalContext $vs
+        Assert-VsFocused $vs 'goto-definition caret positioning'
+        Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
+        Send-Tap $script:VkG; Start-Sleep -Milliseconds 200
+        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 2
+        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 3
+        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 4
+        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 5
+        Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> return
+        Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> Shared
 
-    $idx = Get-LogCacheIndex $logPath
-    & $dteCmd -DevenvPid $vs.Id -Command $gotoDefCmd | Out-Null
+        $idx = Get-LogCacheIndex $logPath
+        & $dteCmd -DevenvPid $vs.Id -Command $gotoDefCmd | Out-Null
+        # BOUNDED NON-THROWING wait (harness-common.ps1 Wait-NewLogLineAfter) for the
+        # direct jump; on the observed 0-gather race signature, re-walk ONCE; any other
+        # failure (or a second consecutive failure) falls through to the asserts below,
+        # which throw with the real signature.
+        if (Wait-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 15000) { break }
+        if ($attempt -eq 2) { break }
+        if (-not (Wait-NewLogLineAfter $logPath $idx "$($script:PfxTel)definitions gathered count=0" 2000)) { break }
+    }
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 'goto-definition single hit jumped directly' 15000
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto line=1$" 'the direct jump opened Models/Shared.cs at line 1' 15000
     $doc = Wait-ActiveDocumentMatch $vs.Id 'Shared\.cs' 8000
@@ -1862,6 +1883,11 @@ Register-Scenario 'telescope-goto' {
 
     Enter-NormalContext $vs
     Assert-VsFocused $vs 'goto-definition multi-hit caret positioning'
+    # BP-B7 audit: the same restored-caret race as Part 1 — the NOTE's "caret after opening
+    # is line 1 col 0" assumption only holds for a FRESH open; gg makes it hold for a
+    # re-opened tab too.
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> class
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> GotoProbe
 
@@ -1889,6 +1915,11 @@ Register-Scenario 'telescope-goto' {
 
     Enter-NormalContext $vs
     Assert-VsFocused $vs 'goto-references caret positioning'
+    # BP-B7 audit: the same restored-caret race (Part 1's direct jump already opened
+    # Shared.cs; a full-suite earlier scenario may have left the caret elsewhere) —
+    # normalize first.
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
+    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 2
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 3
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> public
@@ -2290,6 +2321,87 @@ Register-Scenario 'telescope-results-columns' {
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # insert -> normal
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200              # j
     Assert-NewLogLine $logPath 'results count=(\d+) selected=1' 'j moved selection on the columned list'
+    Close-Telescope $vs $logPath
+}
+
+# --- telescope-recent -------------------------------------------------------
+# The recent-files finder (Space F E) lists the VS MRU (DTE.RecentFiles,
+# most-recent-first, existing files only) through the established finder pipeline.
+# MRU-timing strategy (pinned): the scenario is SELF-CONTAINED — it FIRST opens a
+# seeded file via the existing telescope-open flow (an in-session open through the
+# extension's own DteFileOpener path), THEN fires f,e and asserts the just-opened
+# file is the TOP match (selected row 0 previews it). In a full-suite run the
+# earlier scenarios have already populated the MRU; in a -Tests subset run this
+# open is what populates it. The first live run is the empirical check that
+# DTE.RecentFiles reflects in-session opens.
+# REV-1 (R5 attribution): Step 1's Files-finder run emits the SAME literals Steps
+# 2-4 assert, and Assert-NewLogLine searches from the fixed scenario baseline — so
+# every Step 2-4 assertion is SNAPSHOT-ATTRIBUTED: a Get-LogCacheIndex snapshot is
+# taken immediately before each key under test and asserted via
+# Assert-NewLogLineAfter, which can only be satisfied by a line emitted AFTER that
+# snapshot. A Step-1-era line can never satisfy a Step 2-4 assertion (no false GREEN).
+Register-Scenario 'telescope-recent' {
+    param($vs, $logPath)
+    Reset-LogBaseline $logPath
+
+    # Step 1: open Models/Order.cs via the Files finder so the MRU has a fresh
+    # in-session entry ('Order' is a unique name match in the scratch solution).
+    Open-Telescope $vs $logPath
+    Assert-OverlayFocused $vs
+    Send-Text 'Order'
+    Assert-NewLogLine $logPath "promptChanged query='Order'" 'typed query reached prompt'
+    Assert-NewLogLine $logPath "$($script:PfxTel)results count=1 selected=0" 'filter rendered the single Order.cs match'
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Order\.cs" 'Enter opened Models/Order.cs'
+    Close-Telescope $vs $logPath
+
+    # Step 2: Space+F E -> recent-files finder, >=1 candidate (the MRU).
+    # $preOpen attributes every Step 2 assertion to the f,e open: Step 1's Files
+    # render already emitted 'results columns=file,dir' — only a post-snapshot line
+    # may satisfy the AC4 assertion.
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'recent-finder leader sequence'
+    $preOpen = Get-LogCacheIndex $logPath
+    Open-TelescopeFinder -Vs $vs -LogPath $logPath -Key 'F,E' -Finder 'Recent'
+    Assert-OverlayFocused $vs
+    Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)open finder=Recent candidates=(\d+)" 'recent finder listed candidates'
+    # 'open finder=Recent' is unique to this step (the Recent finder is NEW — no
+    # earlier scenario or Step 1 emits it), so whole-file last-match is Step 2's line.
+    $cand = 0
+    $lines = Get-Content $logPath
+    foreach ($ln in $lines) { if ($ln -match 'open finder=Recent candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    if ($cand -lt 1) { throw "expected >=1 recent-file candidate, found $cand" }
+    Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)recent files gathered count=(\d+)" 'recent-files gather summary logged'
+    Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)results columns=file,dir$" 'Recent default columns rendered (file,dir)'
+    # REV 2 (the top-match proof MOVED here from Step 3): the unfiltered render previews
+    # the selected row 0 — the MOST-RECENT MRU entry. Step 1 just opened Models/Order.cs,
+    # so row 0 IS Order.cs (most-recent-first) and this line is the AC2 proof. It must be
+    # asserted HERE: PreviewEditorHost.Show reuses the view while path+mtime are unchanged
+    # and logs 'preview file=' ONLY in RebuildView (the cache-MISS path) — Step 3's filtered
+    # Show is a cache HIT (Order.cs tops BOTH lists) and can never emit the line.
+    Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)preview file=.*Order\.cs" 'the unfiltered render previews the TOP (most-recent) match — Models/Order.cs' 10000
+
+    # Step 3: the query filters the MRU to the single Order.cs match, selection on row 0
+    # (the filtered TOP match). REV 2: the preview proof lives in Step 2 (the unfiltered
+    # render) — here the filtered top match is proven by the per-keystroke results line:
+    # 'Order' is a unique name match in the scratch solution (Step 1's Files-finder render
+    # over the FULL seed universe pinned count=1), the MRU candidates are a subset of the
+    # seeded files, and the filter is monotone (more chars never add matches), so
+    # count=1 selected=0 IS the filtered-top-match proof. NO 'preview file=' assertion
+    # here: the filtered Show is a PreviewEditorHost cache HIT (path+mtime unchanged) and
+    # the line only fires on a rebuild — structurally unemittable (runs 183/184).
+    $preQuery = Get-LogCacheIndex $logPath
+    Send-Text 'Order'
+    Assert-NewLogLineAfter $logPath $preQuery "promptChanged query='Order'" 'typed query reached the recent prompt'
+    Assert-NewLogLineAfter $logPath $preQuery "$($script:PfxTel)results count=1 selected=0" 'query filtered the MRU to the single Order.cs match, selected row 0' 10000
+
+    # Step 4: Enter re-opens it (the EXISTING opened-file line — the shared HitOpener path).
+    # $preEnter attributes this to THIS Enter: Step 1's open line is pre-snapshot.
+    $preEnter = Get-LogCacheIndex $logPath
+    Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
+    Assert-NewLogLineAfter $logPath $preEnter "$($script:PfxTel)opened file: .*Order\.cs" 'Enter opened the recent file' 20000
+
+    # Step 5: close.
     Close-Telescope $vs $logPath
 }
 

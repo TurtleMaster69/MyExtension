@@ -11,8 +11,8 @@ keyboard binding system**, a **Telescope-style fuzzy finder overlay**, and
 **tool-window navigation** (hjkl + per-window controllers).
 
 > **Read `AGENTS.md` first** — it is the up-to-date source of truth: live/offline
-> test commands, the 43 registered live E2E scenarios (42 executed GREEN — only
-> `telescope-focus-panes` pending its VERIFY run; no
+> test commands, the 44 registered live E2E scenarios (43 executed GREEN — only
+> `telescope-recent` pending its VERIFY run; no
 > known-RED; a few flake on
 > retry), feature status/roadmap, and the hard requirements. This file covers the durable
 > architecture.
@@ -90,7 +90,7 @@ GlobalKeyboardHook (Win32 LL hook)
 | `MyExtension/Navigation/Utils/NavigationConstants.cs` | Direction chars, DPI/divide tuning constants, repeated strings. |
 | `MyExtension/Navigation/Utils/WindowRect.cs` | Simple int `x, y, width, height` rect value object. |
 | `MyExtension/Navigation/Utils/NavigationSnapshot.cs` | Single-pass snapshot of navigation candidates (active rect derived from the candidate list — no N+1 COM rect calls). |
-| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `Panes/` (`IPane` + `PaneHost` — the modular pane host: ordered registry, focused-pane tracking, GEOMETRIC directional Ctrl+H/J/K/L movement (LEFT/DOWN/UP/RIGHT via `PaneNavigationEngine`, logged no-op edges), left-click normalization; `PromptPane`/`ListPane`/`PreviewPane` — the reusable core the deferred lazygit overlay builds on), `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `DefinitionFinder` + `DefinitionHit` symbol-at-caret definition locations via `DeclaringSyntaxReferences` (finder-side deterministic ordering), `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
+| `Telescope/` | The Telescope library (separate project `Telescope.csproj`), grouped into `Controller/` (`TelescopeController`), `Overlay/` (`TelescopeOverlay` WPF modal, `OverlayKeyHandler` pure vim state machine, `TextMotionNavigator` shared pure vim motions for preview + text-input windows, `ResultMapper`, `PromptMotionRouter` (a/A/I insert-placement routing seam), `FocusTargetModel`, `Panes/` (`IPane` + `PaneHost` — the modular pane host: ordered registry, focused-pane tracking, GEOMETRIC directional Ctrl+H/J/K/L movement (LEFT/DOWN/UP/RIGHT via `PaneNavigationEngine`, logged no-op edges), left-click normalization; `PromptPane`/`ListPane`/`PreviewPane` — the reusable core the deferred lazygit overlay builds on), `LineIndex`, `TextMotionDispatcher` — `TryDispatch` was merged into it, n11), `Finders/` (`FileFinder`, `CodeIssuesFinder` warnings/errors/TODO, `ReferencesFinder` + `ReferenceHit` symbol-at-caret find-references with read/write access — the Roslyn gatherer is host-injected so the finder stays hermetic-testable, `GrepFinder` + `GrepHit` query-driven grep over `ProjectFiles.Enumerate` — the overlay re-gathers per keystroke with a ~200ms debounce and skips fzf for query finders, `FzfFinder` + `FzfHit` query-driven fuzzy content finder (per-file fzf `--filter`, matched lines mapped back by the pure `FzfLineMapper`; literal `LiteralLineScanner` fallback when fzf is unavailable), `ImplementationFinder` + `ImplementationHit` symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering — host-injected gatherer keeps it hermetic-testable, `RecentFilesFinder` + `RecentFileHit` recent-files finder over `DTE.RecentFiles` (the VS MRU, most-recent-first, existing files only — host-injected gatherer keeps it hermetic-testable), `DefinitionFinder` + `DefinitionHit` symbol-at-caret definition locations via `DeclaringSyntaxReferences` (finder-side deterministic ordering), `ProjectFiles` shared DTE enumeration, `HitOpener`, `FileContentCache`, `ProjectFileCache`, `HierarchyWalker`, `DteFileOpener`, `FinderBase`), `Filter/` (`FzfFilter` fzf `--filter` subprocess — input must be explicit UTF-8 bytes or non-ASCII display breaks the payload lookup), `Logging/` (`NeoVisualLog`/`LogFileWriter` two-file per-run logs, `DiagnosticLog`, `TelescopeLog`, `FilterFailureLog`, `PaneFailureTracker`). |
 | `Telescope/Finders/Utils/HitOpener.cs` | Shared null/missing-file guard + open-at-line for the finders. |
 | `Telescope/Finders/Utils/FileContentCache.cs` | mtime-keyed file-content cache (LRU-capped). |
 | `Telescope/Finders/Utils/ProjectFileCache.cs` | Cached `ProjectFiles.Enumerate` enumeration. |
@@ -214,7 +214,8 @@ shortcuts (e.g. `Ctrl+H`, distinguished by a `+`). Leader sequences are
 `s,G`); simple shortcuts stay case-insensitive. Action names resolve in
 `InputHandler.ResolveAction`: `navigate-left/right/up/down`, `telescope`,
 `telescope-issues`, `telescope-references`, `telescope-grep`,
-`telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`,
+`telescope-implementation`, `telescope-fzf`, `telescope-recent`,
+`toggle-solution-explorer`,
 `close-window`, `next-error`, `prev-error`, `next-warning`, `prev-warning`,
 or `command:<VsCommandName>`. The `g,` git prefix is pure `command:` bindings —
 `g,d` diff (`Team.Git.CompareWithUnmodified`), `g,b` blame (`Team.Git.Annotate`;
@@ -297,11 +298,11 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (258) and
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (268) and
   `dotnet run --project tests/NeoVisual.Tests` (191), with substring filter +
   `--list`.
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (43 registered — 42 executed GREEN
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 43 executed GREEN
   against the experimental
-  instance; only `telescope-focus-panes` pending its VERIFY run), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
+  instance; only `telescope-recent` pending its VERIFY run), `-Tests <name>` to run a subset. The last scenario, `seed-leak`,
   is an end-of-run filesystem guard that fails if any scenario wrote into a seeded
   file (baseline SHA-256 snapshot taken at bootstrap; expected writes allowlisted).

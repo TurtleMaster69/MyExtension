@@ -86,6 +86,16 @@ in run 155/157)** — every gate was exercised and passed on the VS-capable mach
   176/177 — FAILED on the layout inversion: the composition kept the prompt docked TOP vs the
   pinned bottom-Input geometry, fail-twice → the RE-PLAN's BP-A5 rev 2 one-line dock flip
   fixed it.)
+- **Gap 4 — the recent-files finder (2026-10-05):** `E2E-RECENT-1` — discharged by the item's
+  final gate (the full 44-scenario fresh-boot suite, run 185, `-TimeoutSec 2400`): 44/44
+  GREEN; `telescope-recent` verified end-to-end — the probe literal ONCE
+  (`recent files probe unavailable: ...DISP_E_UNKNOWNNAME` — the pinned best-effort path),
+  `recent files gathered count=16`, the Step-2 Order.cs top-match preview proof (the
+  most-recent-first AC2), the Step-3 tightened `results count=1 selected=0`, the Step-4
+  `opened file:`; Telescope 268 / NeoVisual 191. (Two VERIFY iterations: the lazy session-MRU
+  floor → BP-3 rev 2's EAGER hookup; the structurally-unsatisfiable Step-3 preview assertion →
+  BP-B1 rev 2's Step-2 attribution; the `telescope-goto` 3rd-strike M-M2 upgrade → BP-B7's gg
+  normalization + the bounded re-walk — GREEN outright, the re-walk never fired.)
 
 ## Queued gates — Telescope columns + preview (2026-10-04)
 
@@ -153,5 +163,9 @@ e2e is ENABLED - the gates drain at each plan's VERIFY.
   the directional sequences live, the pinned no-op edges, the modal guarantee re-verified; the
   M-M7 three-state sites GREEN; see the What ran GREEN section). The left-click path is
   unit-pinned + manual.
-- **E2E-RECENT-1** - Gap 4 (fifth): the NEW `telescope-recent` scenario: `Space+f,e` opens the
-  Recent overlay; `Models/Order.cs` opened first is the TOP match (per-key snapshots); Enter opens.
+- ~~**E2E-RECENT-1** - Gap 4 (fifth)~~ — **DISCHARGED GREEN 2026-10-05** (the item's final
+  gate: the full 44-scenario fresh-boot suite, run 185; `telescope-recent` verified
+  end-to-end — the probe literal once, `recent files gathered count=16`, the Step-2 Order.cs
+  top-match preview proof, the Step-3 tightened `results count=1 selected=0`, the Step-4
+  open; see the What ran GREEN section). The `telescope-goto` 3rd-strike regression was also
+  fixed in-item (BP-B7 — GREEN outright, the re-walk never fired).

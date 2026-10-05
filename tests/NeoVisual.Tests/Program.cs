@@ -1848,18 +1848,19 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionsRegistry_ContainsAllBuiltins()
         {
-            // The registry must hold exactly the 17 built-in action names, kept in sync with
+            // The registry must hold exactly the 18 built-in action names, kept in sync with
             // default-keybindings.json (the hand-sync bug this seam removes). Gap 1 (AC3/D5)
             // added the focus-aware "close-window" action; Gap 3 (AC3-AC5/D4) adds the four
             // severity-filtered diagnostic-nav actions; Gap 6 adds the derived
-            // "telescope-definition" action (the Definition finder).
-            Assert.Equal(17, Actions.Registry.Count);
+            // "telescope-definition" action (the Definition finder); Gap 4 adds the derived
+            // "telescope-recent" action (the Recent finder).
+            Assert.Equal(18, Actions.Registry.Count);
             var names = new[]
             {
                 "navigate-left", "navigate-right", "navigate-up", "navigate-down",
                 "telescope", "telescope-issues", "telescope-references",
                 "telescope-implementation", "telescope-grep", "telescope-fzf",
-                "telescope-definition",
+                "telescope-definition", "telescope-recent",
                 "toggle-solution-explorer", "close-window",
                 "next-error", "prev-error", "next-warning", "prev-warning",
             };

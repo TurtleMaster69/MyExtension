@@ -56,6 +56,7 @@ namespace MyExtension.Package
         // implementations gathering) lives in RoslynGatherers; the package supplies the DTE /
         // workspace / text-manager / editor-adapter factories.
         private RoslynGatherers? _roslynGatherers;
+        private RecentFilesGatherer? _recentFilesGatherer;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -112,6 +113,10 @@ namespace MyExtension.Package
                         _telescope.RegisterFinder(new DefinitionFinder(
                             () => _roslynGatherers!.GatherDefinitions(),
                             hit => OpenHitAtLine(hit)));
+                        _recentFilesGatherer = new RecentFilesGatherer(() => VsServices.Dte(this));
+                        _telescope.RegisterFinder(new RecentFilesFinder(
+                            () => _recentFilesGatherer!.Gather(),
+                            OpenRecentFile));
                         return Task.CompletedTask;
                     }),
                     ("monitor-selection", async () =>
@@ -530,6 +535,28 @@ namespace MyExtension.Package
                 return;
             }
             DteFileOpener.OpenAtLine(dte, path, line);
+        }
+
+        /// <summary>
+        /// Opens a recent-files hit: a plain file open (no line jump — the hit's LineNumber is 0).
+        /// The FINDER owns the <c>opened file:</c> diagnostic (this method must NOT log it).
+        /// Guards a missing file (deleted between gather and Enter) with a no-op.
+        /// </summary>
+        private void OpenRecentFile(string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!System.IO.File.Exists(path))
+            {
+                return;
+            }
+
+            var dte = VsServices.Dte(this);
+            if (dte == null)
+            {
+                return;
+            }
+
+            dte.ItemOperations.OpenFile(path);
         }
 
         protected override void Dispose(bool disposing)

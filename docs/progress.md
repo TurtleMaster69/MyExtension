@@ -7,11 +7,12 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE · **Updated:** 2026-10-05 · **Last item:** Feature 7 — the overlay PANE
-architecture + 3-pane focus (Ctrl+H/J/K/L GEOMETRIC + left-click; the IPane/PaneHost modular
-core the lazygit overlay reuses) — GREEN 2026-10-05 (feature lane, M-M7; one iteration: the
-layout-inversion regression fixed by the BP-A5 rev 2 dock flip; full 43-scenario suite + both
-unit suites GREEN)
+> **Status:** PAUSED (the user's 2026-10-05 instruction: "after u have finished gap 4 stop")
+· **Updated:** 2026-10-05 · **Last item:** Gap 4 — the recent-files finder (`Name="Recent"`,
+the USER-CONFIRMED `f,e` binding; the reflection probe + the eager session-MRU floor) — GREEN
+2026-10-05 (feature lane, M-M7; 2 iterations: the lazy MRU floor → the eager hookup; the
+unsatisfiable Step-3 assertion → the Step-2 attribution; + the in-item telescope-goto
+3rd-strike fix; full 44-scenario suite + both unit suites GREEN)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -112,17 +113,17 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **Feature 7 (the pane architecture) reached GREEN 2026-10-05** with
-  e2e enabled; see the Done section. Nothing is in flight.)
-- **Next up:** **Gap 4 — the recent-files finder** (`plan-gap4.md`, gate-APPROVED):
-  `Name="Recent"`, the leader `f,e` (PROPOSED — confirm at handoff); CRITICAL:
-  `EnvDTE.RecentFiles` does NOT exist in the 17.x interop → the reflection probe + the
-  session-MRU fallback behind the unchanged seam; the e2e scenario `telescope-recent`
-  (E2E-RECENT-1). **Then:** the remaining "smallest first" order — gap 5 (symbols; the next
-  planning batch), gap 10, gap 9, feature 8 (+gap 8), feature 9, which-key last. Plans live in
-  `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/`
-  and are handed off progressively (each written to `docs/implementation_plan.md` when it
-  becomes the first item). Then the rest
+- **In progress:** (none — **Gap 4 (the recent-files finder) reached GREEN 2026-10-05** with
+  e2e enabled; see the Done section. **The build loop is PAUSED by the user** — "after u have
+  finished gap 4 stop".)
+- **Next up:** **Gap 5 — the LSP symbols finder** (the next planning
+  batch — NOT yet planned; triage=BUILD 2026-09-28). Then the remaining "smallest first"
+  order: gap 10 (hover/signature) → gap 9 (search/replace) → feature 8 (+gap 8, the
+  code-actions picker) → feature 9 (r/a/m overlay) → which-key last. The approved plans for
+  gaps 10/9/8 do NOT exist yet (only gaps 4/11/feature-7/columns/preview-buffer were planned
+  in the 20261004-143017 session — all five now GREEN). The FEATURE-TRIAGE gate (LOOP step
+  1f) applies to each new feature item. The pane host (Feature 7) is the lazygit overlay's
+  foundation (deferred — a bonus when the core is finished).
   of the user-chosen **"smallest first"** run order (2026-10-03):
   gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
   feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
@@ -251,14 +252,14 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **258 passed**; `tests/NeoVisual.Tests`
-  **191 passed** (after Feature 7 — the pane architecture, 2026-10-05).
-- Live E2E: `tools/harness/test-e2e.ps1` lists **43 scenarios** — ALL executed GREEN
-  (full-suite fresh boot with `-TimeoutSec 2400`, run 179, 2026-10-05; Feature 7's final gate —
-  `telescope-focus-panes` first-run PASS, zero new flakes; `telescope-goto` carries a flaky
-  count of 1 from run 172 — pass-on-retry, no 3rd strike). **No known-RED remains** —
+- Offline units: `tests/Telescope.Tests` **268 passed**; `tests/NeoVisual.Tests`
+  **191 passed** (after Gap 4 — the recent-files finder, 2026-10-05).
+- Live E2E: `tools/harness/test-e2e.ps1` lists **44 scenarios** — ALL executed GREEN
+  (full-suite fresh boot with `-TimeoutSec 2400`, run 185, 2026-10-05; Gap 4's final gate —
+  `telescope-recent` verified end-to-end, `telescope-goto` GREEN outright after its in-item
+  3rd-strike fix, zero new flakes). **No known-RED remains** —
   `explorer-open-searchbox` was GREened 2026-09-27. Both former allowlist entries are now FIXED (`neovisual-editor-insert` d18315,
-  `telescope-implementation` 7c6569b) - the full 43-scenario suite is GREEN.
+  `telescope-implementation` 7c6569b) - the full 44-scenario suite is GREEN.
 
 ## Known bug backlog (from previous session, run 55)
 
@@ -424,12 +425,23 @@ Top of the queue, in priority order:
 >    harness sites updated); the e2e scenario `telescope-focus-panes` (43rd) — first-run PASS
 >    after the BP-A5 rev 2 dock flip fixed the layout-inversion regression. Telescope.Tests
 >    224 → **258**; NeoVisual 191.
-> 5. **Gap 4 — the recent-files finder** (`plan-gap4.md`): `Name="Recent"`, the leader `f,e`
->    (PROPOSED — confirm at handoff); CRITICAL: `EnvDTE.RecentFiles` does NOT exist in the 17.x
->    interop → the reflection probe + the session-MRU fallback behind the unchanged seam; the
->    e2e scenario `telescope-recent`.
+> 5. ~~**Gap 4 — the recent-files finder** (`plan-gap4.md`)~~ — **DONE** (GREEN 2026-10-05,
+>    feature lane, M-M7, e2e ENABLED; see the Done section). `Name="Recent"`, the
+>    USER-CONFIRMED `f,e` binding; `RecentFileHit`/`RecentFilesFinder`/`RecentFilesGatherer`
+>    (the reflection probe + the EAGER session-MRU floor); the Recent column catalog
+>    (file,dir); the e2e scenario `telescope-recent` (44th) — verified end-to-end after 2
+>    iterations. Telescope.Tests 258 → **268**; NeoVisual 191.
 > The lazygit overlay (`g,g`) remains DEFERRED (a bonus when the core is finished — Feature 7's
 > pane host is its foundation). Gap 5 (symbols) is the next planning batch.
+
+> **QUEUE CANDIDATE (filed 2026-10-05, from the Gap 4 re-plan review's minor — low priority,
+> hardening):** the recent-files gatherer's MERGE (the probe's MRU first → the session floor's
+> additions, case-insensitive dedupe) is pure logic left inline in the VS-coupled gatherer and
+> is untested in the MIXED path (the live e2e only ever exercises the probe-empty path — the
+> probe fails on the experimental instance). Fix direction: extract a pure static
+> `Merge(probed, session)` helper (the `OverlayKeyHandler`/`TextMotionNavigator` pattern) +
+> a small unit test in `tests/Telescope.Tests`. Why it bites: a future probe recovery on the
+> exp instance silently switches the exercised path to the untested one.
 
 > **QUEUE CANDIDATE (filed 2026-10-04, from the preview-buffer item's VERIFY adjudication —
 > low priority, feature lane if picked up):** make the `preview tokens=` diagnostic
@@ -805,6 +817,70 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-05 — Gap 4: the recent-files finder (`Name="Recent"`, the USER-CONFIRMED `f,e`
+  binding)** (Lane: `feature`, e2e ENABLED, M-M7; 14 delegations, 6 VS boots, 2 iterations).
+  A Telescope-style recent-files finder: `Space+f,e` opens an overlay listing the VS MRU
+  (most-recent-first, existing files only, shown as-is — matching File▸Recent; no solution
+  filter), filterable, previewable, Enter opens — the established finder pipeline end to end.
+  NEW `Telescope/Finders/RecentFileHit.cs` (extends `FileLocation`; distinct from `FileHit`
+  for the column type-disjointness) + `RecentFilesFinder.cs` (the ctor-injected gather seam
+  `Func<IReadOnlyList<string>>` + the opener; the dedupe → `File.Exists` → `Take(200)` order
+  contract; the display = the bare file name) + `MyExtension/Package/Utils/RecentFilesGatherer.cs`
+  — CRITICAL: `EnvDTE.RecentFiles` does NOT exist in the installed 17.x interop (probed:
+  envdte.dll is pure type-forwarding, zero Recent members) → the REFLECTION PROBE on the live
+  DTE COM object (`InvokeMember("RecentFiles",…)`, best-effort, a failure swallowed by design
+  + logged ONCE per instance as the NEW M-M7 literal `[Telescope] recent files probe
+  unavailable: {msg}`) + the DocumentEvents-driven SESSION-MRU FLOOR as the guaranteed path —
+  **hooked EAGERLY at construction** (the run-181/183 lesson: a lazy in-`Gather()` hookup is
+  structurally empty for an open-FIRST strategy); `Gather()` merges the probe's MRU first,
+  then the floor's additions (case-insensitive dedupe, internal order preserved). The
+  registration chain: the package "finders" step + `OpenRecentFile` (never logs) +
+  `TelescopeLauncher.FinderNames["telescope-recent"]="Recent"` (Actions.cs untouched — the
+  registry entry is DERIVED; the equality fixture stays green) + the `f,e` binding
+  (USER-CONFIRMED 2026-10-05 via the question tool; the alternatives f,m/f,h declined) +
+  `FinderColumns.Recent()` (the FULL ctor: file 6/30 Tail, dir 6/40 Tail, path 10/60 Tail;
+  file+dir default-visible; the full-dir cells, no root trim). The open REUSES the existing
+  `[Telescope] opened file:` line (the shared HitOpener path). New e2e scenario
+  `telescope-recent` (44th; after `telescope-results-columns`): the pinned MRU-timing
+  strategy — Step 1 populates the MRU via the Files finder (opens `Models/Order.cs`), Step 2
+  fires `f,e` and asserts the open/gather/columns + the Step-2 top-match preview proof (the
+  most-recent-first AC2 — the ONLY place the cache-MISS `preview file=` line can fire),
+  Step 3 types 'Order' and asserts the tightened `results count=1 selected=0` (the uniqueness
+  argument: 'Order' is unique over the seed universe, the MRU ⊆ seeded files, the filter
+  monotone), Step 4 Enter opens, Step 5 closes. **Iteration 1 (the VERIFY runs 181/182,
+  fail-twice):** (a) `Run_ActionsRegistry_ContainsAllBuiltins` pinned 17 but the derived
+  entry made 18 — a PLAN GAP (no step owned the count pin) → BP-5 rev 2's PLAN-OWNED test
+  edit (17 → 18 + the names[] entry; the M34 supersession precedent); ALSO a GATE-TRUST
+  FINDING: the build-agent's "191/0" self-report was FALSE (fresh output 190/1) → BP-B6's
+  trust rule (the runner's own summary line is the only evidence); (b) `telescope-recent`
+  gathered count=0 — the LAZY session-MRU floor → BP-3 rev 2's EAGER hookup. **Iteration 2
+  (runs 183/184):** BP-3 rev 2 VERIFIED WORKING (the probe literal once, count=15/6, the top
+  match, the open) — but the scenario's Step-3 `preview file=` assertion was STRUCTURALLY
+  UNSATISFIABLE (the PreviewEditorHost cache-HIT path never logs it when the ordering WORKS —
+  inverted vs the pinned strategy; hub-adjudicated ACCEPT) → BP-B1 rev 2 (the Step-2
+  attribution + the Step-3 tightening); AND `telescope-goto` hit its 3rd flake → the M-M2
+  3rd-strike UPGRADE to a REGRESSION (the flaky ledger CLOSED) → NEW BP-B7 (the `gg` caret
+  normalization Parts 1-3 + Part 1's SINGLE bounded re-walk on the 0-gather signature —
+  in-contract pass, never a flake). **Final gates (run 185, fresh boot):** `dotnet build`
+  0 errors; Telescope.Tests **268 passed, 0 failed**; NeoVisual.Tests **191 passed, 0 failed**
+  (staggered, fresh runner summaries — the trust rule); full 44-scenario e2e suite GREEN
+  (`-TimeoutSec 2400`: 44/44; `telescope-recent` verified end-to-end — the probe literal
+  ONCE, `gathered count=16`, the Step-2 top-match preview, the Step-3 tightened assertion,
+  the Step-4 open; `telescope-goto` GREEN OUTRIGHT — the first-walk direct jump, the re-walk
+  NEVER fired); both lints PASS; `-SelfCheck` PASS; `-List` 44.
+  **Change summary:** created `Telescope/Finders/RecentFileHit.cs`,
+  `Telescope/Finders/RecentFilesFinder.cs`, `MyExtension/Package/Utils/RecentFilesGatherer.cs`;
+  modified `MyExtension/Package/MyExtensionPackage.cs` (the registration + the opener),
+  `MyExtension/Package/Utils/TelescopeLauncher.cs` (FinderNames),
+  `MyExtension/Resources/default-keybindings.json` (f,e), `Telescope/Overlay/Utils/FinderColumns.cs`
+  (the Recent catalog), `tests/Telescope.Tests/Program.cs` (+10), `tests/NeoVisual.Tests/Program.cs`
+  (the count pin 18), `tools/harness/test-e2e.ps1` (the scenario + the goto fix), the docs.
+  **If this regresses, look first at `RecentFilesGatherer` (the EAGER `HookSessionEvents()` —
+  a lazy reversion re-creates the count=0 signature; the probe's once-only literal is the
+  observability contract) and the scenario's Step-2 attribution (the top-match proof lives
+  THERE — the cache-HIT Step-3 can never emit it); the finder's order contract is pinned by
+  `Run_RecentFilesFinder_*` and executed live by `telescope-recent`.**
 
 - **2026-10-05 — Feature 7: the overlay PANE architecture + 3-pane focus (Ctrl+H/J/K/L
   GEOMETRIC + left-click)** (Lane: `feature`, e2e ENABLED, M-M7; 14 delegations, 6 VS boots,

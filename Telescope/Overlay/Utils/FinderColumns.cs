@@ -10,7 +10,7 @@ namespace Telescope.Overlay
     /// The per-finder results-column catalogs (the user's 2026-10-04 column decision:
     /// implement EVERY cataloged column; the marked subset is DefaultVisible=true).
     /// Looked up by the finder's <c>Name</c> ("Files"/"Issues"/"References"/"Grep"/"Fzf"/
-    /// "Implementation" — the exact IFinder.Name constants). Pure data — the getters only
+    /// "Implementation"/"Recent" — the exact IFinder.Name constants). Pure data — the getters only
     /// read the hit models; a null/foreign payload yields the empty cell. The narrow
     /// kind/access cells render the D2a abbreviated forms via <see cref="KindAbbreviations"/>
     /// (the Display strings keep the long forms — untouched, plan D3).
@@ -76,6 +76,20 @@ namespace Telescope.Overlay
                 p => DirCell(p, projectRoot)),
             new ResultColumn("path", "Path",     ResultColumnWidth.Fixed,       60,  10,  60, ResultColumnTruncation.Tail, false,
                 p => Cell<FileHit>(p, h => h.FilePath)),
+        };
+
+        internal static IReadOnlyList<ResultColumn> Recent() => new[]
+        {
+            // The Files shape (file+dir visible, path hidden); the dir cell is the FULL
+            // directory always — a cross-solution MRU has no single root to trim (the overlay
+            // passes no projectRoot), so the getter is Recent-specific, not DirCell (typed to
+            // FileHit — the type-disjointness guard).
+            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
+                p => Cell<RecentFileHit>(p, h => BaseName(h))),
+            new ResultColumn("dir", "Directory", ResultColumnWidth.Flexible,     0,   6,  40, ResultColumnTruncation.Tail, true,
+                p => Cell<RecentFileHit>(p, h => Path.GetDirectoryName(h.FilePath) ?? string.Empty)),
+            new ResultColumn("path", "Path",     ResultColumnWidth.Fixed,       60,  10,  60, ResultColumnTruncation.Tail, false,
+                p => Cell<RecentFileHit>(p, h => h.FilePath)),
         };
 
         internal static IReadOnlyList<ResultColumn> Issues() => new[]
@@ -148,6 +162,7 @@ namespace Telescope.Overlay
             switch (finderName)
             {
                 case "Files": return Files(projectRoot);
+                case "Recent": return Recent();
                 case "Issues": return Issues();
                 case "References": return References();
                 case "Grep": return Grep();

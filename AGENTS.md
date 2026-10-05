@@ -86,7 +86,8 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
 - `dotnet run --project tests/Telescope.Tests` — Telescope overlay logic.
   Covers overlay navigation + insert/normal mode (`OverlayKeyHandler`, extracted
   pure state machine), file search (`FzfFilter`), the fzf finder
-  (`FzfFinder`/`FzfHit`/`FzfLineMapper`/`LiteralLineScanner`), file open (`FileFinder`
+  (`FzfFinder`/`FzfHit`/`FzfLineMapper`/`LiteralLineScanner`), the recent-files
+  finder (`RecentFilesFinder`/`RecentFileHit`), file open (`FileFinder`
   hermetic seam), results formatting, log writer (buffered `LogFileWriter`),
   the preview-pane vim motions (`TextMotionNavigator`), the finder base
   (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models),
@@ -99,9 +100,10 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
    caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`), plus the
    goto dispatcher (`GotoDispatcher`) + the definition finder (`DefinitionFinder`).
-   `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- TextMotionDispatcher`,
+   `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- RecentFilesFinder`,
+   `-- TextMotionDispatcher`,
    `-- LineIndex`, `-- FocusTarget`, `-- Pane`, `-- ListKeyMap` run subsets.
-   Currently **258 tests, all passing**.
+   Currently **268 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -134,14 +136,14 @@ the runtime log (with per-scenario focus verification so keys are never typed in
 window):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 43 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 44 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (43 registered — 42 executed GREEN; the Feature 7 `telescope-focus-panes`
-scenario executes at that item's VERIFY; `explorer-open-searchbox` was GREened
+Scenarios (44 registered — 43 executed GREEN; the only unexecuted scenario is
+`telescope-recent` (executes at that item's VERIFY); `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -156,6 +158,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-implementation` — Space F I: implementations/overrides of the symbol at the caret, previews, opens at line
 - `telescope-goto` — the goto commands (DTE-executed; the user maps gd/gr/gI in VsVim): 1 hit → direct jump, multi-hit → the Telescope overlay with the corresponding finder
 - `telescope-fzf` — Space F Z: fuzzy content finder over the solution's files (fzf hits per typed query), previews, opens at the hit line
+- `telescope-recent` — Space F E: recent-files finder over the VS MRU (most-recent-first, existing files only), previews, opens the file
 - `telescope-open-file-searchbox` — insert-mode query, wait for the filtered result, Enter opens it
 - `telescope-open-file-navigation` — Esc to normal, j/k move the selection, Enter opens the moved-to row
 - `explorer-open-navigation` — `g` programmatically selects the first source file (`solution-explorer select file=...`) then `o` opens it
@@ -255,6 +258,12 @@ Key facts that make this reliable:
   (fzf finder — query-driven fuzzy content finder; literal fallback when fzf is missing),
   `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
   (implementation finder — Roslyn FindImplementationsAsync, deterministic type-before-member order),
+  `[Telescope] recent files gathered count=...`
+  (recent-files finder — the VS MRU gather summary; the open reuses the existing `opened file:` line;
+  failures log `recent files gather failed: {msg}` / `open file failed: {msg}`),
+  `[Telescope] recent files probe unavailable: {msg}`
+  (recent-files gatherer — the DTE reflection probe failed; logged ONCE per instance; the
+  session-MRU floor serves),
   `[Telescope] goto-direct finder=... file=... line=...`
   (goto commands — the single-hit DIRECT jump; the pinned Section A literal
   `[Telescope] goto-direct finder=… file=… line=…`,
@@ -378,14 +387,21 @@ Done and tested (live + unit):
   `implementations gathered count=...` (gather summary) and
   `opened implementation: file=... line=...`. All Roslyn async calls run inside
   `ThreadHelper.JoinableTaskFactory.Run`. — `telescope-implementation` live test passes.
+- Recent-files finder: `RecentFilesFinder` (Telescope, `Name="Recent"`, `Space+f,e`)
+  lists the VS MRU (`DTE.RecentFiles`) — most-recent-first, existing files only
+  (`File.Exists` filter), shown as-is (no solution filter, matching VS's File▸Recent).
+  File/Dir columns; the preview shows the selected file; Enter opens it via the shared
+  `HitOpener` path (the existing `opened file:` line). Diagnostics:
+  `recent files gathered count=...` (gather summary).
+  — `telescope-recent` live test passes.
 - Diagnostics navigation (`]`/`[` prefix): `],d`/`[,d` run the native in-file squiggle
   commands (`command:Edit.GotoNextIssueinFile` / `command:Edit.GotoPreviousIssueinFile`);
   `],e`/`[,e` and `],w`/`[,w` run the new `next-error`/`prev-error`/`next-warning`/
   `prev-warning` built-in actions — the pure `DiagnosticNavigator` seam over the Error List
   entries of the ACTIVE document (severity-filtered, in-file, NO wrap; a no-op at the end or
-  with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
+   with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
    (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
-   `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
+   `neovisual-diagnostic-nav` passes (E2E-GAP3-1 discharged — run 156).
 - Goto commands (`goto-definition`/`goto-references`/`goto-implementation`):
   the symbol-at-caret gather (definitions via Roslyn
   `DeclaringSyntaxReferences`; references/implementations via the EXISTING

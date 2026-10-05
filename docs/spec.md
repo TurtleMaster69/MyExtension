@@ -95,6 +95,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Finders/GrepFinder.cs` | Query-driven grep over `ProjectFiles.Enumerate` (per-keystroke re-gather with a ~200ms debounce; skips fzf for query finders). |
 | `Telescope/Finders/FzfFinder.cs` | Query-driven fuzzy content finder over `ProjectFiles.Enumerate` (per-file fzf `--filter`; literal fallback when fzf unavailable). |
 | `Telescope/Finders/ImplementationFinder.cs` | Symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering (host-injected gatherer). |
+| `Telescope/Finders/RecentFilesFinder.cs` | Recent-files finder over `DTE.RecentFiles` (the VS MRU, most-recent-first, existing files only; host-injected gatherer keeps it hermetic-testable). |
 | `Telescope/Finders/Utils/ProjectFiles.cs` | Shared DTE project-file enumeration. |
 | `Telescope/Finders/Utils/HierarchyWalker.cs` | Pure tree-walk over the Solution Explorer hierarchy. |
 | `Telescope/Finders/Utils/DteFileOpener.cs` | DTE-based file opener (host-injected seam). |
@@ -122,6 +123,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Logging/Utils/FilterFailureLog.cs` | Formats the `[Telescope] filter failed: {msg}` line (self-contained — `Format()` returns the prefixed line; callers log via `NeoVisualLog.Log`). |
 | `Telescope/Logging/Utils/PaneFailureTracker.cs` | Pure one-time fallback for the NeoVisual Output pane (`[NeoVisual] output pane unavailable: {reason}`). |
 | `MyExtension/Package/RoslynGatherers.cs` | Host-injected Roslyn gatherer seam (`TryGetCaretSymbol`, `GatherReferences`, `GatherImplementations`, `GetCaretOffset`, `ReadLineFromCache`, static `IsWriteLocation`) — the package supplies the DTE/workspace/document factories; the class owns the pure gather + reflection logic. |
+| `MyExtension/Package/Utils/RecentFilesGatherer.cs` | Host-side MRU gatherer: `dte.RecentFiles` → existing-file paths, most-recent-first (UI thread; `File.Exists` filter). |
 
 **Note:** the window-logic sources live in `MyExtension/Navigation/` (renamed from
 the old `CardinalMovment/` folder by the 2026-09-30 restructure); the namespace is
@@ -223,7 +225,8 @@ motions (`TextMotionNavigator`). The overlay **closes on focus loss** (`Deactiva
   so `s,g` and `s,G` are distinct bindings (non-letter keys are shift-insensitive).
 - Action names resolve in `InputHandler.ResolveAction`: `navigate-left/right/up/down`,
   `telescope`, `telescope-issues`, `telescope-references`, `telescope-grep`,
-  `telescope-implementation`, `telescope-fzf`, `toggle-solution-explorer`,
+  `telescope-implementation`, `telescope-fzf`, `telescope-recent`,
+  `toggle-solution-explorer`,
   `close-window`, `next-error`, `prev-error`, `next-warning`, `prev-warning`,
   or `command:<VsCommandName>`.
 - Telescope actions are derived from `TelescopeLauncher.FinderNames` (add a `FinderNames`
@@ -238,6 +241,7 @@ via `Window.CloseDocumentWindow`); `Space+b,d` close; `Space+q` exit; `Space+e`
 toggle-solution-explorer; `Space+f,f` GoToFile; `Space+f,t` telescope;
 `Space+f,d` telescope-issues; `Space+f,r` telescope-references; `Space+f,g` telescope-grep;
 `Space+f,z` telescope-fzf; `Space+f,i` telescope-implementation;
+`Space+f,e` telescope-recent;
 `Space+],d`/`Space+[,d` next/prev diagnostic (`command:Edit.GotoNextIssueinFile` /
 `command:Edit.GotoPreviousIssueinFile` — native in-file squiggle nav);
 `Space+],e`/`Space+[,e` next/prev error and `Space+],w`/`Space+[,w` next/prev warning
@@ -293,6 +297,8 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
 - `[Telescope] fzf hits=...` / `[Telescope] opened fzf: file=... line=...` / `[Telescope] fzf unavailable — literal fallback`
 - `[Telescope] implementations gathered count=...` / `[Telescope] opened implementation: file=... line=...`
+- `[Telescope] recent files gathered count=...` (recent-files finder — the VS MRU gather summary; the open reuses the existing `[Telescope] opened file: ...` line)
+- `[Telescope] recent files probe unavailable: {msg}` (recent-files gatherer — the DTE reflection probe failed; logged ONCE per instance; the session-MRU floor serves)
 - `[Telescope] goto-direct finder=... file=... line=...` (the goto commands' single-hit DIRECT jump — the pinned Section A literal `[Telescope] goto-direct finder=… file=… line=…`; the existing `goto line=...` also fires on every open-at-line, incl. the direct-jump path)
 - `[Telescope] definitions gathered count=...` / `[Telescope] opened definition: file=... line=...` (the Definition finder — the goto commands' overlay path; the fault paths log `[Telescope] definitions gather failed: {msg}` / `[Telescope] open definition failed: {msg}`, and a command fault logs `[NeoVisual] goto failed: {finder}: {msg}`)
 - `[Telescope] focus target=Input|List|Preview` (logged on every focus change — Ctrl+H/J/K/L AND left-click; the initial pane on open is Input)
@@ -328,14 +334,15 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **258 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **268 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
   prompt motions, references finder
   (`ReferencesFinder`/`ReferenceHit`), grep finder (`GrepFinder`/`GrepHit`),
   fzf finder (`FzfFinder`/`FzfHit`/`FzfLineMapper`/`LiteralLineScanner`),
-  implementation finder (`ImplementationFinder`/`ImplementationHit`), the goto
+  implementation finder (`ImplementationFinder`/`ImplementationHit`), the
+  recent-files finder (`RecentFilesFinder`/`RecentFileHit`), the goto
   dispatcher (`GotoDispatcher`), the definition finder
   (`DefinitionFinder`/`DefinitionHit`), the finder
   base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`),
@@ -375,19 +382,20 @@ live instance, asserting on the runtime log (with per-scenario focus
 verification):
 
 ```
-pwsh tools/harness/test-e2e.ps1                              # all 43 scenarios
+pwsh tools/harness/test-e2e.ps1                              # all 44 scenarios
 pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **43 registered scenarios** (42 executed GREEN with no known-RED — the only
-registered-but-unexecuted scenario is `telescope-focus-panes`, which executes at the
-Feature-7 VERIFY;
+The **44 registered scenarios** (43 executed GREEN with no known-RED — the only
+registered-but-unexecuted scenario is `telescope-recent`, which executes at the
+Gap-4 VERIFY; `telescope-focus-panes` was GREened at the Feature-7 VERIFY (run 179);
 `explorer-open-searchbox` was
 GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
 `telescope-open-file`, `telescope-issues`, `telescope-references`,
 `telescope-grep`, `telescope-implementation`, `telescope-goto`, `telescope-fzf`,
+`telescope-recent`,
 `telescope-open-file-searchbox`,
 `telescope-open-file-navigation`, `telescope-prompt-motions`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
@@ -514,16 +522,20 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
   mapped back by the pure `FzfLineMapper`); falls back to a literal
   case-insensitive substring scan (`LiteralLineScanner`, shared with
   `GrepFinder`) when fzf is unavailable; preview jumps to the hit line; Enter
-  opens the file at the line. The existing `FileFinder` (`Space+f,t`) is the
-  fuzzy file finder. — `telescope-fzf` live test passes.
+   opens the file at the line. The existing `FileFinder` (`Space+f,t`) is the
+   fuzzy file finder. — `telescope-fzf` live test passes.
+- Recent-files finder (`Space+f,e`): the VS MRU (`DTE.RecentFiles`, most-recent-first,
+  existing files only) in the established finder pipeline (File/Dir columns); the
+  preview shows the selected file; Enter opens it (the shared `opened file:` line).
+  — `telescope-recent` live test passes.
 - Diagnostics navigation (`]`/`[` prefix): `],d`/`[,d` run the native in-file squiggle
   commands (`command:Edit.GotoNextIssueinFile` / `command:Edit.GotoPreviousIssueinFile`);
   `],e`/`[,e` and `],w`/`[,w` run the new `next-error`/`prev-error`/`next-warning`/
   `prev-warning` built-in actions — the pure `DiagnosticNavigator` seam over the Error List
-  entries of the ACTIVE document (severity-filtered, in-file, NO wrap; a no-op at the end or
-  with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
-   (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
-   `neovisual-diagnostic-nav` registered, queued as E2E-GAP3-1.
+   entries of the ACTIVE document (severity-filtered, in-file, NO wrap; a no-op at the end or
+   with no entries is logged, never a crash). Unit-tested in `tests/NeoVisual.Tests`
+    (the `DiagnosticNavigator` + keybinding/KeyNames/registry tests); live e2e
+    `neovisual-diagnostic-nav` passes (E2E-GAP3-1 discharged — run 156).
 - Telescope results columns: the overlay's results list is a columned ListView
   (GridView, headers visible) — one row = multiple columns from per-finder column
   sets (every catalog column implemented and toggleable; the user-marked subset
@@ -545,9 +557,8 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (208) and
-  `dotnet run --project tests/NeoVisual.Tests` (190).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (41 registered — 38 GREEN +
-  `neovisual-window-management` (E2E-GAP1-1), `neovisual-diagnostic-nav` (E2E-GAP3-1), and
-  `telescope-results-columns` (E2E-RC-1) queued unexecuted; no known-RED; a few flake on retry);
+- Offline units: `dotnet run --project tests/Telescope.Tests` (268) and
+  `dotnet run --project tests/NeoVisual.Tests` (191).
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 43 GREEN +
+  `telescope-recent` (Gap-4 VERIFY) queued unexecuted; no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

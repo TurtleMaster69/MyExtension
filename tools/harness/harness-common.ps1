@@ -11,9 +11,11 @@ $script:LogBaseline = 0
 # F39: incremental tail-read state. $script:LogCache holds every line read so far (from byte 0), so
 # the wait helpers search only the appended tail (O(n) total) instead of re-reading the whole file
 # per poll (O(n^2)). $script:LogReadBytes is the byte offset of the last read. The fixed baseline is
-# NEVER advanced: a per-call cursor advances on READ only, never on match.
+# NEVER advanced: the persistent search cursor ($script:LogSearchedTo) advances on READ only, never
+# on match (T4).
 $script:LogReadBytes = 0
 $script:LogCache = [System.Collections.Generic.List[string]]::new()
+$script:LogSearchedTo = 0
 
 $script:VkEscape = 0x1B
 $script:VkSpace = 0x20
@@ -86,6 +88,9 @@ function Update-LogCache([string]$logPath) {
 function Reset-LogBaseline([string]$logPath) {
     Update-LogCache $logPath
     $script:LogBaseline = $script:LogCache.Count
+    # T4: reset the persistent search cursor to the new baseline so the scenario searches only
+    # lines appended after it.
+    $script:LogSearchedTo = $script:LogBaseline
 }
 
 function Get-LogCacheIndex([string]$logPath) {
@@ -169,20 +174,24 @@ function Wait-LogLine([string]$logPath, [string]$pattern, [int]$fromIndex, [int]
     # The single core wait (M28): searches $script:LogCache from -FromIndex (a fixed baseline/cursor
     # that is NEVER advanced on match — an assert may re-confirm a line another helper already saw),
     # polls every -PollMs, bounded by -MaxMs. Returns true when the pattern matches.
-    # F39: reads only the appended tail via Update-LogCache; the per-call cursor starts at -FromIndex
-    # and advances on READ only (never on match), so the whole window is searched cumulatively in
-    # O(n) total.
+    # F39: reads only the appended tail via Update-LogCache.
+    # T4: the search cursor is PERSISTENT ($script:LogSearchedTo) instead of a per-call local, so
+    # wait helpers are O(n) total across calls instead of O(calls x window). It searches after the
+    # baseline and advances on READ only (never on match) — a matched line stays inside the search
+    # window, so an assert may re-confirm a line another helper already saw (the fixed-baseline
+    # contract; AGENTS.md forbids an advancing-on-match cursor).
     # m65: matches PER-LINE over the cache (never joins the tail and -match'es it), so a pattern can
     # never match across a line boundary (e.g. 'foo\s+bar' with foo and bar on different lines).
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $searchedTo = $fromIndex
+    $start = [Math]::Max($fromIndex, $script:LogSearchedTo)
     while ($sw.Elapsed.TotalMilliseconds -lt $maxMs) {
         Update-LogCache $logPath
-        if ($script:LogCache.Count -gt $searchedTo) {
-            for ($i = $searchedTo; $i -lt $script:LogCache.Count; $i++) {
+        if ($script:LogCache.Count -gt $start) {
+            for ($i = $start; $i -lt $script:LogCache.Count; $i++) {
                 if ($script:LogCache[$i] -match $pattern) { return $true }
             }
-            $searchedTo = $script:LogCache.Count
+            $script:LogSearchedTo = $script:LogCache.Count
+            $start = $script:LogCache.Count
         }
         Start-Sleep -Milliseconds $pollMs
     }

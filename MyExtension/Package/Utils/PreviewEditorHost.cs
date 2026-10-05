@@ -50,6 +50,12 @@ namespace MyExtension.Package
         private DateTime _documentStamp;
         private PreviewBufferDecision _decision;   // which buffer source the current view uses (owns the document?)
 
+        // A2: the materialized preview text is cached keyed on ITextSnapshot.Version.VersionNumber
+        // so Show does not call CurrentSnapshot.GetText() (a full-buffer copy) on every selection
+        // move — only on a snapshot-version change (a rebuild). Cleared on CloseView (a rebuild
+        // creates a fresh buffer whose version numbers restart at 0).
+        private readonly PreviewTextCache _textCache = new();
+
         public PreviewEditorHost(AsyncPackage package)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
@@ -96,14 +102,29 @@ namespace MyExtension.Package
                     RebuildView(location.FilePath, stamp);
                 }
 
-                return new PreviewEditorResult(
-                    _host!.HostControl, _view!.TextBuffer.CurrentSnapshot.GetText());
+                // A2: the text is cached keyed on the snapshot version — on the mtime-cache hit
+                // path the version is unchanged, so the full-buffer GetText() runs once per
+                // rebuild, not per selection move.
+                var snapshot = _view!.TextBuffer.CurrentSnapshot;
+                string text = _textCache.Get(snapshot.Version.VersionNumber)
+                    ?? CachePreviewText(snapshot);
+
+                return new PreviewEditorResult(_host!.HostControl, text);
             }
             catch (Exception ex)
             {
                 TelescopeLog.Log($"preview load failed: {ex.Message}");
                 return PreviewEditorResult.Empty;
             }
+        }
+
+        /// <summary>Materializes the snapshot text once and caches it keyed on the snapshot version
+        /// (A2) — the cache-hit path in <see cref="Show"/> skips the full-buffer copy.</summary>
+        private string CachePreviewText(ITextSnapshot snapshot)
+        {
+            string text = snapshot.GetText();
+            _textCache.Store(snapshot.Version.VersionNumber, text);
+            return text;
         }
 
         /// <summary>Closes the previous view+document and creates the new ones (the mtime-cache
@@ -292,6 +313,9 @@ namespace MyExtension.Package
             }
             _documentPath = null;
             _documentStamp = default;
+            // A2: a rebuild creates a fresh buffer whose snapshot version numbers restart at 0 —
+            // clear the version-keyed text cache so a colliding version can never return stale text.
+            _textCache.Clear();
         }
 
         private void LogUnavailableOnce()

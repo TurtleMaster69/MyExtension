@@ -28,6 +28,12 @@ namespace Telescope.Filter
     /// <c>--listen</c> mode (a persistent HTTP server) or an in-process matcher.
     ///
     /// <para/>
+    /// <b>Keep-subprocess decision (D8/BP-7):</b> the per-keystroke spawn is deliberately kept —
+    /// it already runs off the UI thread (the spawn + stdin write happen inside
+    /// <see cref="Task.Run"/>) and is e2e-GREEN. <c>--listen</c>/in-process is deferred until
+    /// measurement proves a bottleneck (perf-investigation), not adopted speculatively.
+    ///
+    /// <para/>
     /// <b>Threading:</b> this class performs no VS API calls — it only talks to the fzf
     /// subprocess — so it can be invoked from a background task. Callers marshal the result back
     /// to the WPF dispatcher themselves.
@@ -43,8 +49,11 @@ namespace Telescope.Filter
         private readonly string _fzfPath;
 
         // m50: the availability probe (a bounded `fzf --version` subprocess) is cached once per
-        // session so it does not run on every overlay open.
-        private bool? _availability;
+        // session so it does not run on every overlay open. D11/BP-6: `volatile` is illegal on
+        // `bool?`, so the probe-once state is a `volatile bool _probed` + a plain `bool _value`
+        // (the volatile write of `_probed` publishes the preceding `_value` write).
+        private volatile bool _probed;
+        private bool _value;
 
         /// <summary>
         /// Timeout for a single fzf <c>--filter</c> run; a hung subprocess is killed and the filter
@@ -58,6 +67,13 @@ namespace Telescope.Filter
         /// <c>UnobservedTaskException</c> — a deterministic seam, no wall-clock + GC-poll.
         /// </summary>
         internal int AwaitedReadCount { get; private set; }
+
+        /// <summary>
+        /// D15/BP-8: number of dedicated timeout timers still pending. The fast path cancels the
+        /// dedicated timeout CTS, so this is 0 after a normal filter (no per-keystroke pending
+        /// timer survives).
+        /// </summary>
+        internal int PendingTimeoutCount { get; private set; }
 
         /// <summary>
         /// Creates a filter that resolves <c>fzf</c> from the system PATH. If <paramref name="fzfPath"/>
@@ -76,12 +92,14 @@ namespace Telescope.Filter
         /// </summary>
         public async Task<bool> IsAvailableAsync()
         {
-            if (_availability.HasValue)
+            if (_probed)
             {
-                return _availability.Value;
+                return _value;
             }
-            _availability = await Task.Run(ProbeIsAvailable).ConfigureAwait(false);
-            return _availability.Value;
+            bool result = await Task.Run(ProbeIsAvailable).ConfigureAwait(false);
+            _value = result;
+            _probed = true;
+            return _value;
         }
 
         private bool ProbeIsAvailable()
@@ -130,7 +148,7 @@ namespace Telescope.Filter
             // N39/BP-53: when the cached availability is false, return the unfiltered list WITHOUT
             // spawning fzf (today every keystroke attempted p.Start() -> Win32Exception + a
             // `fzf filter failed` log when fzf is missing).
-            if (_availability == false)
+            if (_probed && !_value)
             {
                 return lines;
             }
@@ -148,39 +166,51 @@ namespace Telescope.Filter
                 p.StartInfo.StandardOutputEncoding = Encoding.UTF8;
                 p.StartInfo.StandardErrorEncoding = Encoding.UTF8;
 
-                // M3: spawn + write the candidate list off the UI thread (the write must not block
-                // the UI thread on a large candidate list).
-                bool started = await Task.Run(() =>
-                {
-                    bool s = p.Start();
-                    if (s)
-                    {
-                        // Feed candidates on stdin, then close it so fzf knows the input is
-                        // complete. The bytes are written explicitly as UTF-8: the StreamWriter's
-                        // default ANSI encoding would mangle non-ASCII display text (e.g. the
-                        // em-dash in code-issue rows), which would break the display-keyed lookup
-                        // back to the original entry downstream.
-                        var inputBytes = Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n");
-                        p.StandardInput.BaseStream.Write(inputBytes, 0, inputBytes.Length);
-                        p.StandardInput.BaseStream.Flush();
-                        p.StandardInput.Close();
-                    }
-                    return s;
-                });
-                if (!started)
-                {
-                    return lines;
-                }
-
-                var outputTask = p.StandardOutput.ReadToEndAsync();
-                var errorTask = p.StandardError.ReadToEndAsync();
+                // D3/BP-5: register the kill callback BEFORE the spawn/write so cancellation can
+                // kill fzf during the blocking stdin write (a hung child that never reads stdin
+                // blocks the write once the 64KB pipe buffer fills). The `using var p` scope covers
+                // the registration.
                 using (cancellationToken.Register(() => TryKill(p)))
                 {
+                    // M3: spawn + write the candidate list off the UI thread (the write must not block
+                    // the UI thread on a large candidate list).
+                    bool started = await Task.Run(() =>
+                    {
+                        bool s = p.Start();
+                        if (s)
+                        {
+                            // Feed candidates on stdin, then close it so fzf knows the input is
+                            // complete. The bytes are written explicitly as UTF-8: the StreamWriter's
+                            // default ANSI encoding would mangle non-ASCII display text (e.g. the
+                            // em-dash in code-issue rows), which would break the display-keyed lookup
+                            // back to the original entry downstream.
+                            var inputBytes = Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n");
+                            p.StandardInput.BaseStream.Write(inputBytes, 0, inputBytes.Length);
+                            p.StandardInput.BaseStream.Flush();
+                            p.StandardInput.Close();
+                        }
+                        return s;
+                    });
+                    if (!started)
+                    {
+                        return lines;
+                    }
+
+                    var outputTask = p.StandardOutput.ReadToEndAsync();
+                    var errorTask = p.StandardError.ReadToEndAsync();
                     var all = Task.WhenAll(outputTask, errorTask);
-                    var timeout = Task.Delay(FilterTimeoutMs, cancellationToken);
+
+                    // D15/BP-8: a dedicated timeout CTS (Task.Delay returns a Task, NOT IDisposable —
+                    // "dispose" is wrong). The fast path cancels it so no per-keystroke pending
+                    // timer survives a normal filter.
+                    using var timeoutCts = new CancellationTokenSource();
+                    PendingTimeoutCount++;
+                    var timeout = Task.Delay(FilterTimeoutMs, timeoutCts.Token);
                     var winner = await Task.WhenAny(all, timeout);
                     if (cancellationToken.IsCancellationRequested)
                     {
+                        timeoutCts.Cancel();
+                        PendingTimeoutCount--;
                         // R23: observe the pending ReadToEndAsync tasks on cancellation (mirror the
                         // timeout path's fault-only continuation) so overlay close mid-filter produces
                         // no UnobservedTaskException noise. The killed process's pipe reads may stay
@@ -191,6 +221,7 @@ namespace Telescope.Filter
                     }
                     if (winner == timeout)
                     {
+                        PendingTimeoutCount--;
                         TryKill(p);
                         TelescopeLog.Log($"fzf filter failed: timeout after {FilterTimeoutMs}ms");
                         // M3: observe the faulted ReadToEndAsync tasks WITHOUT blocking the return.
@@ -205,13 +236,16 @@ namespace Telescope.Filter
                         AwaitedReadCount += 2;
                         return lines;
                     }
+                    // Fast path: all completed first — cancel the dedicated timeout timer.
+                    timeoutCts.Cancel();
+                    PendingTimeoutCount--;
                     await all;
-                }
 
-                var output = await outputTask;
-                return output
-                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                    .ToList();
+                    var output = await outputTask;
+                    return output
+                        .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .ToList();
+                }
             }
             catch (OperationCanceledException)
             {

@@ -37,6 +37,21 @@ When a plan defers e2e work (unit-only lane), append its gates here with:
 Run: `pwsh tools/harness/test-e2e.ps1 -Tests <scenario-list>` (or the full suite for the
 final entry). Remove a gate once it has run GREEN.
 
+## Queued gates — Code review fixes (45 findings, incl. nits) (2026-10-05)
+
+Plan: `docs/implementation_plan.md` — **Code review fixes (45 findings, incl. nits)**
+(the FIRST pending item; feature lane, **unit-only, e2e DEFERRED** — the user's 2026-10-05
+instruction: "we are not on e2e capable machine so they should be put into queue"). The four
+gates below are QUEUED (never created/executed now); they become READY when the plan is GREEN
+and are created/executed on a capable machine.
+
+| ID | plan | finding(s) | scenario(s) | assertion | diagnostic | status | notes |
+|----|------|-----------|-------------|-----------|------------|--------|-------|
+| E2E-CR45-1 | Code review fixes (45 findings, incl. nits) (2026-10-05) - docs/implementation_plan.md (FIRST pending item) | the navigation OUTCOME gate (T1) | `neovisual-window-nav` (UPDATED in place) | after each Ctrl+H/J/K/L chord, `navigate activated index=\d+` appears (NOT "no no-op at all" — some directions may legitimately no-op depending on the scratch layout) | `[NeoVisual] navigate activated index=\d+` | QUEUED | e2e DEFERRED (user 2026-10-05) — READY when the plan is GREEN |
+| E2E-CR45-2 | Code review fixes (45 findings, incl. nits) (2026-10-05) - docs/implementation_plan.md (FIRST pending item) | the pane-host consolidation (D1/D2/D6/D14) | `telescope-focus-panes` stays GREEN (re-run) | the collapse must not change the focus behavior — the pinned tie-break (Ctrl+K Input->Preview) + the no-op edges byte-identical | `[Telescope] focus target=Input|List|Preview` + `[Telescope] focus no-op:` UNCHANGED | QUEUED | e2e DEFERRED (user 2026-10-05) — READY when the plan is GREEN |
+| E2E-CR45-3 | Code review fixes (45 findings, incl. nits) (2026-10-05) - docs/implementation_plan.md (FIRST pending item) | the vim-mode contract (C1) | `neovisual-editor-insert` (UPDATED in place) + a named-mode assertion | `vim-mode=Insert` unchanged; a named-mode token (`vim-mode=Visual` or the documented `Unknown` on focus loss) appears | `[NeoVisual] vim-mode=Insert` + `vim-mode=Visual|Command|VisualBlock|Select` (M-M7) | QUEUED | e2e DEFERRED (user 2026-10-05) — READY when the plan is GREEN |
+| E2E-CR45-4 | Code review fixes (45 findings, incl. nits) (2026-10-05) - docs/implementation_plan.md (FIRST pending item) | the full-suite regression re-run (T3/T4/T5/T6 + D3/D4/D5/D7/D8/D9/D10/D11/D12/D15 + A1-A9 + C2-C7) | none (full 44-scenario fresh-boot re-run) | no regression from the fzf/overlay/finder/tool-window/navigation/harness changes; `seed-leak` must NOT skip (T3); the fixed-baseline contract holds (T4); `telescope-navigate` via the LogCache tail-read (T5); the suite-order invariants enforced (T6) | all existing `[Telescope]`/`[NeoVisual]` lines UNCHANGED except the M-M7 literals (C1/D9/C7) | QUEUED | e2e DEFERRED (user 2026-10-05) — READY when the plan is GREEN |
+
 ## What ran GREEN (2026-10-04)
 
 The queued gates from the two unit-only-lane plans were all satisfied by the **Gap 3

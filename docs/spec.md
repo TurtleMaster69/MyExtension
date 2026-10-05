@@ -113,10 +113,9 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/Package/Utils/InitSteps.cs` | Dependency-free named-step package-init orchestrator (`[MyExtension] init <step> ok/failed`). |
 | `MyExtension/Vim/Utils/VimModeClassifier.cs` | Pure Vim ModeKind → typing flag + friendly name classifier (the `vim-mode=` truth table). |
 | `Telescope/Overlay/Utils/OverlayShowState.cs` | State-based guard for the deferred `ShowDialog()` (open-then-close race). |
-| `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure pane-focus state machine — the GEOMETRIC directional move (Ctrl+H/J/K/L = left/down/up/right via `PaneNavigationEngine`), the logged no-op edges, and the click normalization behind `[Telescope] focus target=Input|List|Preview` (evolved from the M34 two-state model). |
-| `Telescope/Overlay/Utils/Panes/*.cs` | The pane host: `IPane` (Id token `Input|List|Preview`, content, `Activate`/`Deactivate`) + `PaneHost` (ordered registry, focused-pane tracking, click normalization) + `PaneNavigationEngine` (the pure geometric directional decision — the `WindowNavigationEngine` pipeline over the pane rects) + `PromptPane`/`ListPane`/`PreviewPane` + `PaneSelectionSync` (the native-arrow adoption math). |
+| `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure pane-focus state machine — the GEOMETRIC directional move (Ctrl+H/J/K/L = left/down/up/right — the collapsed single focus resolver, absorbing the deleted `PaneNavigationEngine`), the logged no-op edges, and the click normalization behind `[Telescope] focus target=Input|List|Preview` (evolved from the M34 two-state model). |
+| `Telescope/Overlay/Utils/Panes/*.cs` | The pane host: `IPane` (Id token `Input|List|Preview`, content, `Activate`/`Deactivate`) + `PaneHost` (ordered registry, focused-pane tracking, click normalization) + `PromptPane`/`ListPane`/`PreviewPane` + `PaneSelectionSync` (the native-arrow adoption math). |
 | `Telescope/Overlay/Utils/LineIndex.cs` | Pure line → (line, offset) index shared by the preview caret placement + blank-line fallback. |
-| `Telescope/Overlay/Utils/TryDispatch.cs` | Shared vim-motion dispatch (n11/BP-46: merged into `TextMotionDispatcher`; file retained as the seam marker). |
 | `Telescope/Overlay/Utils/IPreviewEditor.cs` | The preview pane's editor seam (`Show`/`ApplyCaret`/`Focus`/`Dispose`): the overlay delegates the REAL read-only editor view hosting (create/reuse by mtime, caret application, dispose) to a host-supplied implementation — VS-SDK-coupled view creation stays out of the Telescope library. |
 | `Telescope/Overlay/Utils/BlockCaretStyle.cs` | Shared frozen white block-caret brush/geometry for the prompt + tool-window + editor-view surfaces. |
 | `Telescope/Logging/Utils/TelescopeLog.cs` | One-line `[Telescope] `-prefixed log helper (prefix centralized in `DiagnosticLog.Telescope`). |
@@ -200,7 +199,7 @@ composable contract (`IPane` + `PaneHost` — adding a surface = implementing th
 contract + registering it; the reuse path for the deferred lazygit overlay). Each pane
 is focusable with REAL WPF focus: **left-click focuses a pane**, and **Ctrl+H/J/K/L
 move focus GEOMETRICALLY — LEFT/DOWN/UP/RIGHT** (the Cardinal spatial mapping, the
-same keys as the window navigation one level down): the pure `PaneNavigationEngine`
+same keys as the window navigation one level down): the collapsed `FocusTargetModel`
 runs the `WindowNavigationEngine` pipeline (in-direction → aligned → closest gap →
 largest adjacency, ties → the last pane in registry order) over the pane rects the
 host measures. Layout: Input bottom (full width), List left, Preview right — so
@@ -285,7 +284,10 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[NeoVisual] solution-explorer open/rename/move/add/expand/collapse`
 - `[NeoVisual] solution-explorer select file=...` / `select none` (programmatic first-source-file selection via DTE `UIHierarchyItem.Select`)
 - `[NeoVisual] editor-view-opened file=...` (from `VimModeTracker.TextViewCreated`)
-- `[NeoVisual] vim-mode=Insert|Normal|Replace` (from `VimModeTracker.UpdateTypingFromMode`)
+- `[NeoVisual] vim-mode=Insert|Normal|Replace|Visual|Command|VisualBlock|Select` (from
+  `VimModeTracker.UpdateTypingFromMode`; the extra modes are NAMED tokens, not numerics;
+  `vim-mode=Unknown` on focus loss is a legitimate token; an unrecognized ModeKind falls back
+  to the numeric `vim-mode=<n>`)
 - `[NeoVisual] text-motion key=... caret=...` / `[NeoVisual] textinput-enter-input start|end|after caret=...`
 - `[NeoVisual] block-caret active=True|False`
 - `[NeoVisual] solution-explorer search-focus`
@@ -315,7 +317,9 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[Telescope] filter failed: {msg}` (`FilterAndUpdateAsync` fault path)
 - `[Telescope] open finder=... candidates=...` (overlay opened with a finder, candidate count)
 - `[Telescope] Focus prompt => True, mode=insert` (prompt focused in insert mode)
-- `[Telescope] results count=... selected=...` (filtered results rendered / selection moved)
+- `[Telescope] results count=... selected=...` (filtered results rendered / selection moved;
+  the `boxText=` value is the re-pinned rendered text length — the sum of the visible cell
+  text lengths, NOT the legacy dead-layout math)
 - `[Telescope] results columns={ids}` (the visible column-id list, comma-separated in
   catalog order — logged on every results render and on every header-chooser toggle;
   the id vocabulary is pinned by the per-finder column sets, e.g. the References
@@ -324,6 +328,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[NeoVisual] navigate activated index=...` / `[NeoVisual] navigate no-op: <reason>` (m47 — outcome diagnostic: the navigation fired vs was a no-op and why)
 - `[NeoVisual] diagnostic-nav direction=next|prev severity=error|warning target=<file> line=<n>` / `[NeoVisual] diagnostic-nav no-op: <reason>` (`no-entries` | `at-end` | `no-active-document` — Gap 3 severity-filtered diagnostics navigation: the `],e`/`[,e`/`],w`/`[,w` outcome diagnostic, fired vs no-op and why) / `[NeoVisual] diagnostic-nav failed: {msg}` (a gather/open failure is logged and swallowed — never crashes the hook)
 - `[NeoVisual] window rect unavailable; using empty rect` (n19 — logged once per adapter when the window rect cannot be read)
+- `[NeoVisual] window type probe failed: {msg}` (C7 — the `GetGuidProperty` HRESULT failed; logged instead of silently defaulting `_type = Unknown`)
 - `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` / `[NeoVisual] IVsUIShell unavailable: SVsUIShell service returned null.` (m14 — null-guard fallbacks)
 - `[Hook] SetHook MainModule failed: {ex.Message}` (n18 — `SetHook` guards `Process.GetCurrentProcess().MainModule` and falls back to `IntPtr.Zero` for `hMod`); `[Hook]` lines are single-stamped (m6 — `LogFileWriter.FormatLine` is the only stamper)
 
@@ -347,9 +352,9 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`DefinitionFinder`/`DefinitionHit`), the finder
   base (`FinderBase<THit>`) and hit models (`FileLocation`/`IFileLocation`/`FileHit`),
    the shared preview index (`LineIndex`), the pane-focus state machine
-   (`FocusTargetModel` — the Input/List/Preview GEOMETRIC directional move via
-   `PaneNavigationEngine`, the logged no-op edges, the click normalization), the
-   geometric engine (`PaneNavigationEngine`), and the pane contract
+   (`FocusTargetModel` — the Input/List/Preview GEOMETRIC directional move (the
+   collapsed single focus resolver), the logged no-op edges, the click normalization), the
+   pane contract
    (`IPane`/`PaneHost`), the shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
@@ -387,9 +392,9 @@ pwsh tools/harness/test-e2e.ps1 -Tests telescope-open        # a single scenario
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-The **44 registered scenarios** (43 executed GREEN with no known-RED — the only
-registered-but-unexecuted scenario is `telescope-recent`, which executes at the
-Gap-4 VERIFY; `telescope-focus-panes` was GREened at the Feature-7 VERIFY (run 179);
+The **44 registered scenarios** (44 executed GREEN with no known-RED — `telescope-recent`
+was verified end-to-end at the Gap-4 VERIFY (run 185); `telescope-focus-panes` was GREened at
+the Feature-7 VERIFY (run 179);
 `explorer-open-searchbox` was
 GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-search`, `telescope-navigate`, `telescope-wrap`, `telescope-mode`,
@@ -401,7 +406,7 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 `telescope-preview-motions`, `telescope-q-close`, `telescope-open-file-normal`,
 `telescope-no-selection`, `telescope-results-columns`, `telescope-preview`,
 `telescope-focus-panes`, `neovisual-window-nav`,
-`neovisual-leader`, `neovisual-window-management`, `neovisual-diagnostic-nav`, `neovisual-toolwindow`,
+`neovisual-leader`, `neovisual-window-management`, `neovisual-diagnostic-nav`, `neovisual-git-bindings`, `neovisual-toolwindow`,
 `neovisual-explorer-toggle`,
 `neovisual-explorer-open`, `neovisual-explorer-open-o`,
 `neovisual-explorer-collapse`, `neovisual-explorer-rename`,
@@ -553,12 +558,20 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
   New diagnostic `results columns={ids}`; unit-tested in `tests/Telescope.Tests`
   (the column-set/visibility/width-fit/truncation tests); live e2e
   `telescope-results-columns` passes.
+- Git leader bindings: the `g` prefix gains `g,d` diff
+  (`command:Team.Git.CompareWithUnmodified`), `g,b` blame
+  (`command:Team.Git.Annotate` — the old branches binding is dropped), and `g,h`
+  history (`command:Team.Git.ViewHistory`); pure `command:` bindings (zero C#
+  changes); the scratch repo is git-seeded in `Reset-ScratchSolution` (git init +
+  an initial commit, local identity, gpgsign off) and `.git` is excluded from the
+  seed-leak set; unit `Run_Keybinding_DefaultFileHasGitBindings`; e2e
+  `neovisual-git-bindings`.
 
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
 - Offline units: `dotnet run --project tests/Telescope.Tests` (268) and
   `dotnet run --project tests/NeoVisual.Tests` (191).
-- Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 43 GREEN +
-  `telescope-recent` (Gap-4 VERIFY) queued unexecuted; no known-RED; a few flake on retry);
+- Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 44 executed GREEN;
+  no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

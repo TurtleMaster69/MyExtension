@@ -26,8 +26,13 @@ namespace MyExtension.ToolWindows
     {
         private readonly Func<EnvDTE.DTE> _dteFactory;
 
+        // C2: the focus-keeper is per-controller (an instance, not the shared static) so one
+        // controller's Run can never stop another's keeper.
+        private readonly FocusKeeper _keeper = new FocusKeeper();
+
         // N22: the current focus-keeper handle, disposed before a new keeper starts so a superseded
-        // keeper's queued tick cannot re-assert the old target.
+        // keeper's queued tick cannot re-assert the old target. C6: reset to null after dispose
+        // (ResetFocusKeeper) — a disposed handle is never reused.
         private IDisposable? _focusKeeper;
 
         // N71: the search box resolved by ExitInputMode, passed through OnModeChanged so the caret
@@ -156,9 +161,9 @@ namespace MyExtension.ToolWindows
                 // on a ~100ms DispatcherTimer for ~1.5s, like SelectFirstSourceFile.
                 int escapeAttempts = 0;
                 // N22: dispose the prior keeper before starting a new one so a superseded keeper's
-                // queued tick cannot re-assert the old target.
-                _focusKeeper?.Dispose();
-                _focusKeeper = FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
+                // queued tick cannot re-assert the old target. C6: reset the handle to null.
+                ResetFocusKeeper();
+                _focusKeeper = _keeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
                 {
                     // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
                     // re-asserting (the user closed it — don't keep re-opening it).
@@ -197,22 +202,22 @@ namespace MyExtension.ToolWindows
             // through so it types into the search box (no tree actions, no j/k arrow injection). The
             // gate is mandatory: without it the merged helper's arrow fallback would swallow h/l in
             // the tree and replace the collapse/expand diagnostics with toolwindow-move.
-            // R17: resolve the focused box once and reuse it (TryMoveFocusedSurface no longer
-            // re-walks the visual tree).
-            var focusedBox = TextMotionHelper.FindFocusedTextBox();
-            if (focusedBox != null)
+            // A4: delegate to the shared text-input routing block (ToolWindowControllerBase.TextMotion)
+            // — it applies the motion + the N21 enteredInputMode → EnterInputMode() side effect.
+            if (TextMotionHelper.FindFocusedTextBox() != null)
             {
-                // N21: an a/A/I insert placement enters input mode through EnterInputMode() so the
-                // mode-change side effects (caret restyle) fire.
-                bool handled = TextMotionHelper.TryMoveFocusedSurface(key, out bool enteredInputMode, focusedBox);
-                if (handled && enteredInputMode)
-                {
-                    EnterInputMode();
-                }
-                return handled;
+                return TextMotion(key)();
             }
 
             return _actions.TryGetValue(key, out var action) && action();
+        }
+
+        /// <summary>C6: disposes the current focus-keeper handle and resets it to null — a disposed
+        /// handle is never reused (a re-run creates a fresh keeper).</summary>
+        public void ResetFocusKeeper()
+        {
+            _focusKeeper?.Dispose();
+            _focusKeeper = null;
         }
 
         private void OpenSelected()
@@ -292,8 +297,9 @@ namespace MyExtension.ToolWindows
                 // editor-view-opened; we emitted exactly one above.)
                 EnvDTE.UIHierarchyItem keepItem = item!;
                 // N22: dispose the prior keeper before starting a new one.
-                _focusKeeper?.Dispose();
-                _focusKeeper = FocusKeeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, _ =>
+                // C6: reset the handle to null.
+                ResetFocusKeeper();
+                _focusKeeper = _keeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, _ =>
                 {
                     // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
                     // re-asserting (the user closed it — don't keep re-opening it).

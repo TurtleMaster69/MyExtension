@@ -12,11 +12,19 @@ namespace Telescope.Overlay
     /// left-clicks into <see cref="PaneClicked"/> notifications the overlay routes through the
     /// machine. The registry order is pinned [Input, List, Preview] (the layout: Input bottom,
     /// List left, Preview right). UI thread only.
+    ///
+    /// <para/>
+    /// <b>Single owner (D6):</b> the model is the single owner of the focused-pane DECISION; the
+    /// host does not store a <c>_active</c> field. It tracks only the APPLIED pane state
+    /// (<c>_currentPane</c>) so a re-activation is idempotent and the previously-applied pane can
+    /// be deactivated — the overlay keeps the model's <c>Current</c> and this applied state in
+    /// sync (both updated in the same focus path), so a desync (<c>focus target=X</c> while pane Y
+    /// holds focus) cannot arise.
     /// </summary>
     internal sealed class PaneHost
     {
         private readonly List<IPane> _panes;
-        private IPane? _active;
+        private FocusTarget _currentPane = FocusTarget.Input;
 
         /// <summary>
         /// Raised when a pane is left-clicked (the WPF PreviewMouseDown tunneling handler; LEFT
@@ -50,7 +58,7 @@ namespace Telescope.Overlay
         public IEnumerable<IPane> Panes => _panes;
 
         /// <summary>
-        /// Applies a focus decision: deactivates the previously active pane, activates the new
+        /// Applies a focus decision: deactivates the previously applied pane, activates the new
         /// one. Idempotent (re-activating the active pane does NOT re-deactivate it). Unknown id
         /// → no-op (defense; the machine only produces registered ids).
         /// </summary>
@@ -61,11 +69,11 @@ namespace Telescope.Overlay
             {
                 return;
             }
-            if (_active != null && !ReferenceEquals(_active, pane))
+            if (_currentPane != id)
             {
-                _active.Deactivate();
+                GetPane(_currentPane)?.Deactivate();
             }
-            _active = pane;
+            _currentPane = id;
             pane.Activate();
         }
 

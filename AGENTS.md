@@ -92,8 +92,9 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
   the preview-pane vim motions (`TextMotionNavigator`), the finder base
   (`FinderBase<THit>` + `FileLocation`/`IFileLocation`/`FileHit` hit models),
    the shared preview index (`LineIndex`), the pane-focus state machine
-   (`FocusTargetModel` — the Input/List/Preview GEOMETRIC directional focus via
-   `PaneNavigationEngine` + the logged no-op edges + click normalization), the
+   (`FocusTargetModel` — the Input/List/Preview GEOMETRIC directional focus (the
+   collapsed single focus resolver, absorbing the deleted `PaneNavigationEngine`) +
+   the logged no-op edges + click normalization), the
    shared vim-motion dispatch (`TextMotionDispatcher` —
   `TryDispatch` was merged into it, n11), the prompt routing seam
    (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
@@ -142,8 +143,8 @@ pwsh tools/harness/test-e2e.ps1 -Tests telescope-search,telescope-navigate
 pwsh tools/harness/test-e2e.ps1 -List                        # list scenarios
 ```
 
-Scenarios (44 registered — 43 executed GREEN; the only unexecuted scenario is
-`telescope-recent` (executes at that item's VERIFY); `explorer-open-searchbox` was GREened
+Scenarios (44 registered — 44 executed GREEN; `telescope-recent` was verified end-to-end at
+the Gap-4 VERIFY (run 185); `explorer-open-searchbox` was GREened
 2026-09-27 and `telescope-implementation`'s intermittent Enter-delivery issue was
 fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-open` — Space F T opens overlay, prompt focused insert
@@ -171,7 +172,7 @@ fixed in `7c6569b`; a few scenarios are flaky on retry):
 - `telescope-no-selection` — j/k on an empty result list is a no-op (selection stays 0)
 - `telescope-results-columns` — the columned results list renders (default columns, headers visible) + selection moves
 - `telescope-preview` — preview shows selected file; Ctrl+L/Ctrl+H switch focus (3-pane contract Input|List|Preview); vim motions in preview; syntax-highlighted tokens
-- `telescope-focus-panes` — Ctrl+H/J/K/L move REAL focus GEOMETRICALLY between the Input/List/Preview panes — LEFT/DOWN/UP/RIGHT (the Cardinal spatial mapping; the `PaneNavigationEngine` pipeline over the pane rects; the pinned tie-break = the Cardinal's last-in-list rule) (modal — the overlay never deactivates; the Ctrl+K UP move from the open Input pane focuses the Preview — the larger adjacency, the last-in-list tie-break as the equal-width net — proving the initial pane is Input; a direction with no pane is a logged no-op, no wrap; left-click is unit-pinned + manual — not keyboard-injectable)
+- `telescope-focus-panes` — Ctrl+H/J/K/L move REAL focus GEOMETRICALLY between the Input/List/Preview panes — LEFT/DOWN/UP/RIGHT (the Cardinal spatial mapping; the collapsed `FocusTargetModel` geometric pipeline over the pane rects; the pinned tie-break = the Cardinal's last-in-list rule) (modal — the overlay never deactivates; the Ctrl+K UP move from the open Input pane focuses the Preview — the larger adjacency, the last-in-list tie-break as the equal-width net — proving the initial pane is Input; a direction with no pane is a logged no-op, no wrap; left-click is unit-pinned + manual — not keyboard-injectable)
 - `neovisual-window-nav` — Ctrl+H/J/K/L fire Cardinal navigation (shortcut-binding + navigate)
 - `neovisual-leader` — Space+E and Space w - fire leader bindings (lowercase sequences; a lone Space+W consumes and waits — no binding fires)
 - `neovisual-window-management` — Space w -/w |/w d fire the `w`-prefix bindings (split below/right, focus-aware close)
@@ -233,7 +234,10 @@ Key facts that make this reliable:
   `[NeoVisual] solution-explorer select file=...` (programmatic first-source-file
   selection via DTE `UIHierarchyItem.Select`; `select none` when none reachable),
   `[NeoVisual] editor-view-opened file=...` (logged from `VimModeTracker.TextViewCreated`),
-  `[NeoVisual] vim-mode=Insert|Normal|Replace` (logged from `VimModeTracker.UpdateTypingFromMode`),
+  `[NeoVisual] vim-mode=Insert|Normal|Replace|Visual|Command|VisualBlock|Select` (logged from
+  `VimModeTracker.UpdateTypingFromMode`; the extra modes are NAMED tokens, not numerics;
+  `vim-mode=Unknown` on focus loss is a legitimate token; an unrecognized ModeKind falls back
+  to the numeric `vim-mode=<n>`),
   `[NeoVisual] text-motion key=... caret=...` / `[NeoVisual] textinput-enter-input start|end|after caret=...`
   (text-input window motions + Solution Explorer search-box motions via the shared `TextMotionHelper`),
   `[NeoVisual] block-caret active=True|False` (editor-view block caret),
@@ -287,7 +291,9 @@ Key facts that make this reliable:
   `[Telescope] fzf unavailable — showing unfiltered list` (M6 — once at overlay open when fzf is missing),
   `[Telescope] filter failed: {msg}` (M8 — `FilterAndUpdateAsync` fault path),
   `[NeoVisual] window rect unavailable; using empty rect` (n19 — logged once per adapter when the
-  window rect cannot be read), `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` /
+  window rect cannot be read), `[NeoVisual] window type probe failed: {msg}` (C7 — the
+  `GetGuidProperty` HRESULT failed; logged instead of silently defaulting `_type = Unknown`),
+  `[NeoVisual] IVsUIShell unavailable: package is not an IServiceProvider.` /
   `[NeoVisual] IVsUIShell unavailable: SVsUIShell service returned null.` (m14 — null-guard fallbacks),
   `[Hook] SetHook MainModule failed: {ex.Message}` (n18 — `SetHook` guards
   `Process.GetCurrentProcess().MainModule` and falls back to `IntPtr.Zero` for `hMod`). `[Hook]` lines

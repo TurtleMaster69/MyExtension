@@ -107,6 +107,22 @@ namespace MyExtension.Input
                 _vsVim.IsEditorFocused,
                 OwnsKeyboard);
 
+        /// <summary>
+        /// m7: the single tool-window routing decision, hoisted from the three identical
+        /// <c>FocusGuard.ShouldRouteToolWindowKey</c> call sites (HandleKey, IsKeyOfInterest,
+        /// ExitToolWindowInputMode). A11: the <paramref name="controller"/> overload lets the
+        /// caller resolve <c>CurrentController</c> once and reuse it — no double resolution per
+        /// key-down.
+        /// </summary>
+        private bool ShouldRouteToolWindowKey(IToolWindowController? controller)
+            => FocusGuard.ShouldRouteToolWindowKey(
+                _windowManager.IsToolWindow,
+                _vsVim.IsEditorFocused,
+                FocusGuard.OwnsKeyboard(
+                    controller?.IsInputMode == true,
+                    _windowManager.IsTextInputType,
+                    _windowManager.TextInputSurfaceFocused));
+
         // The leader key itself (Space by default, user-configurable).
         private readonly Keys _leaderKey;
 
@@ -308,67 +324,11 @@ namespace MyExtension.Input
             // real WPF focus, so when an editor is focused the key must fall through to VS instead
             // of being consumed by the (stale) tool-window controller. M8: the controller calls
             // (TryMove/EnterInputMode) are guarded so a controller exception never crashes the hook.
-            try
+            // A8: the routing block is extracted into TryRouteToolWindowKey (behavior-preserving).
+            bool? routed = TryRouteToolWindowKey(key, ctrl, shift, alt);
+            if (routed.HasValue)
             {
-            if (ShouldRouteToolWindowKey())
-            {
-                var controller = _windowManager.CurrentController;
-                if (controller != null)
-                {
-                    // Input mode: typing passes through. Only Escape (handled above) exits it.
-                    if (controller.IsInputMode)
-                    {
-                        return false;
-                    }
-
-                    // Normal mode: i/I enter input mode (the controller may position the caret
-                    // first, e.g. I = insert at line start in text-input windows); hjkl move the
-                    // focused surface; the controller's action keys (e.g. Solution Explorer
-                    // o/r/m/a, text-input w/b/e) act on it. R10: shift is gated for NON-text-input
-                    // controllers (Shift+O/R/M/A/G in Solution Explorer must not fire tree actions
-                    // and swallow the key); text-input controllers still need shift to tell I/i and
-                    // A/a apart, so they are exempt from the shift gate.
-                    if (!ctrl && !alt && FocusGuard.ShouldRouteToolWindowKey(
-                        _windowManager.IsToolWindow,
-                        _vsVim.IsEditorFocused,
-                        _windowManager.CurrentController?.IsInputMode == true,
-                        _windowManager.IsTextInputType,
-                        _windowManager.TextInputSurfaceFocused,
-                        shift,
-                        shift && _windowManager.IsFocusedTextBoxInCurrentToolWindow()))
-                    {
-                        // A controller-specific insert key (text-input I = insert at line start) is
-                        // handled by TryMove first; the generic 'i' below is the plain-insert
-                        // fallback for controllers that don't consume it. M15: an in-progress
-                        // leader sequence must not be interrupted by I — the key continues the
-                        // sequence instead of entering input mode.
-                        if (!_leaderMatcher.IsActive && key == Keys.I)
-                        {
-                            if (controller.TryMove(key))
-                            {
-                                return true;
-                            }
-
-                            NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-enter-input");
-                            controller.EnterInputMode();
-                            return true;
-                        }
-
-                        if (!_leaderMatcher.IsActive &&
-                            (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L ||
-                             controller.ActionKeys.Contains(key)) &&
-                            controller.TryMove(key))
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-            }
-            catch (Exception ex)
-            {
-                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-move failed: {ex.Message}");
-                return false;
+                return routed.Value;
             }
 
             // 1. Leader key pressed / sequence building: delegate to the pure leader state machine.
@@ -404,6 +364,84 @@ namespace MyExtension.Input
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// A8: the tool-window routing block, extracted from <see cref="HandleKey"/> (behavior-
+        /// preserving). Returns true when the key was handled (swallow), false when the tool-window
+        /// branch decided to pass it through (input mode / a controller exception), and null when
+        /// the key is not a tool-window route and <see cref="HandleKey"/> should continue.
+        /// </summary>
+        private bool? TryRouteToolWindowKey(Keys key, bool ctrl, bool shift, bool alt)
+        {
+            try
+            {
+                if (!ShouldRouteToolWindowKey())
+                {
+                    return null;
+                }
+
+                var controller = _windowManager.CurrentController;
+                if (controller == null)
+                {
+                    return null;
+                }
+
+                // Input mode: typing passes through. Only Escape (handled above) exits it.
+                if (controller.IsInputMode)
+                {
+                    return false;
+                }
+
+                // Normal mode: i/I enter input mode (the controller may position the caret
+                // first, e.g. I = insert at line start in text-input windows); hjkl move the
+                // focused surface; the controller's action keys (e.g. Solution Explorer
+                // o/r/m/a, text-input w/b/e) act on it. R10: shift is gated for NON-text-input
+                // controllers (Shift+O/R/M/A/G in Solution Explorer must not fire tree actions
+                // and swallow the key); text-input controllers still need shift to tell I/i and
+                // A/a apart, so they are exempt from the shift gate.
+                if (!ctrl && !alt && FocusGuard.ShouldRouteToolWindowKey(
+                    _windowManager.IsToolWindow,
+                    _vsVim.IsEditorFocused,
+                    controller.IsInputMode,
+                    _windowManager.IsTextInputType,
+                    _windowManager.TextInputSurfaceFocused,
+                    shift,
+                    shift && _windowManager.IsFocusedTextBoxInCurrentToolWindow()))
+                {
+                    // A controller-specific insert key (text-input I = insert at line start) is
+                    // handled by TryMove first; the generic 'i' below is the plain-insert
+                    // fallback for controllers that don't consume it. M15: an in-progress
+                    // leader sequence must not be interrupted by I — the key continues the
+                    // sequence instead of entering input mode.
+                    if (!_leaderMatcher.IsActive && key == Keys.I)
+                    {
+                        if (controller.TryMove(key))
+                        {
+                            return true;
+                        }
+
+                        NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-enter-input");
+                        controller.EnterInputMode();
+                        return true;
+                    }
+
+                    if (!_leaderMatcher.IsActive &&
+                        (key == Keys.H || key == Keys.J || key == Keys.K || key == Keys.L ||
+                         controller.ActionKeys.Contains(key)) &&
+                        controller.TryMove(key))
+                    {
+                        return true;
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-move failed: {ex.Message}");
+                return false;
+            }
         }
 
         /// <summary>
@@ -450,13 +488,13 @@ namespace MyExtension.Input
             }
 
             // Tool-window normal mode: hjkl + the controller's action keys must reach the handler.
-            if (ShouldRouteToolWindowKey())
+            // A11: resolve CurrentController once and reuse it for both the routing decision and
+            // the action-key check (no double resolution per key-down).
+            var c = _windowManager.CurrentController;
+            if (c != null && !c.IsInputMode && ShouldRouteToolWindowKey(c) &&
+                (DefaultControllerKeys.Contains(key) || c.ActionKeys.Contains(key)))
             {
-                var c = _windowManager.CurrentController;
-                if (c != null && !c.IsInputMode && (DefaultControllerKeys.Contains(key) || c.ActionKeys.Contains(key)))
-                {
-                    return true;
-                }
+                return true;
             }
 
             return false;

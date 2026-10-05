@@ -100,6 +100,14 @@ namespace Telescope.Overlay
         }
 
         /// <summary>
+        /// Clears a pending <c>g</c> (BP-12/D10). The overlay calls this when a prompt motion
+        /// (h/l/w/b/e/0/$) is consumed BEFORE <see cref="Handle"/> runs, so <c>g h g</c> must NOT
+        /// fire <c>gg</c> (MoveToFirst) — the motion between the two <c>g</c>s cancels the pending
+        /// <c>gg</c>.
+        /// </summary>
+        public void CancelPendingG() => _gPending = false;
+
+        /// <summary>
         /// Routes a key through the vim state machine. Mutates mode/selection state and returns
         /// the action the overlay should perform. Keys that do not map to a Telescope action
         /// return <see cref="OverlayAction.None"/> (they fall through to the prompt/OS).

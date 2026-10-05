@@ -1,812 +1,677 @@
-# Plan — Gap 4: recent-files finder (Telescope-style, `Name="Recent"`)
+# Plan — Code review fixes (45 findings, incl. nits)
 
-> **HANDOFF (2026-10-05, neovim_hub):** gate-APPROVED in the planning-hub session (G3:
-> REVISE (the false-GREEN) → APPROVE; the AC5 patch applied; the handoff USER APPROVED) —
-> plan verbatim from
-> `.opencode/workspaces/neovim-planning-hub/sessions/neovim-planning-hub-20261004-143017/plans/plan-gap4.md`.
-> Handoff corrections (stale era data; the contract unchanged):
-> 1. **The leader binding is CONFIRMED:** the user chose **`f,e`** (2026-10-05, via the
->    question tool) — BP-6's "PROPOSED — flagged at handoff" flag is DISCHARGED; pin
->    `"f,e": "telescope-recent"`.
-> 2. **Queue position:** ALL FOUR predecessors are GREEN (columns `492c6c9`, goto `90e6245`,
->    gap 11 `c862357`, feature 7 `14b0446`) — THIS plan is FIRST in queue; the column-model
->    dependency is satisfied (the pane architecture also landed — the finder pipeline is
->    host-agnostic, unaffected).
-> 3. **Counts:** the CURRENT baselines are Telescope.Tests **258** (not 199/209) → +10 =
->    **268** expected at GREEN (the `<ACTUAL>` re-read at the gate is the safety net);
->    NeoVisual.Tests **191** (unchanged); e2e **43 → 44** (the new `telescope-recent`).
-> 4. **The known-RED allowlist is NONE**; per-scenario flaky counts start at **0**, EXCEPT
->    `telescope-goto` carries a base of **1** (pass-on-retry in run 172 — a pre-existing
->    caret/Roslyn race; the 3rd strike = the M-M2 regression upgrade). The stale
->    `neovisual-window-management` ×2 note in the era docs is FIXED (runs 168-179 flake-free).
-
-> **Lane: feature (e2e ENABLED).** New finder + likely new diagnostics → **M-M7** (the new
-> literals are declared). Full feature-lane loop.
+> **Lane: feature (unit-only, e2e DEFERRED).** Diagnostic changes → **M-M7** (the new
+> literals are declared: C1's named vim-mode tokens, D9's re-pinned `boxText=`, C7's
+> `window type probe failed`). The e2e scenarios are QUEUED in `e2e-queue.md` (status
+> QUEUED) — created/executed on a capable machine after this plan is GREEN (the user's
+> 2026-10-05 instruction: "we are not on e2e capable machine so they should be put into
+> queue"). RED is proven at the unit level only.
 >
-> **Source:** the queue's Gap 4 (the user's 2026-09-28 BUILD decision: "a Telescope-style
-> recent-files finder").
+> **Source:** `docs/reviews/code-review.md` (2026-10-05, 45 findings: 0 critical, 9 major,
+> 24 minor, 12 nit). The review's "Nothing filed yet — pending the user's Step-4 selection"
+> is answered by the user's request: **ALL findings incl. nits**.
 >
-> **Research:** the primary data source is `EnvDTE._DTE.RecentFiles` (the automation MRU —
-> `RecentFile.Path` / `Open()`; MEDIUM confidence — the MS-Learn page 404'd, so the planner
-> verifies the API shape against the installed interop via LSP). The registry hive is FRAGILE
-> (VS 2017+ keeps the MRU in a private registry — do NOT read it). Fallback: an
-> extension-maintained MRU from the extension's own `[Telescope] opened file:` events (only
-> knows files opened since load). PIN: `DTE.RecentFiles` primary; the MRU fallback documented
-> as a future enhancement, not built.
+> **Research (4 subagents, 2026-10-05):** `trailmark-recon` structural digest (graph 2508
+> nodes / 982 proxies; the pane-host chain `OnPreviewKeyDown→RouteInputKey→MapKey→Handle→Move→SelectTarget`;
+> the fzf/overlay blast radius; 5 parser blind spots — `FzfFilter.FilterAsync`,
+> `PreviewEditorHost.Show`, `SolutionExplorerController.TryMove`,
+> `IsFocusedTextBoxInCurrentToolWindow`, `InjectedKeyGuard.TryConsume` — NONE dead, LSP-proven);
+> `arch-auditor` ×2 change-area (Telescope/ + MyExtension/&tools/ — fix-direction verdicts +
+> corrections below); `feature-researcher` native-VS-reuse (D8 fzf `--listen` viability, A1
+> native controller mechanism, C1 VsVim mode contract, T1 outcome diagnostics).
 >
-> **Ground truth (recon):** the finder skeleton is established — `IFinder`/`FinderEntry`
-> (TelescopeFinder.cs:15-67), `FinderBase<THit>` (FinderBase.cs:16-79: the guarded gather,
-> ToEntry, OpenHit), the exemplar `ReferencesFinder.cs:25-65` (the ctor-injected gatherer
-> `Func` + opener `Action`, Name, display/payload, open), the registration chain
-> (MyExtensionPackage.cs:105-110 → TelescopeController.RegisterFinder → FinderNames
-> TelescopeLauncher.cs:26-35 + the derived Actions.Registry entry + the equality fixture).
-> The goto plan (SECOND in queue) adds DefinitionFinder the same way — Gap 4 follows that
-> precedent (FIFTH in queue: columns → goto → gap 11 → feature 7 → gap 4).
->
-> **Leader key:** `f,r` is TAKEN (references). PROPOSED: **`f,e`** (rEcent) — flagged for the
-> user at handoff (the alternatives: `f,m` most-recent, `f,h` history).
->
-> **Column model dependency:** the columns plan (FIRST in queue) builds the per-finder column
-> sets for the 6 EXISTING finders; a NEW finder needs its own column set (File | Dir — the
-> Files finder's shape) added to `FinderColumns` — a small post-columns addition THIS plan
-> owns.
+> **Key research corrections baked in:**
+> - **D1/D2 tension resolved:** you cannot BOTH share `PaneNavigationEngine` with
+>   `WindowNavigationEngine` AND collapse it — the plan COLLAPSES (D2's direction), deleting
+>   the mirrored engine (D1's duplication) into ONE pure focus resolver, preserving the
+>   pinned tie-break (Ctrl+K Input→Preview — the equal-width last-in-list net) + the no-op
+>   edges (no wrap) that `telescope-focus-panes` + ~20 unit tests pin.
+> - **D5 is NOT a blanket `Task.Run`:** `GrepFinder.GetCandidates` calls
+>   `ThreadHelper.ThrowIfNotOnUIThread()` — DTE enumeration must stay on the UI thread. Fix:
+>   enumerate (cached via `ProjectFileCache`) on the UI thread, `Task.Run` ONLY the pure
+>   `ScanFile` loop, marshal back with the existing generation check.
+> - **D7 is half-right:** `ProjectFileCache` is ALREADY shared (injected in all three ctors);
+>   only `FileContentCache(500)` is per-instance (3×500-entry caches) — inject ONE shared
+>   `FileContentCache` from `TelescopeController`.
+> - **D8:** `QuoteArg` is a CORRECT Windows argv-quoting implementation (not the problem); the
+>   real cost is the per-keystroke spawn (already off-thread, e2e-GREEN). Fix: unit-test
+>   `QuoteArg` + document the keep-subprocess decision; `--listen`/in-process deferred until
+>   measurement proves a bottleneck (perf-investigation).
+> - **D11:** `volatile` is ILLEGAL on `bool?` — use a separate `volatile bool _probed` +
+>   `bool _value` (or lock/Interlocked).
+> - **D15:** `Task.Delay` returns a Task, NOT IDisposable — "dispose" is wrong; the delay
+>   already shares the caller's token (cancelled on overlay close). Fix: a dedicated CTS
+>   cancelled on completion (or document the harmless pending timer).
+> - **A1:** NO native VS per-tool-window-type keyboard-controller mechanism exists
+>   (`ToolWindowPane`/`IVsToolWindowFactory` only create windows; VS routing is command-based).
+>   Fix: delete the eager registration loop, keep the lazy `_defaultControllers` cache (the
+>   designed R20 mechanism; `ResolveController` depends on it — the m22 same-instance invariant).
+> - **A3:** DTE `ErrorItems` exposes NO version counter — a count-keyed cache is weak (same
+>   count, different items after a build). Fix: a short TTL cache or a bounded scan; the cache
+>   decision lives in a pure helper.
+> - **C1:** VsVim `ModeKind` has more modes than the three. Fix: EXTEND the contract — name the
+>   common extra modes (Visual, Command, VisualBlock, Select) + document `vim-mode=Unknown`
+>   (focus loss) + the numeric fallback. M-M7.
+> - **C5:** do NOT broaden `IsEditorFocused` (it would track the Telescope preview view —
+>   deliberately non-Editable — and flip the flag while the overlay preview is focused) —
+>   DOCUMENT the fail-open risk instead.
+> - **T1:** assert `navigate activated index=\d+` per chord, NOT "no no-op at all" (some
+>   directions may legitimately no-op depending on the scratch layout).
+> - **T3:** `Assert-NoSeedLeak` is at `test-e2e.ps1:551` (NOT harness-common.ps1 — the review's
+>   file attribution was off by one file).
+> - **T4:** a persistent `$searchedTo` cursor must PRESERVE the fixed-baseline contract
+>   (search after baseline without advancing on match — AGENTS.md forbids an advancing cursor).
 
 ## Goal
 
-A Telescope-style recent-files finder: `Space+f,e` opens an overlay listing the solution's
-recently-opened files (the VS MRU), filterable, previewable, Enter opens the file — the
-established finder pipeline end to end.
+Fix ALL 45 code-review findings (incl. nits) from `docs/reviews/code-review.md` (2026-10-05):
+the modular telescope architecture's sharp edges (the over-engineered pane host, the fzf
+kill-on-cancel/race/timer hazards, the overlay clamp/UI-freeze/legacy-diagnostic issues, the
+per-finder cache fragmentation), the tool-window/navigation dead-code + perf hazards, the
+harness false-positive gates, and the stale docs — with every fix RED-proven at the unit
+level and the e2e scenarios QUEUED (deferred to a capable machine).
 
-## Approach
+## Approach (phases)
 
-**D1 — `RecentFileHit` + `RecentFilesFinder`.** NEW `Telescope/Finders/RecentFileHit.cs`
-(extends `FileLocation`; maybe `Title`? — the MRU entries are paths; PIN: path only, the
-columns model derives name/dir). NEW `Telescope/Finders/RecentFilesFinder.cs`
-(`Name="Recent"`): the ctor-injected gather seam `Func<IReadOnlyList<string>>` (the MRU paths,
-most-recent-first) + the opener (the `DteFileOpener` pattern) — hermetic-testable. The
-display: the file name (+ the dir via the column model).
+**Phase 0 — Pane-host consolidation (D1, D2, D6, D14).** Collapse `FocusTargetModel` +
+`PaneNavigationEngine` into ONE small pure focus resolver (`FocusTargetModel`), DELETE the
+mirrored `PaneNavigationEngine` + `PaneRect`/`PaneDirection`/`PaneAxis`/`GapTo`/`Adjacency`/
+`IsInDirection`/`IsAligned` (D1's duplication gone), keep `IPane`/`PaneHost` as the reusable
+contract (D2), make `PaneHost` derive the previously-active pane from the model instead of
+storing `_active` (D6 — single owner), and single-source the Ctrl-chord mapping
+(`PaneFocusKey` + `MapKey` + `OverlayKeyHandler`'s CtrlH/CtrlL — one chord→direction map,
+D14). The focus BEHAVIOR is byte-identical: `focus target=` / `focus no-op:` literals
+unchanged; the pinned tie-break + no-op edges preserved. The existing ~20
+FocusTargetModel/PaneNavigationEngine unit tests are the RED harness (they pin the behavior).
 
-**D2 — The gatherer.** `MyExtension/Package/RoslynGatherers.cs`-adjacent (or a small
-`MyExtension/Package/Utils/RecentFilesGatherer.cs`): `dte.RecentFiles` → the paths
-(most-recent-first; skip non-existent files — `File.Exists` filter; the count cap ~200 like
-the query finders). UI thread. The planner verifies the `RecentFiles`/`RecentFile` API shape
-(`EnvDTE` interop — LSP against the installed assembly) and pins it.
+**Phase 1 — fzf filter hardening (D3, D8, D11, D15).** Register the kill callback on the
+token BEFORE the spawn/write (D3); split `_availability` into `volatile bool _probed` +
+`bool _value` (D11); unit-test `QuoteArg` + document the keep-subprocess decision (D8);
+cancel the timeout timer via a dedicated CTS on completion (D15). `FzfFilter` is hermetic —
+the tests are the RED harness.
 
-**D3 — Registration + the leader binding.** `MyExtensionPackage` registers the finder;
-`TelescopeLauncher.FinderNames["telescope-recent"] = "Recent"` (auto-derives the
-`telescope-recent` registry entry — the equality fixture stays green); the leader binding
-`"f,e": "telescope-recent"` in `default-keybindings.json`. The registry count +1 (an
-`<ACTUAL>` re-read).
+**Phase 2 — Overlay correctness (D4, D5, D9, D10, D12).** Clamp `ApplyPreviewCaret` via
+`PreviewCaretMap.Offset` like `ShowPreview` (D4); move the query-driven gather's pure
+`ScanFile` loop to a background task, enumerate on the UI thread, marshal back with the
+generation check (D5); re-pin `RenderedTextLength`/`boxText=` to a meaningful value (D9 —
+M-M7); clear `_gPending` in `TryPromptMotion` via a new `OverlayKeyHandler.CancelPendingG()`
+(D10 — `g h g` must NOT trigger `gg`); `ResultMapper` byDisplay → `Ordinal` (D12).
 
-**D4 — The column set.** `FinderColumns` gains the Recent catalog (File ON, Dir ON — the
-Files finder's shape; Full path off) — a post-columns addition (the dependency binds).
+**Phase 3 — Finder cache sharing (D7).** Inject ONE shared `FileContentCache` from
+`TelescopeController` (the `ProjectFileCache` is already shared).
 
-**D5 — Diagnostics (M-M7).** The finder pattern's gather summary + open lines — PIN:
-`[Telescope] recent files gathered count=...` (the gather summary) + the open reuses the
-EXISTING `[Telescope] opened file: ...` (the FileFinder's open line — the same HitOpener
-path) — the planner verifies which open line fires and pins the minimal new-literal set.
+**Phase 4 — WindowManager + navigation (A1, A6, A7, C7).** Delete the eager controller
+registration loop, keep the lazy `_defaultControllers` cache (A1); `BuildActiveWindows`
+returns a COPY of `_cachedLinked` (A6 — kills aliasing, preserves the cache); `IsTextInputType`
+derives from a single classification source (A7); handle/log the `GetGuidProperty` HRESULT
+(C7).
 
-**D6 — Tests.** `tests/Telescope.Tests`: `Run_RecentFilesFinder_*` (the hermetic gather/
-display/open/preview-jump/determinism — the DefinitionFinder test pattern) + the column-set
-test. RED CS0246. Suite delta: +N (an `<ACTUAL>` re-read).
+**Phase 5 — Preview + Error List perf (A2, A3).** Cache the preview text keyed on
+`ITextSnapshot.Version.VersionNumber` (A2 — extract a pure version→text cache helper); a
+short-TTL/bounded Error List scan with the cache decision in a pure helper (A3).
 
-**D7 — e2e (ENABLED).** A NEW scenario `telescope-recent`: `Space+f,e` → the overlay opens
-with the MRU (the harness's earlier scenarios opened files, so the MRU is populated) → type a
-query → Enter opens. Created RED; executed at VERIFY.
+**Phase 6 — Tool-window controllers (A4, A5, A8, A9, A10, A11, C2, C3, C6).** `TryMove` delegates to
+`ToolWindowControllerBase.TextMotion` preserving the N21 side effect + the tree h/l guard
+(A4); correct the `TextMotionHelper` WPF comment / read a bounded window (A5); extract the
+`HandleKey` tool-window routing block (A8); `_sessionMru` → LinkedList or cap (A9); dedupe
+the DocView walk-up loop (A10); single `CurrentController` resolution per key-down (A11);
+`FocusKeeper` per-controller or owner-check (C2); cache/bound the box-walk (C3); reset
+`_focusKeeper` to null after dispose (C6).
 
-**D8 — Docs.** spec.md (§2.2 the key-files row, §3 the binding, §4 the literals, §5 counts,
-§7 a feature bullet), AGENTS.md, SKILL.md, progress.md (the item → DONE at GREEN).
+**Phase 7 — Vim mode contract (C1, C5).** Extend `VimModeClassifier`'s name table to the
+common extra modes (Visual, Command, VisualBlock, Select) + document `vim-mode=Unknown`
+(focus loss) + the numeric fallback in AGENTS.md (C1 — M-M7); DOCUMENT the `IsEditorFocused`
+fail-open risk rather than broadening it (C5).
+
+**Phase 8 — InjectedKeyGuard (C4).** Document the accepted risk (VK+TTL-only matching; a
+dropped injected event could consume the next physical same-VK within 1s — theoretical;
+`keybd_event` queues synchronously). No behavior change.
+
+**Phase 9 — Harness (T1, T3, T4, T5, T6).** `neovisual-window-nav` asserts the navigation
+OUTCOME — `navigate activated index=\d+` per chord (T1); `Assert-NoSeedLeak` throws in a
+full (non-reuse) run when the expected tree is absent (T3); `Wait-LogLine`'s `$searchedTo`
+becomes a persistent cursor preserving the fixed-baseline contract (T4); `telescope-navigate`
+uses the LogCache tail-read (T5); the runner enforces the suite-order invariants (T6).
+
+**Phase 10 — Pane contract tests (T2).** `IPane`-contract tests with a fake pane (the
+concrete panes are thin WPF shells; the testable logic is the contract + focus model).
+
+**Phase 11 — Docs (DOC1-DOC6).** Refresh the stale docs: AGENTS.md's "43 executed GREEN /
+telescope-recent pending" → 44/44 GREEN (DOC1); spec.md's 43-vs-44 scenario list (DOC2);
+progress.md's pending-queue run-order block (DOC3); the prior-review "still open" annotations
+N54/N55/W12 → resolved (DOC4); code-review.md's stale test counts 153/163 → 268/191 (DOC5);
+spec.md §7's missing git-bindings bullet (DOC6).
 
 ## Acceptance criteria
 
 | # | Criterion | Diagnostic | Test |
 |---|-----------|-----------|------|
-| AC1 | `Space+f,e` opens the recent-files overlay with the MRU | `open finder=Recent candidates=...` | unit `Run_RecentFilesFinder_*`; e2e `telescope-recent` |
-| AC2 | The results are most-recent-first, existing files only | the gather summary | unit (the order + the filter pinned) |
-| AC3 | Enter opens the file; the preview jumps | the existing `opened file:` line | unit; e2e |
-| AC4 | The column set (File/Dir) renders in the columned list | `results columns=file,dir` | unit (the Recent catalog) |
-| AC5 | The registry/leader wiring is complete | `leader-binding executed: f,e` | e2e is the proof (the registry count is an observed effect, not asserted — `Run_ActionsRegistry_TelescopeMapsToFinder` derives both sides and cannot detect a missing BP-5 entry) |
+| AC1 | The pane host is consolidated (D1/D2/D6/D14): ONE pure focus resolver, single owner, single chord map; the focus behavior byte-identical | `focus target=Input|List|Preview` + `focus no-op:` UNCHANGED | the existing ~20 FocusTargetModel/PaneNavEngine tests stay GREEN + new single-owner/chord-map tests; e2e `telescope-focus-panes` |
+| AC2 | fzf filter hardened (D3/D8/D11/D15): kill-on-cancel before the write, no cross-thread `_availability` race, tested `QuoteArg`, no leaked timeout timer | `fzf hits=...` / `fzf filter failed:` UNCHANGED | `FzfFilter` hermetic tests (RED for the new behavior) |
+| AC3 | Overlay correctness (D4/D5/D9/D10/D12): clamped caret, background scan, meaningful `boxText`, no stale `_gPending`, Ordinal mapping | `preview caret=...` unchanged; `results count=... boxText=<re-pinned>` (M-M7); `prompt-motion key=...` unchanged | PreviewCaretMap / ScanFile / RenderedTextLength / OverlayKeyHandler / ResultMapper tests |
+| AC4 | Finder caches shared (D7) | `grep hits=...` / `fzf hits=...` UNCHANGED | the shared-`FileContentCache` test |
+| AC5 | WindowManager/navigation cleaned (A1/A6/A7/C7): one controller mechanism, no aliased list, derived `IsTextInputType`, logged `GetGuidProperty` | `navigate direction=...` / `toolwindow-move key=...` UNCHANGED | NeoVisual.Tests: GetController-same-instance + copy + classification tests |
+| AC6 | Preview + Error List perf (A2/A3): cached preview text, bounded Error List scan | `preview file=...` / `diagnostic-nav direction=...` UNCHANGED | the pure version→text cache + cache-decision helpers |
+| AC7 | Tool-window controllers cleaned (A4/A5/A8/A9/C2/C3/C6) | `solution-explorer ...` / `text-motion key=...` UNCHANGED | the extracted-block / MRU / FocusKeeper tests |
+| AC8 | Vim-mode contract aligned (C1/C5) | `vim-mode=Insert|Normal|Replace|Visual|Command|VisualBlock|Select` (extended, M-M7) + `vim-mode=Unknown` documented | VimModeState / VimModeClassifier tests |
+| AC9 | InjectedKeyGuard risk documented (C4) | UNCHANGED | the existing guard tests + the documented-risk comment |
+| AC10 | Harness gates hardened (T1/T3/T4/T5/T6) | `navigate activated index=\d+` asserted | e2e `neovisual-window-nav` + the full-suite re-run |
+| AC11 | Pane contract tested (T2) | UNCHANGED | `IPane` fake-pane tests |
+| AC12 | Docs refreshed (DOC1-DOC6) | n/a | doc-ref + doc-content lints PASS |
+
+## Unit test plan
+
+- **`tests/Telescope.Tests`** (the hermetic seams): the pane-host consolidation (the existing
+  FocusTargetModel/PaneNavigationEngine tests stay GREEN + new single-owner/chord-map tests);
+  `FzfFilter` (kill-on-cancel ordering, `_probed`/`_value` split, `QuoteArg` edge cases, the
+  timeout-CTS); `PreviewCaretMap` clamp; the `ScanFile` background loop; `RenderedTextLength`
+  re-pin; `OverlayKeyHandler.CancelPendingG` (RED: `g h g` must NOT fire `gg`); `ResultMapper`
+  Ordinal; the shared-`FileContentCache`; the `IPane` fake-pane contract tests.
+- **`tests/NeoVisual.Tests`** (the hermetic seams): `GetController`/`ResolveController`/
+  `DefaultControllerFor` same-instance (RED if the lazy cache is deleted); `BuildActiveWindows`
+  returns a copy; `IsTextInputType` classification; the version→text cache helper; the
+  Error-List cache-decision helper; the MRU helper; `FocusKeeperSchedule` owner-check;
+  `VimModeState`/`VimModeClassifier` (focus-loss emits only documented tokens; the extra modes
+  named); the `InjectedKeyGuard` documented-risk comment.
+- **RED proof:** every new test fails WITHOUT the fix and passes WITH it (the
+  verify-tests-fail-without-fix discipline). The pane-host collapse's RED is the existing
+  suite (a behavior change breaks the pinned tests).
+
+## Diagnostics (M-M7 — the new literals)
+
+- **C1 (NEW named tokens):** `vim-mode=Visual|Command|VisualBlock|Select` replace the numeric
+  `vim-mode=<n>` for the common extra VsVim modes; `vim-mode=Unknown` (focus loss) is
+  DOCUMENTED in AGENTS.md as a legitimate token. The existing `vim-mode=Insert|Normal|Replace`
+  contract is unchanged.
+- **D9 (re-pinned value):** `results count=... boxText=<meaningful value>` — the value
+  changes from the legacy dead-layout math to a real rendered length; the harness regexes
+  (`results count=\d+ selected=...`) do NOT pin `boxText`, so no harness break.
+- **C7 (NEW literal, BP-18):** `[NeoVisual] window type probe failed: {msg}` — logged when the
+  `GetGuidProperty` HRESULT fails (the n19 `window rect unavailable` precedent); the failure
+  is observable instead of a silent `_type = Unknown`. Presence-only — no harness break.
+- All other findings are diagnostic-neutral (the `[Telescope]`/`[NeoVisual]` literals
+  byte-stable).
+
+## Known-RED allowlist
+
+- **NONE.** The baseline is all-GREEN (44/44 e2e, Telescope 268, NeoVisual 191). The
+  `telescope-goto` flaky ledger is CLOSED (BP-B7 fixed it — GREEN outright). Per-scenario
+  flaky counts start at 0.
+
+## E2E queue reference (e2e DEFERRED — queued in `e2e-queue.md`, status QUEUED)
+
+> The user's 2026-10-05 instruction: "we are not on e2e capable machine so they should be put
+> into queue." The four scenarios below are QUEUED (never created/executed now); they become
+> READY when this plan is GREEN and are created/executed on a capable machine.
+
+- **E2E-CR45-1** — `neovisual-window-nav` UPDATED to assert the navigation OUTCOME
+  (`navigate activated index=\d+` per chord) — T1.
+- **E2E-CR45-2** — `telescope-focus-panes` stays GREEN (the pane-host consolidation must not
+  change the focus behavior) — D1/D2/D6/D14.
+- **E2E-CR45-3** — `neovisual-editor-insert` + a named-mode assertion (`vim-mode=Visual` or
+  the documented `Unknown` on focus loss) — C1.
+- **E2E-CR45-4** — the full 44-scenario fresh-boot suite re-run (covers T3/T4/T5/T6 + the
+  fzf/overlay/finder/tool-window/navigation changes — D3/D4/D5/D7/D8/D9/D10/D11/D12/D15 +
+  A1-A9 + C2-C7) — the regression gate.
 
 ## Files to be touched
 
-- **Created:** `Telescope/Finders/RecentFileHit.cs`, `Telescope/Finders/RecentFilesFinder.cs`,
-  the gatherer (placement the planner pins).
-- **Modified:** `MyExtension/Package/MyExtensionPackage.cs`, `MyExtension/Package/Utils/TelescopeLauncher.cs`,
-  `MyExtension/Package/Utils/Actions.cs` (derived — verify), the column model's `FinderColumns`
-  (post-columns), `MyExtension/Resources/default-keybindings.json`, `tests/Telescope.Tests/Program.cs`,
-  `tools/harness/test-e2e.ps1`, the docs.
-- **Not touched:** the overlay (the finder pipeline is host-agnostic), the in-flight plans' files.
+- **Telescope/:** `Overlay/Utils/Panes/PaneNavigationEngine.cs` (DELETE), `Overlay/Utils/FocusTargetModel.cs`
+  (collapse), `Overlay/Utils/Panes/PaneHost.cs` (single owner), `Overlay/Utils/OverlayKeyHandler.cs`
+  (CancelPendingG + the chord map), `Filter/FzfFilter.cs`, `Overlay/TelescopeOverlay.cs`,
+  `Overlay/Utils/ResultsFormatter.cs`, `Overlay/Utils/ResultMapper.cs`, `Finders/GrepFinder.cs`,
+  `Finders/FzfFinder.cs`, `Finders/CodeIssuesFinder.cs`, `Controller/TelescopeController.cs`.
+- **MyExtension/:** `Package/MyExtensionPackage.cs`, `ToolWindows/WindowManager.cs`,
+  `ToolWindows/GeneralToolWindowController.cs`, `ToolWindows/SolutionExplorerController.cs`,
+  `ToolWindows/Utils/TextMotionHelper.cs`, `ToolWindows/Utils/FocusKeeper.cs`,
+  `Input/InputHandler.cs`, `Package/Utils/RecentFilesGatherer.cs`, `Package/Utils/PreviewEditorHost.cs`,
+  `Package/Utils/ErrorListGatherer.cs`, `Navigation/WindowNavigator.cs`, `Vim/VimModeTracker.cs`,
+  `Vim/Utils/VimModeClassifier.cs`, `Hooks/Utils/InjectedKeyGuard.cs`.
+- **tests/:** `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs`.
+- **tools/:** `tools/harness/test-e2e.ps1`, `tools/harness/harness-common.ps1`.
+- **docs/:** `AGENTS.md`, `docs/spec.md`, `docs/progress.md`, `docs/reviews/code-review.md`,
+  `docs/reviews/architecture-review.md`.
 
 ## Open risks
 
-1. **`DTE.RecentFiles` shape (medium).** The doc 404'd — the planner verifies via LSP against
-   the installed EnvDTE interop; if the API differs, the gatherer adapts (the seam isolates it).
-2. **The MRU semantics (low).** `DTE.RecentFiles` is VS's MRU (across solutions) — the finder
-   shows what VS shows in File▸Recent; the planner pins whether to filter to the current
-   solution's files (RECOMMEND: no filter — show the MRU as-is, matching VS).
-3. **The queue position (process).** Fifth — the counts are re-reads; the column model lands
-   first.
+1. **The pane-host collapse (D1/D2/D6/D14) is the highest-risk change.** The pinned tie-break
+   (Ctrl+K Input→Preview — the equal-width last-in-list net) + the no-op edges must survive
+   byte-identically. The ~20 unit tests + `telescope-focus-panes` are the guard; if the
+   collapse changes the tie-break, the tests/e2e catch it (RED). Do NOT "simplify" the
+   tie-break — it is pinned.
+2. **D5's UI-thread affinity.** A blanket `Task.Run` around `GetCandidates` violates
+   `ThrowIfNotOnUIThread()` — only the pure `ScanFile` loop moves off-thread. The overlay
+   freeze fix must not introduce a DTE-on-background-thread bug.
+3. **A3's cache staleness.** DTE `ErrorItems` has no version counter — a stale cache silently
+   mis-navigates. The short-TTL/bounded-scan design must be conservative.
+4. **C1's M-M7 churn.** The extended `vim-mode=` tokens touch the diagnostic contract — the
+   harness's `vim-mode=Insert|Normal|Replace` regexes stay valid (the three named tokens are
+   unchanged), but any strict/negative assertion over the mode line must be re-checked.
+5. **T4's fixed-baseline contract.** The persistent `$searchedTo` cursor must NOT advance on
+   match (AGENTS.md forbids it) — the harness's per-scenario baseline semantics must hold.
+6. **The queue position.** The code-review-fixes plan becomes the FIRST pending item at
+   handoff (before Gap 5) — the counts are re-reads at the gate.
 
 ## Build Plan
 
-> **Aggregated (Stage 3)** from `artifacts/gap4-section-{a,b}.md` — the authoritative full
-> detail (the finder/gatherer code, the test code, the scenario body, the doc edits) lives
-> there; the steps below are the contract. **e2e ENABLED.**
->
-> **Pinned corrections (binding):** (1) **`EnvDTE.RecentFiles` does NOT exist in the installed
-> 17.x interop** (envdte.dll is pure type-forwarding → Microsoft.VisualStudio.Interop, zero
-> Recent types) — the gatherer uses a REFLECTION PROBE on the live DTE COM object
-> (`InvokeMember("RecentFiles",…)`, best-effort, a failure swallowed by design) + a
-> **session-MRU fallback** (DocumentEvents-driven) as the guaranteed floor — both behind the
-> unchanged `Func<IReadOnlyList<string>>` seam; (2) NO `Actions.cs` edit (the registry entry
-> is derived from FinderNames); (3) the column tests are named `Run_ResultsColumns_Recent_*`
-> (the existing family); (4) the MRU-timing strategy: the scenario opens `Models/Order.cs`
-> first, then fires `f,e` and asserts it is the TOP match; (5) the M-M7 literals:
-> `[Telescope] recent files gathered count={n}` (NEW) + the REUSED `[Telescope] opened file:
-> {path}` + `[Telescope] recent files gather failed: {msg}` / `[Telescope] open file failed:
-> {msg}`.
-
-> **RE-PLAN (2026-10-05, implementation-planner — the VERIFY final gate FAILED twice: run 181
-> fresh boot + run 182 retry, identical deterministic signatures):** two REAL regressions,
-> both fixed by REV 2 steps below. Everything else GREEN: Telescope.Tests 268/0 (the 10 new
-> tests), the harness health (44 registered, both lints, `-SelfCheck`), the other 42
-> scenarios, the seed guards; code inspection verified BP-2's order contract, the M-M7
-> literals byte-exact, BP-4/BP-7 correct — "the ONLY source defect is BP-3's lazy event
-> hookup".
-> 1. **Regression 1 — `Run_ActionsRegistry_ContainsAllBuiltins`** (NeoVisual.Tests):
->    `Assert.Equal(17, Actions.Registry.Count)` → "Expected [17] but got [18]". BP-5's
->    derived-registry growth (17→18) was real; the pinned count test was never updated (the
->    test file has NO git diff). PLAN GAP: the Verification Trace's BP-5 row only owned
->    `Run_ActionsRegistry_TelescopeMapsToFinder` staying green (it did) — no step owned the
->    ContainsAllBuiltins count pin. FIX: **BP-5 rev 2** owns the test edit. GATE-TRUST
->    FINDING: the build-agent's "NeoVisual.Tests 191/0" self-report was FALSE (fresh output:
->    190/1) — flagged per audit-verification-gates; **BP-B6 rev 2** pins the
->    runner's-own-summary rule.
-> 2. **Regression 2 — `telescope-recent` (its FIRST live execution):** `recent files gathered
->    count=0` + `open finder=Recent candidates=0` DESPITE the scenario following the pinned
->    MRU-timing strategy exactly (`opened file: ...Order.cs` present; `leader-binding
->    executed: f,e` present — BP-6 wiring works). ROOT CAUSE: the session-MRU "guaranteed
->    floor" hooks `DocumentEvents.DocumentOpened` LAZILY inside `Gather()`
->    (RecentFilesGatherer.cs:45 → :108-131) — it records only files opened AFTER the first
->    gather → structurally empty for the open-FIRST strategy. The reflection probe
->    contributed nothing on this experimental instance (best-effort, swallowed by design —
->    no degradation diagnostic existed). Fail-twice with an identical signature =
->    deterministic. FIX: **BP-3 rev 2** — the EAGER event hookup at gatherer construction +
->    the merge + the once-only probe diagnostic.
-> 3. **Flake — `telescope-goto`:** pass-on-retry; cumulative count **2** (base 1 + 1). ONE
->    more flake = the 3rd-strike M-M2 upgrade to a REGRESSION. Do NOT plan a fix (record
->    only) — the NEXT item's VERIFY must carry count 2. See the allowlist.
-> 4. **M-M7 contract ADDITION (owned):** ONE new literal —
->    `[Telescope] recent files probe unavailable: {msg}` (logged ONCE per gatherer instance).
->    The run-181 silence proved a silent probe is undebuggable (DECIDED: YES). BP-3 rev 2
->    owns the doc rows (AGENTS.md's diagnostics list + spec.md §4).
-
-> **RE-PLAN 2 (2026-10-05, implementation-planner — the VERIFY final gate FAILED again:
-> iteration 2, run 183 fresh boot + run 184 retry):** the PRODUCT CODE IS GREEN — both
-> remaining blockers are HARNESS-LAYER, and the plan owns both scenario files.
-> 1. **BP-3 rev 2 VERIFIED WORKING** (the run-181 signature is GONE — not escalated): run
->    183: `recent files probe unavailable: Unknown name. (DISP_E_UNKNOWNNAME)` ONCE →
->    `recent files gathered count=15` → `preview file=...Order.cs` (the Step-2 unfiltered
->    render) → `open finder=Recent candidates=15` + `leader-binding executed: f,e`. Run 184:
->    identical structure (count=6, most-recent-first ✓, no duplicates, no probe spam). Units
->    268/0 + 191/0 (fresh runner output; `Run_ActionsRegistry_ContainsAllBuiltins` PASS). The
->    Gap 4 FEATURE is verified GREEN by the log evidence — NO product-code change in this
->    re-plan.
-> 2. **Blocker 1 — `telescope-recent` (fail-twice, deterministic, HARNESS-LAYER):** Step 3's
->    `preview file=.*Order\.cs` assertion NEVER fires during Step-3 typing, because
->    `PreviewEditorHost.Show` (PreviewEditorHost.cs:93-97) REUSES the view/document while
->    path+mtime are unchanged and `preview file=` is logged ONLY in `RebuildView`
->    (PreviewEditorHost.cs:169 — the cache-MISS path). The pinned MRU-timing strategy
->    guarantees Order.cs is the top of BOTH the unfiltered (Step 2) AND the 'Order'-filtered
->    (Step 3) lists → Step 3's Show is a cache HIT → no line → the assertion is structurally
->    unsatisfiable whenever the feature's most-recent-first ordering WORKS (it can only pass
->    if the ordering is wrong — inverted vs the pinned strategy). **HUB ADJUDICATION: ACCEPT**
->    — a plan-owned scenario edit (**BP-B1 rev 2**): attribute the top-match preview proof to
->    the STEP-2 OPEN (the unfiltered render's preview IS the most-recent-first proof —
->    asserted there with the snapshot attribution), and Step 3 asserts the filtered top match
->    via `results count=1 selected=0` + the Step-4 Enter-open (unchanged).
-> 3. **Blocker 2 — `telescope-goto` (the M-M2 3rd-strike UPGRADE):** the cumulative flaky
->    count is now **3** (base 1 run-172 + 1 runs-181/182 + 1 run-183) → per the M-M2 budget
->    it is RECLASSIFIED A REGRESSION and feeds this re-plan loop — it can NO LONGER be
->    allowlisted as flaky. Failure signature: `definitions gathered count=0` →
->    `open finder=Definition candidates=0` (the Part-1 caret-symbol gather race; the retry
->    passed with the full contract — flake-not-break, but the budget is exhausted). The goto
->    item's Done entry documented the sibling fix (Part 4's order-dependent caret state → a
->    `gg` caret normalization, test-e2e.ps1:1927-1937). **BP-B7** pins the equivalent fix for
->    Part 1 + the audit of the other parts. NO product-code change — the goto feature is
->    GREEN (runs 169/170/174/179/182/184 all passed it).
-> 4. **Everything else GREEN:** the harness health (44 registered, both lints, `-SelfCheck`),
->    the other 42 scenarios, the seed guards, the M-M7 literals byte-exact (the probe literal
->    fired exactly once per run — the trace row satisfied).
-> 5. **Allowlist change:** `telescope-goto` is REMOVED from the flaky allowlist — it is a
->    FIXED REGRESSION at the next gate (it must be GREEN, not allowlisted). The in-scenario
->    re-walk (BP-B7) is IN-CONTRACT: a pass after it is a PASS, not a runner-level flake.
-
-- **BP-1** — `RecentFileHit` (NEW — distinct from `FileHit` for the column type-disjointness).
-- **BP-2** — `RecentFilesFinder` (NEW — the dedupe→`File.Exists`→`Take(200)` order contract;
-  the finder-owned open log).
-- **BP-3** — **REV 2 (2026-10-05 — full detail in "BP-3 rev 2" below):** `RecentFilesGatherer`
-  — the EAGER `DocumentOpened` hookup at construction + the probe→session MERGE + the
-  once-only `[Telescope] recent files probe unavailable: {msg}` diagnostic.
-- **BP-4** — the package "finders"-step registration + the `OpenRecentFile` opener (never logs).
-- **BP-5** — **REV 2 (2026-10-05 — full detail in "BP-5 rev 2" below):** `FinderNames["telescope-recent"]="Recent"`
-  (LANDED; Actions.cs untouched — derived) **+ the plan-owned NeoVisual count-test edit**
-  (`Run_ActionsRegistry_ContainsAllBuiltins`: 17→18 + the `names[]` entry).
-- **BP-6** — the keybinding `"f,e": "telescope-recent"` (PROPOSED — flagged at handoff).
-- **BP-7** — `FinderColumns.Recent()` + the switch case (the full-dir cells, no root trim).
-- **BP-8** — the ten tests + the `WidthKinds` extension (RED CS0246).
-- **BP-B1** — **REV 2 (2026-10-05 — full detail in "BP-B1 rev 2" below):** the e2e scenario
-  `telescope-recent` (the header line + the registration after `telescope-results-columns`,
-  before `seed-reset`) — the Step-2/Step-3 assertion set revised: the top-match preview proof
-  moves to Step 2 (snapshot-attributed), Step 3 asserts the filtered top match.
-- **BP-B7** — **NEW (2026-10-05 — full detail in "BP-B7" below):** the `telescope-goto`
-  harness regression fix (the M-M2 3rd strike, run 183) — the `gg` caret normalization in
-  Parts 1-3 (mirroring Part 4's landed fix) + Part 1's single bounded re-walk on the
-  0-gather signature. Executed with BP-B1 rev 2, BEFORE the BP-B6 gate.
-- **BP-B2..B5** — the docs: spec (§2.2, §3, §4, §5, §7, §8); AGENTS.md; SKILL.md; progress.md
-  at GREEN (the DOC-66-3 attribution constraint pinned).
-- **BP-B6** — **REV 3 (2026-10-05 — full detail in "BP-B6 rev 3" below; supersedes rev 2's
-  ledger + gate step 9 ONLY):** the suite arithmetic UNCHANGED (Telescope 268; NeoVisual 191;
-  e2e 44) + the trust rule UNCHANGED; the `telescope-goto` flaky ledger is CLOSED (count 3 →
-  the M-M2 upgrade fired → fixed by BP-B7) and the gate's pass-on-retry allowance for it is
-  REMOVED — it must be GREEN outright.
-
-### BP-3 rev 2 (2026-10-05) — the EAGER event hookup + the merge + the probe diagnostic
-
-**Files:** `MyExtension/Package/Utils/RecentFilesGatherer.cs` (MODIFY — the ONLY source file
-this rev touches), `AGENTS.md` + `docs/spec.md` (ONE literal row each — the M-M7 addition).
-
-**Change (four code edits to the LANDED gatherer + the doc-comment sync):**
-
-1. **The EAGER hookup (the regression-2 fix):** the CONSTRUCTOR calls `HookSessionEvents()` —
-   the session-MRU floor is maintained from CONSTRUCTION time, not from the first gather.
-   The construction site is the package "finders" step (MyExtensionPackage.cs:116), which
-   runs on the UI thread (after `SwitchToMainThreadAsync`, MyExtensionPackage.cs:79) — the
-   COM event sinking is legal there. NO package edit (the construction line is unchanged).
-2. **The connection-point discipline (unchanged, re-verified):** `_documentEvents` stays a
-   FIELD (a GC'd COM connection point drops the subscription); the handler keeps the
-   session-MRU list updated from construction time; NO unhook/dispose — the package owns the
-   gatherer's lifetime (`_recentFilesGatherer`, MyExtensionPackage.cs:59). `DocumentOpened`
-   is the ONLY event needed (the floor's contract is files opened since load,
-   most-recent-first via the move-to-front dedupe).
-3. **`Gather()` only READS the maintained list + the MERGE (adjudicated order):** the probe's
-   MRU FIRST (VS's most-recent-first), then the session floor's ADDITIONS (files the probe's
-   MRU lacks — case-insensitive), each list's internal order preserved; the finder's
-   `Distinct → File.Exists → Take(200)` chain (BP-2, UNCHANGED) is the final
-   dedupe/filter/cap. `HookSessionEvents()` STAYS in `Gather()` as an idempotent RETRY only
-   (a no-op once the eager hookup succeeded; it covers a null-DTE-at-construction edge).
-4. **The probe failure is OBSERVABLE (DECIDED: YES):** ONE new M-M7 literal —
-   `[Telescope] recent files probe unavailable: {msg}` — logged ONCE per gatherer instance
-   (`_probeFailureLogged` guard; the M18 one-time-fallback precedent). Emitted via
-   `Telescope.Logging.TelescopeLog.Log` (the `[Telescope] ` prefix is stamped by TelescopeLog
-   itself — `DiagnosticLog.Telescope + message`; callable from MyExtension per
-   `InternalsVisibleTo Include="MyExtension"`, Telescope.csproj:32 — the same surface
-   PreviewEditorHost.cs:89 uses).
-5. **UI-thread discipline:** `HookSessionEvents()` gains `ThreadHelper.ThrowIfNotOnUIThread()`
-   (it touches `dte.Events` — a VS API; both call sites — the ctor and `Gather` — are
-   UI-thread).
-
-The exact diffs against the LANDED file:
-
-```csharp
-// (A) the field — ADD one guard:
-private DocumentEvents? _documentEvents;   // HOLD the reference: a GC'd COM connection point drops the subscription
-private bool _eventsHooked;
-private bool _probeFailureLogged;          // REV 2: the probe failure logs ONCE per gatherer
-
-// (B) the constructor — ADD the eager hookup:
-public RecentFilesGatherer(Func<DTE?> dteFactory)
-{
-    _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
-    HookSessionEvents();   // REV 2: EAGER — the session MRU is maintained from construction time
-}
-
-// (C) Gather() — the probe's catch logs once-only; the return MERGES:
-public IReadOnlyList<string> Gather()
-{
-    ThreadHelper.ThrowIfNotOnUIThread();
-    HookSessionEvents();   // idempotent RETRY only — a no-op once the eager hookup succeeded
-    IReadOnlyList<string> probed;
-    try
-    {
-        probed = ProbeRecentFiles();
-    }
-    catch (Exception ex)
-    {
-        // REV 2: best-effort by design, but OBSERVABLE — logged ONCE per gatherer instance
-        // (the M18 one-time-fallback precedent). Run 181's silence proved a silent probe is
-        // undebuggable.
-        probed = Array.Empty<string>();
-        if (!_probeFailureLogged)
-        {
-            _probeFailureLogged = true;
-            Telescope.Logging.TelescopeLog.Log($"recent files probe unavailable: {ex.Message}");
-        }
-    }
-
-    // REV 2 MERGE: the probe's MRU first (VS's most-recent-first), then the session floor's
-    // additions (files opened since extension load that the probe's MRU lacks), each list's
-    // internal order preserved. The finder's Distinct → File.Exists → Take(200) chain
-    // (BP-2, unchanged) is the final dedupe/filter/cap policy.
-    var merged = new List<string>(probed);
-    var seen = new HashSet<string>(probed, StringComparer.OrdinalIgnoreCase);
-    foreach (string p in _sessionMru)
-    {
-        if (seen.Add(p))
-        {
-            merged.Add(p);
-        }
-    }
-    return merged;
-}
-
-// (D) HookSessionEvents() — ADD the UI-thread assert (the body is UNCHANGED):
-private void HookSessionEvents()
-{
-    ThreadHelper.ThrowIfNotOnUIThread();   // REV 2: touches dte.Events (a VS API)
-    if (_eventsHooked) { return; }
-    try
-    {
-        DTE? dte = _dteFactory();
-        if (dte == null) { return; }
-        _documentEvents = dte.Events.DocumentEvents;
-        _documentEvents.DocumentOpened += OnDocumentOpened;
-        _eventsHooked = true;
-    }
-    catch { /* the session MRU is best-effort too; the probe may still serve */ }
-}
-```
-
-(E) **The class doc-comment sync:** the failure-discipline paragraph's "no diagnostic literal
-is added for the degradation" sentence is REPLACED by: "the probe failure logs
-`[Telescope] recent files probe unavailable: {msg}` ONCE per gatherer instance (best-effort —
-the session MRU floor serves); a gather that throws anyway is caught by FinderBase and logged
-as `[Telescope] recent files gather failed: {msg}`."
-
-**Doc rows (the M-M7 addition):** AGENTS.md's diagnostics list + spec.md §4 gain, next to the
-`recent files gathered count=...` row:
-`[Telescope] recent files probe unavailable: {msg}` (recent-files gatherer — the DTE
-reflection probe failed; logged ONCE per instance; the session-MRU floor serves).
-
-**Verify-with:**
-- Unit: `dotnet run --project tests/Telescope.Tests` → **268 passed, 0 failed** (the gatherer
-  is VS-coupled, NOT unit-tested — its correctness surfaces through the seam tests + the live
-  e2e).
-- e2e `telescope-recent`: `[Telescope] recent files gathered count=(\d+)` with **n≥1** emitted
-  AFTER Step 1's `[Telescope] opened file: ...Order.cs` — the eager hookup means the session
-  MRU holds Order.cs from CONSTRUCTION time.
-- The probe diagnostic: on an instance where the probe throws,
-  `[Telescope] recent files probe unavailable: {msg}` appears ONCE at the first Recent gather.
-
-**Fails-if:**
-- The run-181 signature RECURS (`gathered count=0` + `candidates=0` despite Step 1's open)
-  AND no probe-unavailable line → the EAGER hookup no-oped (`VsServices.Dte(this)` returned
-  null at construction — the retry only helps gathers AFTER the first). Verify with a
-  temporary log at the ctor's hookup; if confirmed, ESCALATE to the hub (a second literal
-  `recent files events unavailable: {msg}` is a plan decision — do NOT silently self-heal).
-- `recent files probe unavailable:` appears on EVERY gather (the once-only guard broke — log
-  spam).
-- The merged list is oldest-first or drops session files (the merge order inverted — the
-  probe must come FIRST; the session additions appended).
-- A `COMException` escapes to `[Telescope] recent files gather failed:` (the probe's
-  try/catch misplaced — the catch must cover ONLY `ProbeRecentFiles()`).
-- The MRU shows duplicates (the merge's HashSet dedupe broke; the finder's `Distinct` is the
-  guard, not the primary).
-
-### BP-5 rev 2 (2026-10-05) — the FinderNames entry + the NeoVisual count-test edit
-
-**Files:** `MyExtension/Package/Utils/TelescopeLauncher.cs` (LANDED — UNCHANGED),
-`tests/NeoVisual.Tests/Program.cs` (MODIFY — the plan-owned test edit).
-
-**Change:** BP-5's original change is LANDED and verified (`FinderNames["telescope-recent"]="Recent"`
-at TelescopeLauncher.cs:36; `Actions.BuildRegistry` derives the 18th entry — Actions.cs:38-43).
-REV 2 adds the plan-owned edit to the STALE COUNT PIN the landed change exposed (the
-M34-replacement precedent — the plan supersedes; the test is NOT byte-frozen against THIS
-edit). In `Run_ActionsRegistry_ContainsAllBuiltins` (tests/NeoVisual.Tests/Program.cs:1849-1870),
-exactly three hunks:
-
-1. The leading comment: "exactly the 17 built-in action names" → "exactly the **18** built-in
-   action names", and the history sentence gains: `; Gap 4 adds the derived
-   "telescope-recent" action (the Recent finder)`.
-2. `Assert.Equal(17, Actions.Registry.Count);` → `Assert.Equal(18, Actions.Registry.Count);`
-3. The `names[]` array gains `"telescope-recent",` after `"telescope-definition",` (the
-   FinderNames order):
-
-```csharp
-    "telescope-definition", "telescope-recent",
-```
-
-**Verify-with:** `dotnet run --project tests/NeoVisual.Tests` → **191 passed, 0 failed** (the
-count STAYS 191 — an EDIT, not an addition); `Run_ActionsRegistry_ContainsAllBuiltins` GREEN;
-`Run_ActionsRegistry_TelescopeMapsToFinder` stays GREEN (unchanged).
-
-**Fails-if:** "Expected [18] but got [17]" → the LANDED BP-5 entry was reverted
-(TelescopeLauncher.cs:36 missing); "Expected [18] but got [19]+" → a SECOND untracked
-finder/action landed (re-read `FinderNames` + the registry, then re-pin the count — never
-hand-wave); the names[] loop fails on 'telescope-recent' → the array edit was skipped
-(hunk 3).
-
-### BP-B6 rev 2 (2026-10-05) — the suite arithmetic + the final gate (revised)
-
-**Files:** none (verification-only step; executed by the verification-agent at VERIFY).
-
-**Change (the revised arithmetic + the trust rule + the gate):**
-
-1. **Arithmetic (the LANDED state, re-read at the gate):** Telescope.Tests = **268** passed,
-   0 failed; NeoVisual.Tests = **191** passed, 0 failed (the count STAYS 191 — BP-5 rev 2's
-   test EDIT adds no test); e2e = **44** registered (43 previously GREEN + `telescope-recent`).
-2. **THE SELF-REPORT TRUST RULE (the run-181 gate-trust finding):** the suite counts are read
-   from the RUNNER'S OWN final summary output of a FRESH `dotnet run` at the gate — NEVER
-   from a build-agent's self-report. (Run 181: the build-agent reported "NeoVisual.Tests
-   191/0"; the fresh output was 190/1 — the ContainsAllBuiltins failure was reported GREEN.)
-   The verification-agent re-runs both suites itself, STAGGERED (W11 — never parallel; the
-   Defender CS2012 lock).
-3. **The flaky ledger:** `telescope-goto` cumulative flaky count = **2** (base 1, run 172 +
-   1, run 181/182). Record only — NO fix planned. ONE more flake = the 3rd-strike M-M2
-   upgrade to a REGRESSION. The NEXT queue item's VERIFY MUST carry count 2.
-4. **The gate (the same 9 steps, revised expectations):** (1) `dotnet build` → 0 errors;
-   (2) Telescope.Tests → 268/0; (3) NeoVisual.Tests → 191/0 read from the runner's summary,
-   STAGGERED with (2); (4) `-List` → 44 with `telescope-recent`; (5) `-SelfCheck` → PASS;
-   (6) doc-refs lint → 0 unresolved; (7) doc-content lint → PASS; (8)
-   `-Tests telescope-recent -TimeoutSec 900` → GREEN; (9) the full 44-scenario fresh boot
-   (NO `-NoBootstrap`) `-TimeoutSec 3600` → GREEN — `telescope-goto` allowed ONE
-   pass-on-retry at count 2; a THIRD strike is a regression, not a flake.
-
-**Verify-with:** the gate outputs above; `RESULT: PASS (all 44 scenario(s))`.
-
-**Fails-if:** `RESULT: TIMEOUT` → the `-TimeoutSec` too small (harness-invocation issue —
-re-run with a larger budget). A NeoVisual count ≠ 191 → the BP-5 rev 2 edit was mis-applied
-(a duplicate/missing test) or an untracked test landed — re-read, never copy. Any scenario
-OTHER than `telescope-recent`/`telescope-goto` failing → a Gap 4 regression (check the trace).
-
-### BP-B1 rev 2 (2026-10-05) — the telescope-recent Step-2/Step-3 assertion set
-
-**Files:** `tools/harness/test-e2e.ps1` (MODIFY — the `telescope-recent` scenario body ONLY:
-the two assertion hunks below + their comments; the registration, the header comment, and
-Steps 1/4/5 are UNCHANGED).
-
-**Root cause (why Step 3 could never pass):** `PreviewEditorHost.Show`
-(PreviewEditorHost.cs:93-97) REUSES the hosted view/document while `path + LastWriteTimeUtc`
-are unchanged, and the `preview file=` diagnostic is logged ONLY in `RebuildView`
-(PreviewEditorHost.cs:169) — the cache-MISS path. The pinned MRU-timing strategy guarantees
-Order.cs is the top of BOTH the Step-2 unfiltered list AND the Step-3 'Order'-filtered list
-→ Step 3's `Show` is a cache HIT → no line → the assertion was structurally unsatisfiable
-whenever the feature's most-recent-first ordering WORKS (runs 183/184: deterministic RED at
-Step 3 while the Step-2 render had already emitted `preview file=...Order.cs`).
-
-**Change — exactly two hunks:**
-
-**Hunk 1 — Step 2 GAINS the top-match preview proof** (INSERT immediately after the existing
-`results columns=file,dir$` assertion, still inside the Step-2 block — snapshot-attributed to
-the existing `$preOpen`, taken before `Open-TelescopeFinder`):
-
-```powershell
-    # REV 2 (the top-match proof MOVED here from Step 3): the unfiltered render previews
-    # the selected row 0 — the MOST-RECENT MRU entry. Step 1 just opened Models/Order.cs,
-    # so row 0 IS Order.cs (most-recent-first) and this line is the AC2 proof. It must be
-    # asserted HERE: PreviewEditorHost.Show reuses the view while path+mtime are unchanged
-    # and logs 'preview file=' ONLY in RebuildView (the cache-MISS path) — Step 3's filtered
-    # Show is a cache HIT (Order.cs tops BOTH lists) and can never emit the line.
-    Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)preview file=.*Order\.cs" 'the unfiltered render previews the TOP (most-recent) match — Models/Order.cs'
-```
-
-**Hunk 2 — Step 3 LOSES the preview assertion, GAINS the exact filtered-top-match form**
-(REPLACE the Step-3 comment block and the two assertions after `Send-Text 'Order'`; the
-`$preQuery` snapshot and the `promptChanged` assertion are unchanged in form):
-
-```powershell
-    # Step 3: the query filters the MRU to the single Order.cs match, selection on row 0
-    # (the filtered TOP match). REV 2: the preview proof lives in Step 2 (the unfiltered
-    # render) — here the filtered top match is proven by the per-keystroke results line:
-    # 'Order' is a unique name match in the scratch solution (Step 1's Files-finder render
-    # over the FULL seed universe pinned count=1), the MRU candidates are a subset of the
-    # seeded files, and the filter is monotone (more chars never add matches), so
-    # count=1 selected=0 IS the filtered-top-match proof. NO 'preview file=' assertion
-    # here: the filtered Show is a PreviewEditorHost cache HIT (path+mtime unchanged) and
-    # the line only fires on a rebuild — structurally unemittable (runs 183/184).
-    $preQuery = Get-LogCacheIndex $logPath
-    Send-Text 'Order'
-    Assert-NewLogLineAfter $logPath $preQuery "promptChanged query='Order'" 'typed query reached the recent prompt'
-    Assert-NewLogLineAfter $logPath $preQuery "$($script:PfxTel)results count=1 selected=0" 'query filtered the MRU to the single Order.cs match, selected row 0' 10000
-```
-
-(The old line 2355 `results count=[1-9]\d* selected=0` 'query filtered the MRU to >=1 match'
-and old line 2356 `preview file=.*Order\.cs` 'the just-opened file is the top (selected)
-match' are DELETED — replaced by the single tightened assertion above.)
-
-**Step 4 UNCHANGED:** the `$preEnter` snapshot + `Assert-NewLogLineAfter $logPath $preEnter
-"$($script:PfxTel)opened file: .*Order\.cs" 'Enter opened the recent file' 20000` — the
-Enter-open proof (AC3) is untouched.
-
-**Verify-with:**
-- `pwsh tools/harness/test-e2e.ps1 -Tests telescope-recent -TimeoutSec 900` → GREEN: the
-  Step-2 line `[Telescope] preview file=...Order.cs` appears AFTER `$preOpen` (runs 183/184
-  already emit it there — the assertion only pins what the verified feature already does);
-  the Step-3 line `[Telescope] results count=1 selected=0` AFTER `$preQuery`; the Step-4
-  `[Telescope] opened file: ...Order.cs` AFTER `$preEnter`.
-- The full 44-scenario fresh-boot gate (BP-B6 rev 3, step 9).
-
-**Fails-if:**
-- Step 2's `preview file=.*Order\.cs` never fires → the unfiltered render did NOT preview
-  Order.cs → the most-recent-first ordering is BROKEN (a REAL BP-2/BP-3 regression — check
-  the merge order in `RecentFilesGatherer.Gather` and the move-to-front dedupe), NOT a
-  scenario defect. Do NOT loosen the assertion.
-- Step 3 never reaches `count=1` (only `count=[2-9]...` lines) → a foreign MRU entry
-  fuzzy-matches 'Order' (possible ONLY via the reflection probe on a future instance — the
-  session floor holds seeded files only) → ESCALATE to the hub before re-pinning (a plan
-  decision: relax to `results count=[1-9]\d* selected=0` + a payload-keyed top-match proof).
-- Step 3 regresses to `count=0` → the query did not filter (a finder-pipeline regression,
-  not a scenario defect).
-
-### BP-B7 (2026-10-05) — the telescope-goto regression fix (the M-M2 3rd strike)
-
-**Files:** `tools/harness/test-e2e.ps1` (MODIFY — the `telescope-goto` scenario body ONLY:
-the three hunks below). **NO product-code change** — the goto feature is GREEN (runs
-169/170/174/179/182/184 all passed it).
-
-**Root cause:** Part 1's j/w walk assumes a FRESH open of Reader.cs (the caret at line 1
-col 0). In a full-suite run Reader.cs may already be open (an earlier scenario, or the
-runner's scenario retry) — re-opening an open tab RESTORES the last caret, so the walk from
-the stale position lands off `Shared` → the gather resolves nothing →
-`definitions gathered count=0` (DefinitionFinder.cs:50) → the 0-hits rule opens the overlay
-(`open finder=Definition candidates=0`) instead of the direct jump. Exactly the Part-4 race
-(runs 165/166) that Part 4 already fixed with the `gg` normalization (test-e2e.ps1:1927-1937)
-— Part 1 never received the equivalent.
-
-**The audit (all four parts, the same race):**
-- **Part 1** (Reader.cs, j×4 + w×2 → Shared): the race — THE 3rd-strike signature (run 183).
-  FIX: `gg` normalization + the single bounded re-walk.
-- **Part 2** (GotoProbe.cs, w×2 → GotoProbe): the same fresh-open assumption (the NOTE at
-  ~:1849-1853 pins "the caret after opening is line 1 col 0"). FIX: `gg` normalization only.
-- **Part 3** (Shared.cs, j×2 + w×4 → Value): the same race — Part 1's direct jump ALREADY
-  opened Shared.cs, and a full-suite earlier scenario (e.g. `telescope-references`) may have
-  left the caret elsewhere. FIX: `gg` normalization only.
-- **Part 4** (IShape.cs): ALREADY FIXED (the `gg` normalization, ~:1936-1937) — UNCHANGED.
-
-**The mechanism (PINNED — one mechanism, the hub's RECOMMENDation):** the `gg` caret
-normalization in Parts 1-3 (mirroring Part 4's proven fix) + a SINGLE bounded re-walk in
-Part 1 ONLY, triggered by the observed 0-gather signature. The re-walk covers the
-Roslyn-readiness residual (the semantic model not yet computed for the freshly opened file —
-the same gather can return 0 with the caret CORRECT). Parts 2-3 get the normalization only:
-it fixes their root cause deterministically, and re-walks everywhere would triple the
-harness surface and mask real regressions.
-
-**Change — three hunks:**
-
-**Hunk 1 — Part 1: REPLACE the walk+fire block** (from the `Enter-NormalContext $vs` after
-Part 1's `Close-Telescope` through the `goto line=1$` assertion) with the
-normalize+fire+re-walk loop:
-
-```powershell
-    # BP-B7 (the M-M2 3rd-strike regression fix — run 183): normalize the caret to line 1
-    # col 0 before the walk (Part 4's proven fix: re-opening an ALREADY-OPEN tab restores
-    # the last caret, so the j/w walk from a stale position lands off the symbol and the
-    # gather returns 0 -> 'definitions gathered count=0' -> 'open finder=Definition
-    # candidates=0' instead of the direct jump), then fire; if the gather STILL returns 0
-    # (the Roslyn-readiness residual), re-walk ONCE. `g` is not hook-interesting, so gg
-    # falls through to VsVim like w/j/k (Part 4's comment). The re-walk is IN-CONTRACT: a
-    # pass after it is a PASS, not a runner-level flake.
-    foreach ($attempt in 1..2) {
-        Enter-NormalContext $vs
-        Assert-VsFocused $vs 'goto-definition caret positioning'
-        Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
-        Send-Tap $script:VkG; Start-Sleep -Milliseconds 200
-        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 2
-        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 3
-        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 4
-        Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200   # j -> line 5
-        Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> return
-        Send-Tap $script:VkW; Start-Sleep -Milliseconds 200   # w -> Shared
-
-        $idx = Get-LogCacheIndex $logPath
-        & $dteCmd -DevenvPid $vs.Id -Command $gotoDefCmd | Out-Null
-        # BOUNDED NON-THROWING wait (harness-common.ps1 Wait-NewLogLineAfter) for the
-        # direct jump; on the observed 0-gather race signature, re-walk ONCE; any other
-        # failure (or a second consecutive failure) falls through to the asserts below,
-        # which throw with the real signature.
-        if (Wait-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 15000) { break }
-        if ($attempt -eq 2) { break }
-        if (-not (Wait-NewLogLineAfter $logPath $idx "$($script:PfxTel)definitions gathered count=0" 2000)) { break }
-    }
-    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 'goto-definition single hit jumped directly' 15000
-    Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto line=1$" 'the direct jump opened Models/Shared.cs at line 1' 15000
-    $doc = Wait-ActiveDocumentMatch $vs.Id 'Shared\.cs' 8000
-    if (-not $doc) { throw 'goto-definition direct jump did not activate Models/Shared.cs' }
-```
-
-(PowerShell's `foreach` creates no variable scope — `$idx` after the loop is the LAST
-attempt's snapshot, so the asserts attribute to the final fire; a break on success
-attributes to the successful attempt. Worst-case added latency on the race path: ~15s wait +
-~2s signature check + one re-walk — far inside the `-TimeoutSec` budgets.)
-
-**Hunk 2 — Part 2: INSERT after `Assert-VsFocused $vs 'goto-definition multi-hit caret
-positioning'`** (before the first `w` tap):
-
-```powershell
-    # BP-B7 audit: the same restored-caret race as Part 1 — the NOTE's "caret after opening
-    # is line 1 col 0" assumption only holds for a FRESH open; gg makes it hold for a
-    # re-opened tab too.
-    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
-    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200
-```
-
-**Hunk 3 — Part 3: INSERT after `Assert-VsFocused $vs 'goto-references caret positioning'`**
-(before the first `j` tap):
-
-```powershell
-    # BP-B7 audit: the same restored-caret race (Part 1's direct jump already opened
-    # Shared.cs; a full-suite earlier scenario may have left the caret elsewhere) —
-    # normalize first.
-    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200   # gg -> line 1, first non-blank (col 0)
-    Send-Tap $script:VkG; Start-Sleep -Milliseconds 200
-```
-
-**Verify-with:**
-- `pwsh tools/harness/test-e2e.ps1 -Tests telescope-goto -TimeoutSec 900` → GREEN: Part 1's
-  contract on the FIRST walk (`goto-direct finder=\S+ file=.*Shared\.cs line=1$` +
-  `goto line=1$` + the active document Shared.cs); Parts 2-4 unchanged and GREEN.
-- The full 44-scenario fresh-boot gate (BP-B6 rev 3, step 9) — `telescope-goto` GREEN
-  outright, NO pass-on-retry allowance.
-- The re-walk is observable in the log only as TWO `definitions gathered` lines within
-  Part 1 (attempt 1's `count=0` + attempt 2's `count=1`) — a pass either way; the
-  runner-level flaky ledger does NOT count it.
-
-**Fails-if:**
-- `definitions gathered count=0` on BOTH attempts (the asserts throw) → NOT the caret race
-  anymore (gg normalized it) — the residual is a real gather failure: inspect the Roslyn
-  workspace state at the fire. If it persists across runs, ESCALATE to the hub (a
-  product-side retry in `DefinitionFinder` is a PLAN decision — do NOT self-heal).
-- The re-walk fires on EVERY run (two `definitions gathered` lines every time) → the
-  normalization did NOT fix the primary race — re-audit the walk (is `gg` landing on line 1?
-  does Reader.cs still match the comment's pinned content?) — do NOT add a third attempt.
-- Part 2/3 fail on the walk after the gg insertion → the gg taps did not reach VsVim (check
-  `Enter-NormalContext` — the editor must be in VsVim NORMAL mode; `g` falls through only
-  then — the same precondition as Part 4's proven usage). Do NOT substitute `1G`/other
-  motions without a hub decision.
-
-### BP-B6 rev 3 (2026-10-05) — the gate (the ledger closed; the allowance removed)
-
-**Files:** none (verification-only step; executed by the verification-agent at VERIFY).
-
-**Change (supersedes BP-B6 rev 2's items 3-4 ONLY; the arithmetic + the trust rule are
-UNCHANGED):**
-
-1. **Arithmetic (unchanged):** Telescope.Tests **268**/0; NeoVisual.Tests **191**/0 (the
-   runner's OWN summary, staggered — never a self-report); e2e **44** registered.
-2. **The flaky ledger — CLOSED:** `telescope-goto` cumulative count hit **3** (base 1, run
-   172 + 1, runs 181/182 + 1, run 183) → the M-M2 3rd-strike upgrade FIRED → RECLASSIFIED A
-   REGRESSION → fixed by BP-B7. The pass-on-retry allowance is REMOVED: at the next gate
-   `telescope-goto` must be GREEN on its FIRST run. The in-scenario re-walk (BP-B7) is
-   in-contract and never counts as a flake.
-3. **The gate (the same 9 steps; step 9's expectation revised):** (1) `dotnet build` → 0
-   errors; (2) Telescope.Tests → 268/0; (3) NeoVisual.Tests → 191/0 (the runner's summary,
-   staggered with (2)); (4) `-List` → 44 with `telescope-recent`; (5) `-SelfCheck` → PASS;
-   (6) doc-refs lint → 0 unresolved; (7) doc-content lint → PASS; (8)
-   `-Tests telescope-recent,telescope-goto -TimeoutSec 900` → BOTH GREEN; (9) the full
-   44-scenario fresh boot (NO `-NoBootstrap`) `-TimeoutSec 3600` → GREEN — **`telescope-goto`
-   included, NO pass-on-retry allowance** (a failure is a regression → the debug-agent, not
-   the ledger).
-
-**Verify-with:** the gate outputs above; `RESULT: PASS (all 44 scenario(s))`.
-
-**Fails-if:** `telescope-goto` failing at step 8/9 → the BP-B7 edit is wrong or incomplete
-(check BP-B7's Fails-if list) — a REGRESSION, never allowlisted. Any scenario OTHER than
-`telescope-recent`/`telescope-goto` failing → a Gap 4 regression (check the trace).
+> (Appended by `implementation-planner` — 2026-10-05. NO RED evidence exists yet — the unit
+> tests are not written; they will be written by `neovim_hub`'s `e2e-test-builder` in the
+> unit-only lane. Verify-with = unit test NAMES + diagnostic FORMATS only. The e2e scenarios
+> (E2E-CR45-1..4) are DEFERRED to the e2e queue (status QUEUED) — created/executed on a
+> capable machine after this plan is GREEN; the BP steps' e2e Verify-with references are the
+> QUEUED gates, and the unit tests are the primary Verify-with. All 45 findings map
+> to ≥1 BP-n step (coverage table below). The pinned research corrections are baked in — do
+> NOT re-derive or contradict them.)
+
+### Phase 0 — Pane-host consolidation (D1, D2, D6, D13, D14)
+
+**BP-1 — Collapse `FocusTargetModel` + `PaneNavigationEngine` into ONE pure focus resolver; DELETE the mirrored engine (D1, D2)**
+- **Files:** `Telescope/Overlay/Utils/FocusTargetModel.cs` (collapse — absorb the geometric decision), `Telescope/Overlay/Utils/Panes/PaneNavigationEngine.cs` (DELETE, incl. the `PaneRect`/`PaneDirection`/`PaneAxis` types at :7-75 + the private `GapTo`/`Adjacency`/`IsInDirection`/`IsAligned` methods at :181-203), `Telescope/Overlay/Utils/Panes/PaneHost.cs` (keep `IPane`/`PaneHost` as the reusable contract — D2).
+- **Change:** Move the geometric selection pipeline (in-direction → aligned → closest gap → largest adjacency → last-in-list tie-break) INTO `FocusTargetModel.Handle(PaneFocusKey)` as a private pure method; delete the mirrored engine + its rect/direction/axis types. The pinned tie-break (Ctrl+K Input→Preview — the equal-width last-in-list net) and the no-op edges (no wrap) survive **byte-identically**; `focus target=` / `focus no-op:` literals unchanged. **Doc propagation (rule 5a):** grep docs for `PaneNavigationEngine`/`PaneRect`/`PaneDirection`/`PaneAxis` — AGENTS.md:96,174; docs/spec.md:116,117,203,351,352; docs/progress.md:420,892,893,934; `.opencode/skills/vs-extension-dev/SKILL.md`:93,102,103,150 — rewrite the descriptive prose to the collapsed `FocusTargetModel` (the doc-ref lint is the acceptance gate).
+- **Verify-with:** the existing ~23 `Run_FocusTarget_*` tests (tests/Telescope.Tests/Program.cs:4000-4179) stay GREEN — `dotnet run --project tests/Telescope.Tests -- FocusTarget`; the 7 `Run_PaneNavEngine_*` tests (Program.cs:4192-4281) migrate to `Run_FocusTarget_*` equivalents (the pinned `Run_PaneNavEngine_AdjacencyTieGoesToLastInList` → `Run_FocusTarget_AdjacencyTieGoesToLastInList`); new test `Run_FocusTargetModel_IsSingleResolver` (compile-RED if `PaneNavigationEngine` is still referenced); e2e E2E-CR45-2 `telescope-focus-panes` stays GREEN; doc-ref lint `pwsh tools/lint/check-doc-refs.ps1` PASS.
+- **Fails-if:** any `Run_FocusTarget_*`/`Run_PaneNavEngine_*` test fails; `[Telescope] focus target=` / `[Telescope] focus no-op:` literals change; `telescope-focus-panes` RED; doc-ref lint flags a stale `PaneNavigationEngine` ref.
+
+**BP-2 — `PaneHost` becomes the single owner of the active pane (D6)**
+- **Files:** `Telescope/Overlay/Utils/Panes/PaneHost.cs:19` (delete `_active`), `Telescope/Overlay/TelescopeOverlay.cs` (call sites that kept `_active` in sync).
+- **Change:** `PaneHost` derives the previously-active pane from `FocusTargetModel.Current` instead of storing `_active` — the model is the single owner of focused-pane state; a desync (`focus target=X` while pane Y holds focus) becomes impossible.
+- **Verify-with:** new test `Run_PaneHost_SingleOwner` (PaneHost activation state derives from the model; no `_active` field); the existing `Run_FocusTarget_*` tests stay GREEN; e2e E2E-CR45-2.
+- **Fails-if:** `[Telescope] focus target=X` while pane Y holds focus; `telescope-focus-panes` RED.
+
+**BP-3 — Single chord→direction map (D14)**
+- **Files:** `Telescope/Overlay/Utils/FocusTargetModel.cs:29-37,129-140` (`PaneFocusKey` + `MapKey`), `Telescope/Overlay/Utils/OverlayKeyHandler.cs` (CtrlH/CtrlL cases).
+- **Change:** single-source the Ctrl+H/J/K/L chord→direction mapping — `MapKey` and `OverlayKeyHandler`'s CtrlH/CtrlL both resolve through ONE map (e.g. `FocusTargetModel.MapKey(Key)` or a shared static table).
+- **Verify-with:** new test `Run_ChordMap_SingleSource` (MapKey and the OverlayKeyHandler Ctrl-chord path agree for all four chords); existing `Run_FocusTarget_*` tests stay GREEN.
+- **Fails-if:** Ctrl+H/L in the overlay diverges from `MapKey`; a chord maps to the wrong direction.
+
+**BP-4 — Delete the `TryDispatch.cs` stub (D13)**
+- **Files:** `Telescope/Overlay/Utils/TryDispatch.cs` (DELETE), docs/spec.md:119 + `.opencode/skills/vs-extension-dev/SKILL.md`:105 (remove the file row).
+- **Change:** delete the comment-only stub retained after the merge into `TextMotionDispatcher`; remove its doc rows (rule 5a — grep docs for `TryDispatch`).
+- **Verify-with:** `dotnet build` 0 errors; `dotnet run --project tests/Telescope.Tests -- TextMotionDispatcher` stays GREEN; doc-ref lint PASS (no stale `TryDispatch.cs` ref).
+- **Fails-if:** doc-ref lint flags a stale `TryDispatch.cs` ref; a `Run_TextMotionDispatcher_*` test fails.
+
+### Phase 1 — fzf filter hardening (D3, D8, D11, D15)
+
+**BP-5 — Register the kill callback BEFORE the spawn/write (D3)**
+- **Files:** `Telescope/Filter/FzfFilter.cs:153-177`.
+- **Change:** move `cancellationToken.Register(() => TryKill(p))` to BEFORE the `Task.Run` spawn/write (or wrap the write in the same `using` scope as the registration) so cancellation can kill fzf during the blocking stdin write; the `using var p` scope must cover the registration.
+- **Verify-with:** new test `Run_FzfFilter_KillRegisteredBeforeWrite` (a hung process that blocks on stdin write; cancel during the write → `TryKill` invoked and the filter returns promptly); existing `Run_FzfFilter_*` tests stay GREEN.
+- **Fails-if:** a hung fzf leaks a process / strands `FilterAndUpdateAsync`; `fzf filter failed:` never appears on cancel.
+
+**BP-6 — Split `_availability` into `volatile bool _probed` + `bool _value` (D11)**
+- **Files:** `Telescope/Filter/FzfFilter.cs:77-85`.
+- **Change:** `volatile` is ILLEGAL on `bool?` — replace `bool? _availability` with `volatile bool _probed` + `bool _value` (or lock/Interlocked). The probe runs once; the UI-thread read never races the thread-pool continuation.
+- **Verify-with:** new test `Run_FzfFilter_AvailabilityProbeOnce` (probe cached once; a second `IsAvailableAsync` returns the cached value without re-spawning); existing `Run_FzfFilter_*` tests stay GREEN.
+- **Fails-if:** fzf spawns twice after the probe cached false; a stale `null` re-probes.
+
+**BP-7 — Unit-test `QuoteArg` + document the keep-subprocess decision (D8)**
+- **Files:** `Telescope/Filter/FzfFilter.cs:250-277` + the class doc (:118-226).
+- **Change:** `QuoteArg` is a CORRECT Windows argv quoter — add unit tests pinning the edge cases and document the keep-subprocess decision (the per-keystroke spawn is already off-thread and e2e-GREEN; `--listen`/in-process deferred until measurement proves a bottleneck — perf-investigation).
+- **Verify-with:** new tests `Run_QuoteArg_Empty`, `Run_QuoteArg_Spaces`, `Run_QuoteArg_EmbeddedQuote`, `Run_QuoteArg_BackslashRun`, `Run_QuoteArg_TrailingBackslash` (Telescope.Tests).
+- **Fails-if:** a `Run_QuoteArg_*` test fails; the keep-subprocess decision is not documented.
+
+**BP-8 — Cancel the timeout timer via a dedicated CTS (D15)**
+- **Files:** `Telescope/Filter/FzfFilter.cs:180`.
+- **Change:** `Task.Delay` returns a Task (NOT IDisposable) and shares the caller's token — add a dedicated CTS cancelled on completion (or document the harmless pending timer). The fast path must not leave a per-keystroke pending timer.
+- **Verify-with:** new test `Run_FzfFilter_TimeoutTimerCancelled` (the fast path cancels the dedicated CTS; no pending timer after a normal filter).
+- **Fails-if:** a pending timer survives the fast path; `Task.Delay` is "disposed" (compile error).
+
+### Phase 2 — Overlay correctness (D4, D5, D9, D10, D12)
+
+**BP-9 — Clamp `ApplyPreviewCaret` via `PreviewCaretMap.Offset` (D4)**
+- **Files:** `Telescope/Overlay/TelescopeOverlay.cs:1119-1122`.
+- **Change:** clamp `_previewNavigator.Caret` through `PreviewCaretMap.Offset` against the current editor text, exactly as `ShowPreview` does (:880), so a stale buffer can never hand an out-of-range index to `SnapshotPoint`.
+- **Verify-with:** new test `Run_PreviewCaretMap_Clamp` (an out-of-range caret clamps to the buffer length); existing `Run_PreviewCaretMap_*` tests stay GREEN; e2e `telescope-preview-motions` stays GREEN.
+- **Fails-if:** an exception thrown from `OnPreviewKeyDown` on a stale buffer; `[Telescope] preview caret=... line=...` changes.
+
+**BP-10 — Move the query-driven gather's pure `ScanFile` loop off the UI thread (D5)**
+- **Files:** `Telescope/Overlay/TelescopeOverlay.cs:504-516`, `Telescope/Finders/GrepFinder.cs:107-110`, `Telescope/Finders/FzfFinder.cs`.
+- **Change:** NOT a blanket `Task.Run` — `GrepFinder.GetCandidates` calls `ThreadHelper.ThrowIfNotOnUIThread()`; enumerate (cached via `ProjectFileCache`) on the UI thread, `Task.Run` ONLY the pure `ScanFile` loop, marshal back with the existing generation check (TelescopeOverlay.cs:506,512).
+- **Verify-with:** new test `Run_GrepFinder_ScanFileBackground` (the pure `ScanFile` loop is off-thread; the DTE enumeration stays on the UI thread; the generation check discards stale results); existing `Run_GrepFinder_*` tests stay GREEN; e2e `telescope-grep`/`telescope-fzf` stay GREEN.
+- **Fails-if:** the overlay freezes on a large solution; DTE is touched on a background thread (ThrowIfNotOnUIThread violation); `grep hits=...`/`fzf hits=...` change.
+
+**BP-11 — Re-pin `RenderedTextLength`/`boxText=` to a meaningful value (D9 — M-M7)**
+- **Files:** `Telescope/Overlay/Utils/ResultsFormatter.cs:24-39`.
+- **Change:** `RenderedTextLength` exists solely to keep a legacy diagnostic byte-identical to the RETIRED TextBox render — re-pin it to a real rendered length. The harness regexes (`results count=\d+ selected=...`) do NOT pin `boxText`, so no harness break.
+- **Verify-with:** new test `Run_ResultsFormatter_RenderedTextLength` (the value is a meaningful rendered length, not the legacy dead-layout math); the harness `results count=\d+ selected=...` regexes still pass.
+- **Fails-if:** `results count=... boxText=` emits the legacy dead-layout value; the `results count=` line breaks.
+
+**BP-12 — Clear `_gPending` in `TryPromptMotion` via `OverlayKeyHandler.CancelPendingG()` (D10)**
+- **Files:** `Telescope/Overlay/Utils/OverlayKeyHandler.cs:156-164` (new `CancelPendingG()`), `Telescope/Overlay/TelescopeOverlay.cs:1031` (`TryPromptMotion` calls it).
+- **Change:** `_gPending` is private — add `OverlayKeyHandler.CancelPendingG()` and call it from `TryPromptMotion` so a prompt motion (h/l/w/b/e/0/$) consumed before `_keyHandler.Handle` clears the pending `g` — `g h g` must NOT trigger `gg`.
+- **Verify-with:** new test `Run_OverlayKeyHandler_CancelPendingG` (RED: `g h g` must NOT fire `MoveToFirst`); existing `Run_OverlayKeyHandler_*` tests stay GREEN.
+- **Fails-if:** `g h g` triggers `gg` (MoveToFirst); `prompt-motion key=... caret=...` changes.
+
+**BP-13 — `ResultMapper` byDisplay → `Ordinal` (D12)**
+- **Files:** `Telescope/Overlay/Utils/ResultMapper.cs:34`.
+- **Change:** the byDisplay map groups with `OrdinalIgnoreCase` → case-colliding duplicates ("Foo.cs"/"foo.cs") map to the wrong payload. Use `Ordinal`.
+- **Verify-with:** new test `Run_ResultMapper_OrdinalCase` (Foo.cs/foo.cs map to distinct payloads; Enter opens the right file); existing `Run_ResultMapper_*` tests stay GREEN.
+- **Fails-if:** a case-colliding duplicate opens the wrong file; `result-mapper unknown display: {display}` changes.
+
+### Phase 3 — Finder cache sharing (D7)
+
+**BP-14 — Inject ONE shared `FileContentCache` from `TelescopeController` (D7)**
+- **Files:** `Telescope/Controller/TelescopeController.cs`, `Telescope/Finders/GrepFinder.cs:28`, `Telescope/Finders/CodeIssuesFinder.cs:40`, `Telescope/Finders/FzfFinder.cs:33`.
+- **Change:** `ProjectFileCache` is ALREADY shared (injected in all three ctors); only `FileContentCache(500)` is per-instance (3×500-entry caches). Construct ONE `FileContentCache` in `TelescopeController` and inject it into all three finders (MEF/DI wiring — the finder ctors take the shared instance).
+- **Verify-with:** new test `Run_FileContentCache_Shared` (all three finders share one instance — same reference); existing `Run_GrepFinder_*`/`Run_FzfFinder_*`/`Run_CodeIssuesFinder_*` tests stay GREEN.
+- **Fails-if:** 3×500-entry independent caches; `grep hits=...`/`fzf hits=...` change.
+
+### Phase 4 — WindowManager + navigation (A1, A6, A7, C7)
+
+**BP-15 — Delete the eager controller registration loop, keep the lazy `_defaultControllers` cache (A1)**
+- **Files:** `MyExtension/Package/MyExtensionPackage.cs:143-150` (delete the loop), `MyExtension/ToolWindows/WindowManager.cs:31` (keep `_defaultControllers`).
+- **Change:** NO native VS per-tool-window-type keyboard-controller mechanism exists — delete the eager registration loop; the lazy `_defaultControllers` cache is the single mechanism (`ResolveController` depends on it — the m22 same-instance invariant).
+- **Verify-with:** NeoVisual.Tests `Run_GetController_SameInstance` (RED if the lazy cache is deleted — `GetController` returns the same instance per type); `Run_ResolveController_*`/`Run_DefaultControllerFor_*` stay GREEN.
+- **Fails-if:** `GetController` returns different instances per type; a per-type default controller silently diverges.
+
+**BP-16 — `BuildActiveWindows` returns a COPY of `_cachedLinked` (A6)**
+- **Files:** `MyExtension/Navigation/WindowNavigator.cs:26,107`.
+- **Change:** `_cachedLinked` is a static mutable list keyed on object refs; `BuildActiveWindows` returns the SAME list instance to every navigator. Return a copy (preserves the cache, kills aliasing).
+- **Verify-with:** NeoVisual.Tests `Run_BuildActiveWindows_ReturnsCopy` (mutating the returned list does not mutate the cache; two calls return distinct instances).
+- **Fails-if:** a navigator mutates the shared cached list; `navigate direction=...` changes.
+
+**BP-17 — `IsTextInputType` derives from a single classification source (A7)**
+- **Files:** `MyExtension/ToolWindows/GeneralToolWindowController.cs:81`.
+- **Change:** the hardcoded switch must be manually kept in sync with the `ToolWindowType` enum + `ToolWindowTypeResolver` GUID map — derive `IsTextInputType` from a single classification source (e.g. a `ToolWindowTypeResolver`-owned classification table).
+- **Verify-with:** NeoVisual.Tests `Run_IsTextInputType_Classification` (every text-input type resolves consistently; a new text-input type is classified without a second switch).
+- **Fails-if:** a new text-input type silently starts in normal mode (hjkl inject arrows); `toolwindow-enter-input`/`toolwindow-exit-input` change.
+
+**BP-18 — Handle/log the `GetGuidProperty` HRESULT (C7)**
+- **Files:** `MyExtension/ToolWindows/WindowManager.cs:341`.
+- **Change:** the `GetGuidProperty` HRESULT is discarded → silent `_type = Unknown` on COM failure. Check the HRESULT and log the failure (e.g. `[NeoVisual] window type probe failed: {msg}`) instead of silently defaulting.
+- **Verify-with:** NeoVisual.Tests `Run_GetGuidProperty_HResult` (a failed HRESULT is logged, not silently `Unknown`); existing `Run_ToolWindowType_*` tests stay GREEN.
+- **Fails-if:** a COM failure silently sets `_type = Unknown` with no log.
+
+### Phase 5 — Preview + Error List perf (A2, A3)
+
+**BP-19 — Cache the preview text keyed on `ITextSnapshot.Version.VersionNumber` (A2)**
+- **Files:** `MyExtension/Package/Utils/PreviewEditorHost.cs:100`.
+- **Change:** `Show` materializes the whole preview buffer via `CurrentSnapshot.GetText()` on every call, even on mtime-cache hit. Extract a pure version→text cache helper; only re-read on rebuild.
+- **Verify-with:** NeoVisual.Tests `Run_PreviewTextCache_VersionKeyed` (same snapshot version → cached text; new version → re-read); existing `Run_PreviewEditorHost_*` tests stay GREEN.
+- **Fails-if:** a full-buffer `GetText()` per selection move; `preview file=...` changes.
+
+**BP-20 — Short-TTL/bounded Error List scan with the cache decision in a pure helper (A3)**
+- **Files:** `MyExtension/Package/Utils/ErrorListGatherer.cs:45-46`.
+- **Change:** DTE `ErrorItems` has NO version counter — a count-keyed cache is weak (same count, different items after a build). Use a short-TTL cache or a bounded scan; the cache decision lives in a pure helper.
+- **Verify-with:** NeoVisual.Tests `Run_ErrorListCacheDecision_TTL` (the pure helper decides cache-hit vs re-scan; a stale cache expires after the TTL); existing `Run_DiagnosticNavigator_*` tests stay GREEN.
+- **Fails-if:** O(n) COM `ErrorItems.Item(i)` reads per `],e`/`[,e`/`],w`/`[,w` press; `diagnostic-nav direction=...` changes.
+
+### Phase 6 — Tool-window controllers (A4, A5, A8, A9, A10, A11, C2, C3, C6)
+
+**BP-21 — `TryMove` delegates to `ToolWindowControllerBase.TextMotion` (A4)**
+- **Files:** `MyExtension/ToolWindows/SolutionExplorerController.cs:193`.
+- **Change:** `TryMove` re-implements the text-input routing block `ToolWindowControllerBase.TextMotion` already provides. Delegate, preserving the N21 side effect (`enteredInputMode → EnterInputMode()`) + the tree h/l guard.
+- **Verify-with:** NeoVisual.Tests `Run_TryMove_DelegatesToTextMotion` (search-box motions route through the shared block; the N21 side effect + tree h/l guard preserved); existing `Run_SolutionExplorer_*` tests stay GREEN.
+- **Fails-if:** search-box motions diverge from the shared block; the tree h/l guard breaks.
+
+**BP-22 — Correct the `TextMotionHelper` WPF comment / read a bounded window (A5)**
+- **Files:** `MyExtension/ToolWindows/Utils/TextMotionHelper.cs:107`.
+- **Change:** the WPF path reads `focusedBox.Text` (a full-buffer copy) before slicing — the R18 "avoids the O(n) copy" claim is only half-realized. Correct the comment or read a bounded window.
+- **Verify-with:** NeoVisual.Tests `Run_TextMotionHelper_BoundedRead` (the WPF path reads a bounded window, not the full buffer); existing `Run_TextMotionHelper_*` tests stay GREEN.
+- **Fails-if:** a full-buffer `.Text` copy per motion; `text-motion key=... caret=...` changes.
+
+**BP-23 — Extract the `HandleKey` tool-window routing block (A8)**
+- **Files:** `MyExtension/Input/InputHandler.cs:267`.
+- **Change:** `HandleKey` is a ~20-branch hot path with a 6-arg `ShouldRouteToolWindowKey` call — extract the tool-window routing block into a private method (behavior-preserving).
+- **Verify-with:** NeoVisual.Tests `Run_HandleKey_RoutingBlockExtracted` (behavior unchanged — the extracted block routes identically); existing `Run_InputHandler_*` tests stay GREEN.
+- **Fails-if:** tool-window routing behavior changes; `toolwindow-move key=...` changes.
+
+**BP-24 — `_sessionMru` → LinkedList or cap (A9)**
+- **Files:** `MyExtension/Package/Utils/RecentFilesGatherer.cs:158`.
+- **Change:** `List.Remove` + `Insert(0, …)` per `DocumentOpened` is O(n) each, unbounded. Use a `LinkedList` (O(1) remove-first) or cap the list.
+- **Verify-with:** NeoVisual.Tests `Run_RecentFilesMru_LinkedList` (the MRU is O(1) per open and bounded); existing `Run_RecentFilesGatherer_*` tests stay GREEN.
+- **Fails-if:** O(n) per open; an unbounded `_sessionMru`.
+
+**BP-25 — `FocusKeeper` per-controller or owner-check (C2)**
+- **Files:** `MyExtension/ToolWindows/Utils/FocusKeeper.cs:17`.
+- **Change:** `_current` is a static `DispatcherTimer` shared across controllers; `Run` stops any prior keeper regardless of owner. Make it per-controller or add an owner-check.
+- **Verify-with:** NeoVisual.Tests `Run_FocusKeeper_OwnerCheck` (a second controller's `Run` does not stop the first's keeper); existing `Run_FocusKeeperSchedule_*` tests stay GREEN.
+- **Fails-if:** one controller's `Run` stops another's keeper.
+
+**BP-26 — Cache/bound the box-walk (C3)**
+- **Files:** `MyExtension/Input/InputHandler.cs:338`.
+- **Change:** `IsFocusedTextBoxInCurrentToolWindow()` (COM `GetProperty(VSFPROPID_DocView)` + visual-tree walk) runs on every shift+key routed to a tool window — cache the fact on focus-change events (the M1 pattern).
+- **Verify-with:** NeoVisual.Tests `Run_BoxWalk_Cached` (the COM+visual-tree walk runs once per focus change, not per key); existing `Run_InputHandler_*` tests stay GREEN.
+- **Fails-if:** a COM walk per shift+key; `toolwindow-move key=...` changes.
+
+**BP-27 — Reset `_focusKeeper` to null after dispose (C6)**
+- **Files:** `MyExtension/ToolWindows/SolutionExplorerController.cs:31`.
+- **Change:** `_focusKeeper` retains a disposed handle, never reset to null. Reset it to null after dispose.
+- **Verify-with:** NeoVisual.Tests `Run_FocusKeeper_ResetAfterDispose` (after dispose, `_focusKeeper` is null; a re-run creates a fresh keeper); existing `Run_SolutionExplorer_*` tests stay GREEN.
+- **Fails-if:** a disposed handle is reused.
+
+**BP-28 — Dedupe the DocView walk-up loop (A10)**
+- **Files:** `MyExtension/ToolWindows/WindowManager.cs:127`.
+- **Change:** the "walk up to DocView content" loop is duplicated in `ComputeTextInputSurfaceFocused` + `IsFocusedTextBoxInCurrentToolWindow` — extract one shared helper.
+- **Verify-with:** NeoVisual.Tests `Run_DocViewWalk_SingleSource` (both callers use the shared helper); existing `Run_ToolWindow_*` tests stay GREEN.
+- **Fails-if:** the duplicated loop remains; `toolwindow-move key=...` changes.
+
+**BP-29 — Single `CurrentController` resolution per key-down (A11)**
+- **Files:** `MyExtension/Input/InputHandler.cs:453`.
+- **Change:** `IsKeyOfInterest` resolves `_windowManager.CurrentController` twice per key-down — resolve once.
+- **Verify-with:** NeoVisual.Tests `Run_IsKeyOfInterest_SingleResolve` (one `CurrentController` resolution per key-down); existing `Run_InputHandler_*` tests stay GREEN.
+- **Fails-if:** double resolution per key-down; `[Hook]` lines change.
+
+### Phase 7 — Vim mode contract (C1, C5)
+
+**BP-30 — Extend `VimModeClassifier`'s name table + document `vim-mode=Unknown` + the numeric fallback (C1 — M-M7)**
+- **Files:** `MyExtension/Vim/Utils/VimModeClassifier.cs:27`, `MyExtension/Vim/VimModeTracker.cs:138`, `AGENTS.md` (the `vim-mode=` contract line).
+- **Change:** EXTEND the name table to the common extra VsVim modes — Visual, Command, VisualBlock, Select — replacing the numeric `vim-mode=<n>` for those; document `vim-mode=Unknown` (focus loss) as a legitimate token + the numeric fallback in AGENTS.md. The `vim-mode=Insert|Normal|Replace` contract is unchanged.
+- **Verify-with:** NeoVisual.Tests `Run_VimModeClassifier_ExtraModes` (Visual/Command/VisualBlock/Select emit named tokens, not numerics); `Run_VimModeState_FocusLoss` (focus loss emits only the documented `Unknown`); the harness's `vim-mode=Insert`/`vim-mode=Normal` assertions (test-e2e.ps1:1494,1514) stay valid; e2e E2E-CR45-3 (`neovisual-editor-insert` + a named-mode assertion).
+- **Fails-if:** `vim-mode=<n>` for Visual/Command; `vim-mode=Insert|Normal|Replace` changes; a strict/negative harness assertion over the mode line breaks.
+
+**BP-31 — Document the `IsEditorFocused` fail-open risk (C5)**
+- **Files:** `MyExtension/Vim/VimModeTracker.cs:39` (comment), `AGENTS.md` (the FocusGuard section).
+- **Change:** do NOT broaden `IsEditorFocused` (it would track the Telescope preview view — deliberately non-Editable — and flip the flag while the overlay preview is focused). DOCUMENT the fail-open risk (a non-text editor with a stale `IsToolWindow` fails the FocusGuard OPEN).
+- **Verify-with:** doc-content lint PASS; existing `Run_FocusGuard_*` tests stay GREEN.
+- **Fails-if:** `IsEditorFocused` is broadened; the fail-open risk is undocumented.
+
+### Phase 8 — InjectedKeyGuard (C4)
+
+**BP-32 — Document the accepted risk (C4)**
+- **Files:** `MyExtension/Hooks/Utils/InjectedKeyGuard.cs:83`.
+- **Change:** `TryConsume` is keyed by VK+TTL only and cannot distinguish injected from physical — a dropped injected event could consume the next physical same-VK within 1s (theoretical; `keybd_event` queues synchronously). Document the accepted risk. No behavior change.
+- **Verify-with:** the existing `Run_InjectedKeyGuard_*` tests stay GREEN + the documented-risk comment.
+- **Fails-if:** a behavior change to `TryConsume`.
+
+### Phase 9 — Harness (T1, T3, T4, T5, T6)
+
+**BP-33 — `neovisual-window-nav` asserts the navigation OUTCOME (T1)**
+- **Files:** `tools/harness/test-e2e.ps1:698-709`.
+- **Change:** assert `navigate activated index=\d+` per chord (NOT "no no-op at all" — some directions may legitimately no-op depending on the scratch layout).
+- **Verify-with:** e2e E2E-CR45-1 — `Assert-NewLogLine ... 'navigate activated index=\d+'` after each Ctrl+H/J/K/L chord.
+- **Fails-if:** the scenario passes with every navigation a no-op; `navigate activated index=` never appears.
+
+**BP-34 — `Assert-NoSeedLeak` throws in a full (non-reuse) run when the expected tree is absent (T3)**
+- **Files:** `tools/harness/test-e2e.ps1:551-562` (NOT harness-common.ps1).
+- **Change:** the "skips gracefully" path is a cannot-fail path in the write-leak guard — throw in a full (non-reuse) run when the expected-result tree or scratch dir is absent.
+- **Verify-with:** e2e E2E-CR45-4 (the `seed-leak` scenario runs last and must not skip).
+- **Fails-if:** `seed-leak` skips gracefully in a full run; a write leak goes undetected.
+
+**BP-35 — `Wait-LogLine`'s `$searchedTo` becomes a persistent cursor preserving the fixed-baseline contract (T4)**
+- **Files:** `tools/harness/harness-common.ps1:168-190`.
+- **Change:** the per-call local cursor makes wait helpers O(calls × window). Make `$searchedTo` a persistent cursor that searches after the baseline WITHOUT advancing on match (AGENTS.md forbids an advancing cursor).
+- **Verify-with:** e2e E2E-CR45-4 (the fixed-baseline contract holds — an assert may re-confirm a line another helper already saw).
+- **Fails-if:** the cursor advances on match (breaks the fixed-baseline contract); a stale line satisfies a later assertion.
+
+**BP-36 — `telescope-navigate` uses the LogCache tail-read (T5)**
+- **Files:** `tools/harness/test-e2e.ps1:624`.
+- **Change:** the scenario reads the whole log with `Get-Content`, bypassing the LogCache tail-read machinery — switch to the tail-read.
+- **Verify-with:** e2e E2E-CR45-4 (`telescope-navigate` passes via the LogCache tail-read).
+- **Fails-if:** a whole-log `Get-Content` read remains; `telescope-navigate` RED.
+
+**BP-37 — The runner enforces the suite-order invariants (T6)**
+- **Files:** `tools/harness/test-e2e.ps1:53-66`.
+- **Change:** the suite order-dependency invariants (seed-leak last, editor-insert before it) are not enforced by the runner — enforce them.
+- **Verify-with:** e2e E2E-CR45-4 (the runner enforces the order; a mis-ordered run fails fast).
+- **Fails-if:** `seed-leak` runs before `neovisual-editor-insert`; the order invariants are unenforced.
+
+### Phase 10 — Pane contract tests (T2)
+
+**BP-38 — `IPane`-contract tests with a FAKE pane (T2)**
+- **Files:** `tests/Telescope.Tests/Program.cs`.
+- **Change:** the three concrete panes (`PromptPane`/`ListPane`/`PreviewPane`) are thin WPF shells — test the `IPane` contract + focus model with a fake pane (Activate/Deactivate, content wiring, registry order).
+- **Verify-with:** new tests `Run_IPane_Contract_Activate`, `Run_IPane_Contract_Deactivate`, `Run_IPane_Contract_RegistryOrder` (fake pane); existing `Run_FocusTarget_*` tests stay GREEN.
+- **Fails-if:** a pane `Activate`/`Deactivate` regression is invisible to the suite.
+
+### Phase 11 — Docs (DOC1-DOC6)
+
+**BP-39 — AGENTS.md "43 executed GREEN / telescope-recent pending" → 44/44 GREEN (DOC1)**
+- **Files:** `AGENTS.md:145-146`, `.opencode/skills/vs-extension-dev/SKILL.md`, `docs/spec.md`.
+- **Change:** refresh the stale scenario-count claims to 44/44 GREEN.
+- **Verify-with:** doc-content lint PASS (`pwsh tools/lint/check-doc-content.ps1`).
+- **Fails-if:** doc-content lint flags the stale count.
+
+**BP-40 — spec.md's 43-vs-44 scenario list (DOC2)**
+- **Files:** `docs/spec.md:390`.
+- **Change:** the list has 43 scenarios but claims 44 — add `neovisual-git-bindings`.
+- **Verify-with:** doc-content lint PASS.
+- **Fails-if:** doc-content lint flags the missing scenario.
+
+**BP-41 — progress.md's pending-queue run-order block (DOC3)**
+- **Files:** `docs/progress.md:381-388`.
+- **Change:** the pending-queue block still shows gap 11/feature 7/gap 4 pending though all GREEN — refresh.
+- **Verify-with:** doc-content lint PASS.
+- **Fails-if:** doc-content lint flags the stale block.
+
+**BP-42 — Prior-review "still open" annotations N54/N55/W12 → resolved (DOC4)**
+- **Files:** `docs/reviews/code-review.md:70-71`, `docs/reviews/architecture-review.md:46`.
+- **Change:** mark the resolved findings as resolved.
+- **Verify-with:** doc-content lint PASS.
+- **Fails-if:** doc-content lint flags the stale annotations.
+
+**BP-43 — code-review.md's stale test counts 153/163 → 268/191 (DOC5)**
+- **Files:** `docs/reviews/code-review.md:191`.
+- **Change:** refresh the test counts.
+- **Verify-with:** doc-content lint PASS.
+- **Fails-if:** doc-content lint flags the stale counts.
+
+**BP-44 — spec.md §7's missing git-bindings bullet (DOC6)**
+- **Files:** `docs/spec.md:470-555`.
+- **Change:** add the git leader bindings to the done-feature list.
+- **Verify-with:** doc-content lint PASS.
+- **Fails-if:** doc-content lint flags the missing bullet.
+
+### Finding coverage (45/45)
+
+| finding | sev | BP step(s) | finding | sev | BP step(s) |
+|---|---|---|---|---|---|
+| D1 | major | BP-1 | A6 | minor | BP-16 |
+| D2 | major | BP-1 | A7 | minor | BP-17 |
+| D3 | major | BP-5 | A8 | minor | BP-23 |
+| D4 | major | BP-9 | A9 | minor | BP-24 |
+| D5 | major | BP-10 | A10 | nit | BP-28 |
+| D6 | minor | BP-2 | A11 | nit | BP-29 |
+| D7 | minor | BP-14 | C1 | minor | BP-30 |
+| D8 | minor | BP-7 | C2 | minor | BP-25 |
+| D9 | minor | BP-11 | C3 | minor | BP-26 |
+| D10 | minor | BP-12 | C4 | minor | BP-32 |
+| D11 | minor | BP-6 | C5 | minor | BP-31 |
+| D12 | minor | BP-13 | C6 | nit | BP-27 |
+| D13 | nit | BP-4 | C7 | nit | BP-18 |
+| D14 | nit | BP-3 | T1 | major | BP-33 |
+| D15 | nit | BP-8 | T2 | minor | BP-38 |
+| A1 | major | BP-15 | T3 | minor | BP-34 |
+| A2 | major | BP-19 | T4 | nit | BP-35 |
+| A3 | major | BP-20 | T5 | nit | BP-36 |
+| A4 | minor | BP-21 | T6 | nit | BP-37 |
+| A5 | minor | BP-22 | DOC1 | minor | BP-39 |
+| | | | DOC2 | minor | BP-40 |
+| | | | DOC3 | minor | BP-41 |
+| | | | DOC4 | minor | BP-42 |
+| | | | DOC5 | nit | BP-43 |
+| | | | DOC6 | nit | BP-44 |
 
 ## Verification Trace
 
-> REV 2 (2026-10-05): the three new rows (the registry count pin, the eager hookup, the probe
-> diagnostic) are from the failed VERIFY (runs 181/182); the GREEN rows' stale counts
-> corrected (Telescope 268, e2e 44).
->
-> REV 3 (2026-10-05, iteration 2): two NEW rows from the second failed VERIFY (runs 183/184) —
-> the `telescope-recent` Step-3 structural impossibility (→ BP-B1 rev 2) and the
-> `telescope-goto` M-M2 3rd-strike REGRESSION (→ BP-B7, moved OUT of the allowlist). The
-> product-code rows are unchanged (BP-3 rev 2 VERIFIED WORKING — the run-181 signature gone).
+> Maps each failing test/gate to its implicated BP-n step and the expected diagnostic that
+> proves it. **Known-RED allowlist: NONE** — the baseline is all-GREEN (44/44 e2e, Telescope
+> 268, NeoVisual 191); the `telescope-goto` flaky ledger is CLOSED. Do NOT report any of the
+> below as a pre-existing regression. **The e2e rows (E2E-CR45-1..4) are QUEUED gates** — the
+> unit rows are the primary Verify-with at this plan's VERIFY; the e2e rows are created/
+> executed on a capable machine after this plan is GREEN.
 
-| failing test / gate (RED before the change) | implicated steps | expected diagnostic / proof |
+| failing test / scenario | implicated steps | expected diagnostic |
 |---|---|---|
-| `Run_RecentFilesFinder_*` (the hermetic set) | BP-1/2, BP-8 | GREEN (landed): the gather/display/open/preview-jump/determinism — 268/0 |
-| `Run_ResultsColumns_Recent_*` | BP-7, BP-8 | GREEN (landed): the Recent catalog (file,dir) |
-| `Run_ActionsRegistry_TelescopeMapsToFinder` (stays GREEN) | BP-5 | the derived entry keeps the equality fixture green |
-| `Run_ActionsRegistry_ContainsAllBuiltins` (**RED at run 181: "Expected [17] but got [18]"**) | **BP-5 rev 2** | GREEN: `Assert.Equal(18, Actions.Registry.Count)` + the `names[]` array contains `"telescope-recent"` (a unit count pin — no log line); the suite count STAYS 191 |
-| e2e `telescope-recent` — `recent files gathered count=0` + `open finder=Recent candidates=0` (**RED ×2 at runs 181/182, deterministic**) | **BP-3 rev 2** (the eager hookup) | GREEN: `[Telescope] recent files gathered count=(\d+)` with **n≥1** AFTER Step 1's `[Telescope] opened file: ...Order.cs` — the session MRU holds Order.cs from CONSTRUCTION time |
-| the probe degradation observability (**NEW contract**) | **BP-3 rev 2** | `[Telescope] recent files probe unavailable: {msg}` logged ONCE when the reflection probe throws; its ABSENCE during a probe failure is itself a BP-3 rev 2 defect |
-| e2e `telescope-recent` Step 3 — the `preview file=.*Order\.cs` assertion NEVER fires during typing (**RED ×2 at runs 183/184, deterministic — STRUCTURAL: the Step-3 Show is a PreviewEditorHost cache HIT and the line only fires on a rebuild; it could only pass if the most-recent-first ordering were WRONG**) | **BP-B1 rev 2** (the plan-owned scenario edit — HUB ADJUDICATION: ACCEPT) | GREEN: Step 2 (snapshot `$preOpen`) asserts `[Telescope] preview file=.*Order\.cs` — the unfiltered render's top-match preview IS the most-recent-first proof; Step 3 (snapshot `$preQuery`) asserts `[Telescope] results count=1 selected=0` — the filtered top match; Step 4 unchanged (`[Telescope] opened file: ...Order.cs`) |
-| e2e `telescope-goto` Part 1 — `definitions gathered count=0` → `open finder=Definition candidates=0` (**REGRESSION — the M-M2 3rd strike, run 183; cumulative count 3; REMOVED from the allowlist**) | **BP-B7** (the `gg` caret normalization Parts 1-3 + Part 1's single bounded re-walk; NO product-code change) | GREEN on the first walk: `[Telescope] goto-direct finder=\S+ file=.*Shared\.cs line=1$` + `[Telescope] goto line=1$` + the active document Shared.cs; the in-scenario re-walk (on the 0-gather signature) is IN-CONTRACT — a pass after it is a PASS, not a runner-level flake |
-| e2e `telescope-recent` (the full scenario) | BP-B1 rev 2, BP-1..7, **BP-3 rev 2** | GREEN: `open finder=Recent candidates=...` (≥1) + `results columns=file,dir` + the Order.cs top match (`preview file=.*Order\.cs`, asserted at Step 2 per BP-B1 rev 2) + `results count=1 selected=0` (Step 3) + `opened file:` (Step 4) |
-| unit gate | BP-8, **BP-5 rev 2**, BP-B6 rev 3 | Telescope **268**/0; NeoVisual **191**/0 (the runner's OWN summary — never a self-report); the build 0 errors |
-| lints + `-List` | BP-B6 rev 3 | 0 unresolved; PASS; **44** scenarios |
-
-**Known-RED allowlist (REV 3, 2026-10-05):**
-
-- **`telescope-goto` — REMOVED from the allowlist (REV 3).** The cumulative flaky count hit
-  **3** (base 1, run 172 + 1, runs 181/182 + 1, run 183) → the M-M2 3rd-strike upgrade FIRED:
-  it is a RECLASSIFIED REGRESSION, fixed by BP-B7 (the harness-layer `gg` normalization +
-  the bounded re-walk). At the next gate it MUST be GREEN on its first run — it is NOT
-  allowlisted as flaky, and a failure there routes to the debug-agent, not the ledger. The
-  in-scenario re-walk is in-contract (a pass is a PASS).
-- **The gate-trust finding (not a test failure):** the build-agent's run-181 "NeoVisual.Tests
-  191/0" self-report was FALSE (fresh output: 190/1). The verifier re-runs both suites fresh
-  and reads the runner's own summary (BP-B6 rev 2's trust rule) — a self-report is never
-  evidence.
-- The verifier must NOT flag the reflection-probe's best-effort nature (the session-MRU floor
-  is the guaranteed path — now EAGER) or the probe's once-only diagnostic as spam.
-- The verifier must NOT flag the `telescope-recent` Step-3 assertion-set change (BP-B1 rev 2)
-  as a weakened contract: the top-match preview proof was MOVED to Step 2 (where the
-  PreviewEditorHost cache-MISS path actually emits it), not deleted — the Step-2 line plus
-  the Step-3 `results count=1 selected=0` plus the Step-4 `opened file:` together cover the
-  original Step-2/3/4 contract.
-- The in-flight plans' count drift: all counts above are the LANDED state re-reads at the
-  gate (Telescope 268 / NeoVisual 191 / e2e 44).
+| `Run_FocusTarget_*` (23 tests, Program.cs:4000-4135+) | BP-1, BP-2, BP-3 | `[Telescope] focus target=Input|List|Preview` + `[Telescope] focus no-op: no pane {direction} from {pane}` UNCHANGED |
+| `Run_PaneNavEngine_*` (7 tests) | BP-1 | migrated to `Run_FocusTarget_*` equivalents (the pinned adjacency tie-break survives) |
+| `Run_FzfFilter_*` (kill-on-cancel / probe-once / timeout-CTS) | BP-5, BP-6, BP-8 | `[Telescope] fzf hits=...` / `[Telescope] fzf filter failed: {msg}` UNCHANGED |
+| `Run_QuoteArg_*` (5 tests) | BP-7 | (none — pure quoter) |
+| `Run_PreviewCaretMap_Clamp` | BP-9 | `[Telescope] preview caret=... line=...` UNCHANGED |
+| `Run_GrepFinder_ScanFileBackground` | BP-10 | `[Telescope] grep hits=...` UNCHANGED |
+| `Run_ResultsFormatter_RenderedTextLength` | BP-11 | `[Telescope] results count=... boxText=<re-pinned>` (M-M7) |
+| `Run_OverlayKeyHandler_CancelPendingG` | BP-12 | `[Telescope] prompt-motion key=... caret=...` UNCHANGED |
+| `Run_ResultMapper_OrdinalCase` | BP-13 | `[Telescope] result-mapper unknown display: {display}` UNCHANGED |
+| `Run_FileContentCache_Shared` | BP-14 | `[Telescope] grep hits=...` / `[Telescope] fzf hits=...` UNCHANGED |
+| `Run_GetController_SameInstance` | BP-15 | `[NeoVisual] toolwindow-move key=...` UNCHANGED |
+| `Run_BuildActiveWindows_ReturnsCopy` | BP-16 | `[NeoVisual] navigate direction=...` UNCHANGED |
+| `Run_IsTextInputType_Classification` | BP-17 | `[NeoVisual] toolwindow-enter-input` / `toolwindow-exit-input` UNCHANGED |
+| `Run_GetGuidProperty_HResult` | BP-18 | `[NeoVisual] window type probe failed: {msg}` (NEW) — `[NeoVisual] window rect unavailable; using empty rect` UNCHANGED |
+| `Run_PreviewTextCache_VersionKeyed` | BP-19 | `[Telescope] preview file=...` UNCHANGED |
+| `Run_ErrorListCacheDecision_TTL` | BP-20 | `[NeoVisual] diagnostic-nav direction=...` UNCHANGED |
+| `Run_TryMove_DelegatesToTextMotion` | BP-21 | `[NeoVisual] solution-explorer ...` / `[NeoVisual] text-motion key=...` UNCHANGED |
+| `Run_TextMotionHelper_BoundedRead` | BP-22 | `[NeoVisual] text-motion key=... caret=...` UNCHANGED |
+| `Run_HandleKey_RoutingBlockExtracted` | BP-23 | `[NeoVisual] toolwindow-move key=...` UNCHANGED |
+| `Run_RecentFilesMru_LinkedList` | BP-24 | `[Telescope] recent files gathered count=...` UNCHANGED |
+| `Run_FocusKeeper_OwnerCheck` | BP-25 | `[NeoVisual] solution-explorer ...` UNCHANGED |
+| `Run_BoxWalk_Cached` | BP-26 | `[NeoVisual] toolwindow-move key=...` UNCHANGED |
+| `Run_FocusKeeper_ResetAfterDispose` | BP-27 | `[NeoVisual] solution-explorer ...` UNCHANGED |
+| `Run_DocViewWalk_SingleSource` | BP-28 | `[NeoVisual] toolwindow-move key=...` UNCHANGED |
+| `Run_IsKeyOfInterest_SingleResolve` | BP-29 | `[Hook]` lines UNCHANGED |
+| `Run_VimModeClassifier_ExtraModes` / `Run_VimModeState_FocusLoss` | BP-30 | `[NeoVisual] vim-mode=Visual|Command|VisualBlock|Select` (M-M7) + `vim-mode=Unknown` documented |
+| `Run_FocusGuard_*` | BP-31 | `[NeoVisual] vim-mode=...` UNCHANGED |
+| `Run_InjectedKeyGuard_*` | BP-32 | UNCHANGED |
+| e2e E2E-CR45-1 `neovisual-window-nav` | BP-33 | `[NeoVisual] navigate activated index=\d+` per chord |
+| e2e E2E-CR45-2 `telescope-focus-panes` | BP-1, BP-2, BP-3 | `[Telescope] focus target=` / `focus no-op:` UNCHANGED |
+| e2e E2E-CR45-3 `neovisual-editor-insert` | BP-30 | `[NeoVisual] vim-mode=Insert` + a named-mode token |
+| e2e E2E-CR45-4 full 44-scenario suite | BP-5..BP-44 | all diagnostics UNCHANGED except the M-M7 literals (C1/D9) |
+| doc-ref lint (`check-doc-refs.ps1`) | BP-1, BP-4, BP-30, BP-31, BP-39..BP-44 | 0 unresolved backticked refs |
+| doc-content lint (`check-doc-content.ps1`) | BP-39..BP-44 | 12/12 PASS |
 
 ## Execution Log
 
-### Attempt 1 — RED + BUILD + VERIFY FAIL (iteration 1) (2026-10-05)
+> **Attempt 1 (2026-10-05, unit-only lane, e2e DEFERRED).** RED → BUILD → (all GREEN at the
+> unit level; the e2e gates E2E-CR45-1..4 stay QUEUED in `docs/e2e-queue.md`).
 
-- **RED (e2e-test-builder): RED-CONFIRMED** — 10 unit tests (`Run_RecentFilesFinder_*` ×8 +
-  `Run_ResultsColumns_Recent_*` ×2; + the `RecentTestDir` helper + the `WidthKinds` extension)
-  → 20 CS0246 errors, ONLY the two planned symbols (`RecentFilesFinder` BP-2, `RecentFileHit`
-  BP-1); the e2e scenario `telescope-recent` created (44 registered; ONE VS boot: `Telescope
-  finder 'Recent' did not open` — the pinned RED form; the Step-1 MRU-populate control PASSED).
-- **BUILD (build-agent, 2 dispatches — the first hit its step cap):** BP-1..BP-7 done
-  (`RecentFileHit`/`RecentFilesFinder`/`RecentFilesGatherer` — the reflection probe + the
-  session-MRU floor / the package registration + `OpenRecentFile` / `FinderNames["telescope-recent"]`
-  / the `f,e` binding (USER-CONFIRMED) / `FinderColumns.Recent()` with the FULL ctor) + BP-B2
-  (~95%) + (dispatch 2) the §8 residual + BP-B3 (AGENTS.md 6 edits) + BP-B4 (SKILL.md 4 edits);
-  build 0 errors; Telescope **268/0**; both lints PASS. Deviations adjudicated (hub): the BP-5
-  placement (the anchor drift) -> ACCEPT; the opener style -> ACCEPT; the §5.2/§8 corrections
-  -> ACCEPT; the spec §7 stale tail fixed by the hub.
-- **VERIFY (verification-agent) — FAIL (iteration 1):** 42/44 (runs 181/182). TWO real
-  regressions: (1) `Run_ActionsRegistry_ContainsAllBuiltins` — the pinned count 17 vs the
-  derived 18 (a PLAN GAP: no step owned the count pin; ALSO a GATE-TRUST FINDING — the
-  build-agent's "191/0" self-report was FALSE, fresh output 190/1); (2) `telescope-recent`
-  gathered count=0/candidates=0 — the session-MRU floor hooked `DocumentOpened` LAZILY inside
-  `Gather()` → structurally empty for the open-FIRST strategy. Plus `telescope-goto` flaky
-  count 2 (pass-on-retry).
-- **Cost:** delegations: 5 | VS boots: 2 | iterations: 1
+**RED (e2e-test-builder, 3 dispatches — the first two hit the step limit):** wrote 29 new
+unit tests across `tests/Telescope.Tests` (20) + `tests/NeoVisual.Tests` (9). RED proven:
+Telescope compile-RED (CS0117/CS1061/CS1503/CS1729 — `ChordDirection`, `PendingTimeoutCount`,
+`ScanFile`, `CancelPendingG`, shared-cache finder ctors) + behavior-RED (`ResultMapper`
+Ordinal, `FzfFilter` kill-before-write, `VimModeClassifier` extra modes, the pane-host
+collapse reflection tests, `RenderedTextLength` re-pin); NeoVisual compile-RED
+(`IsTextInputType`, `WindowTypeProbe`, `PreviewTextCache`, `ErrorListCacheDecision`,
+`RecentFilesMru`, `ResetFocusKeeper`) + behavior-RED (`VimModeClassifier_ExtraModes`).
+8 tests not writable (no hermetic seam — COM/WPF/AsyncPackage-coupled, verified). 1 deviation:
+`Run_ResultsFormatter_RenderedTextLength` written as behavior-RED (the 4 legacy
+`Run_ResultsFormatter_RenderedTextLength_*` tests updated by the build as part of BP-11).
 
-### Attempt 2 — RE-PLAN + BUILD + VERIFY FAIL (iteration 2) (2026-10-05)
+**BUILD (build-agent, 6 dispatches — step-limit driven):**
+- BP-1/2/3/11/12/13 + BP-4 (deleted `PaneNavigationEngine.cs` + `TryDispatch.cs`): the pane-host
+  collapse into `FocusTargetModel` (single resolver + `ChordDirection`), `PaneHost` single-owner,
+  `CancelPendingG`, `ResultMapper` Ordinal, `RenderedTextLength` re-pin + the 7
+  `Run_PaneNavEngine_*` → `Run_FocusTarget_*` migration + the 4 legacy RenderedTextLength tests.
+- BP-5..BP-14 (Telescope-side): `FzfFilter` kill-before-write + `_probed`/`_value` split +
+  `PendingTimeoutCount` + timeout CTS + `QuoteArg` doc; `ApplyPreviewCaret` clamp;
+  `GrepFinder.ScanFile` internal static; `TryPromptMotion` → `CancelPendingG`; shared
+  `FileContentCache` finder ctors + `TelescopeController` wiring. **Telescope.Tests 288/288.**
+  (One test-authoring fix: the BP-5 block.cmd used `ping` which spawned a grandchild holding the
+  pipe read end — changed to an infinite cmd.exe loop so killing the process unblocks the write.)
+- BP-15..BP-20 + BP-28 (MyExtension core): eager controller loop deleted; `BuildActiveWindows`
+  returns a copy; `ToolWindowTypeResolver.IsTextInputType`; `WindowTypeProbe.ShouldLogFailure` +
+  the `window type probe failed` log; `PreviewTextCache`; `ErrorListCacheDecision`; the shared
+  DocView walk-up helper.
+- BP-21..BP-27 + BP-29 + BP-30 (controllers + vim mode): `TryMove` delegates to
+  `ToolWindowControllerBase.TextMotion`; `TextMotionHelper` comment; `HandleKey` routing block
+  extracted; `RecentFilesMru`; `FocusKeeper` per-controller; box-walk cached; `ResetFocusKeeper`;
+  single `CurrentController` resolve; `VimModeClassifier` extra modes (Command/Visual/
+  VisualBlock/Select). **NeoVisual.Tests 200/200.**
+- BP-31..BP-37 (harness + code comments): the `IsEditorFocused` fail-open + `InjectedKeyGuard`
+  risk docs; the harness T1/T3/T4/T5/T6 changes (e2e-queued — made, not run; `-List` parses).
+- BP-38 (IPane contract tests) — written by RED, GREEN. BP-39..BP-44 + BP-1 doc propagation —
+  done by the hub (doc-ref lint 0 unresolved; doc-content lint 12/12; the DOC-67-2 seam list
+  updated for the deleted `TryDispatch`).
 
-- **RE-PLAN (implementation-planner):** BP-3 rev 2 (the EAGER `HookSessionEvents()` at
-  construction + the merge order probe-first-then-floor + the NEW M-M7 literal
-  `[Telescope] recent files probe unavailable: {msg}` logged ONCE + `ThrowIfNotOnUIThread`);
-  BP-5 rev 2 (the PLAN-OWNED count-test edit: 17 → 18 + the names[] entry — the M34
-  supersession precedent); BP-B6 rev 2 (the runner's-own-summary trust rule). 4a RE-APPROVED
-  (1 minor: the untested mixed-path merge — filed as a hardening candidate; 2 nits).
-- **BUILD (build-agent): BP-3 rev 2 + BP-5 rev 2 + the doc rows done** — both suites GREEN on
-  FRESH runner output (Telescope 268/0, NeoVisual 191/0 — the count-test regression fixed);
-  both lints PASS. No deviations.
-- **VERIFY (verification-agent) — FAIL (iteration 2):** 42/44 (runs 183/184). **BP-3 rev 2
-  VERIFIED WORKING** (the run-181 signature GONE — the probe literal once, count=15/6, the
-  Order.cs top match, the open works; the product code is GREEN). TWO harness-layer blockers:
-  (1) `telescope-recent`'s Step-3 `preview file=` assertion STRUCTURALLY UNSATISFIABLE (the
-  PreviewEditorHost cache-HIT path never logs it when the most-recent-first ordering WORKS —
-  inverted vs the pinned strategy; the hub ADJUDICATED ACCEPT — a plan-owned scenario edit);
-  (2) `telescope-goto`'s 3rd flake → the M-M2 3rd-strike UPGRADE to a REGRESSION (the flaky
-  ledger closed).
-- **Cost:** delegations: 9 | VS boots: 4 | iterations: 2
+**VERIFY (verification-agent):** pending.
 
-### Attempt 3 — RE-PLAN + DEBUG-BUILD + VERIFY PASS — GREEN (2026-10-05)
-
-- **RE-PLAN (implementation-planner, iteration 2):** BP-B1 rev 2 (the Step-2 snapshot-attributed
-  `preview file=.*Order\.cs` top-match proof — the only place the cache-MISS line can fire — +
-  the Step-3 tightening to `results count=1 selected=0`, sound by the uniqueness argument);
-  NEW BP-B7 (the `telescope-goto` harness fix: the `gg` normalization Parts 1-3 + Part 1's
-  SINGLE bounded re-walk on the 0-gather signature — in-contract pass, never a flake);
-  BP-B6 rev 3 (the counts unchanged; the `telescope-goto` flaky ledger CLOSED — GREEN outright
-  at the next gate). 4a RE-APPROVED (3 nits, none blocking; the risk-scan concerns verified
-  SOUND against the source — the per-overlay-open host lifetime kills the cache-HIT risk).
-- **BUILD (build-agent): BP-B1 rev 2 + BP-B7 done** (the five hunks; the parse OK; build
-  0 errors; both suites fresh-GREEN 268/0 + 191/0). No deviations (the timeout nit folded in).
-- **VERIFY (verification-agent) — the FINAL GATE: PASS.** Harness-health first: `-SelfCheck`
-  PASS, `-List` 44, both lints PASS. Units staggered, fresh summaries: Telescope **268/0**,
-  NeoVisual **191/0**. Full e2e FRESH boot (`-TimeoutSec 2400`, run 185): **44/44 GREEN** —
-  `telescope-recent` verified end-to-end (the probe literal ONCE, `gathered count=16`, the
-  Step-2 top-match preview proof, the Step-3 tightened assertion, the Step-4 open);
-  `telescope-goto` GREEN OUTRIGHT (the first-walk direct jump; the re-walk NEVER fired — the
-  gg normalization fixed the primary race deterministically); `seed-leak`/`seed-reset` PASS.
-  Zero deviations, zero new flakes.
-- **Failure-log sweep:** 10 entries read, 0 fixed, 0 queued, 0 annotated (all entries already
-  carry FIXED resolutions).
-- **Cost:** delegations: 14 | VS boots: 6 | iterations: 2
+**Cost:** `delegations: 11 | VS boots: 0 | iterations: 0` (unit-only lane; the high delegation
+count is step-limit-driven — each build-agent dispatch executed a bounded chunk of the 44-BP
+plan).

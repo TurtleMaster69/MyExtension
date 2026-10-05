@@ -408,3 +408,21 @@
 - NEEDS-PERMISSION: no
 - AGENT: e2e-test-builder
 - DATE: 2026-10-05
+
+### 2026-10-05 — trailmark-recon (45-findings plan recon)
+- CMD: `uv run --with trailmark python -` (QueryEngine.from_directory + preanalysis + callers_of)
+- RESULT: `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` (console cp1250, a `→` in a signature) — recovered via `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`; the query data was returned before the print failed
+- REASON: environment — same class as the 2026-09-29 arch-auditor AGENT-FAILURES entry (cp1250 console)
+- ALTERNATIVE: set `PYTHONIOENCODING=utf-8` or `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` at the top of the snippet; avoid non-ASCII in query-script output
+- NEEDS-PERMISSION: no
+- AGENT: trailmark-recon
+- DATE: 2026-10-05
+
+### 2026-10-05 — feature-researcher (45-findings plan research)
+- CMD: `Add-Content` to `.opencode/command/command-log.md` (to self-log its webfetch 404s)
+- RESULT: permission denied — this agent's bash policy is `{"*": deny, "rg *": allow}`; `edit` is also denied for it
+- REASON: permission
+- ALTERNATIVE: the hub (single writer) appends the entry — done (AGENT-FAILURES.md 2026-10-05 feature-researcher entry); the webfetch 404s themselves were recovered (CHANGELOG/README + the repo's reflection-verified comments)
+- NEEDS-PERMISSION: yes — `bash "Add-Content *"` / write access for feature-researcher (or accept the hub-wiring pattern)
+- AGENT: feature-researcher
+- DATE: 2026-10-05

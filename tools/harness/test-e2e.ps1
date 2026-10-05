@@ -548,15 +548,19 @@ function Update-SeedExpected([string]$scratchDir, [string]$expectedDir, [string]
     Copy-Item -LiteralPath $src -Destination $dst -Force
 }
 
-function Assert-NoSeedLeak([string]$scratchDir, [string]$expectedDir) {
+function Assert-NoSeedLeak([string]$scratchDir, [string]$expectedDir, [bool]$fullRun = $true) {
     # Compare the seed tree to its expected-result tree. Reports added/removed/modified seeded
-    # files as a leak. Skips gracefully (never false-fails) when the expected tree or scratch dir
-    # is absent — e.g. under -NoBootstrap reuse where bootstrap did not reseed.
+    # files as a leak. In a FULL (non-reuse) run the expected tree and scratch dir MUST exist —
+    # the bootstrap reseeds + snapshots them, so an absent tree is a harness fault, not a
+    # legitimate skip (T3: the "skips gracefully" path is a cannot-fail path in the write-leak
+    # guard). Only -NoBootstrap reuse (where bootstrap did not reseed) may skip.
     if (-not (Test-Path $expectedDir)) {
+        if ($fullRun) { throw "seed-leak: expected-result tree absent in a full run: $expectedDir" }
         Write-Pass "seed-leak: no expected-result tree (reuse mode?) - skipped"
         return
     }
     if (-not (Test-Path $scratchDir)) {
+        if ($fullRun) { throw "seed-leak: scratch dir absent in a full run: $scratchDir" }
         Write-Pass "seed-leak: scratch dir absent - skipped"
         return
     }
@@ -620,9 +624,11 @@ Register-Scenario 'telescope-navigate' {
     Assert-NewLogLine $logPath 'key=Escape mode=insert handled=True' 'Esc switched to normal mode (fresh post-tap line)'
 
     # Sanity: the scratch solution must expose several files, otherwise this scenario is vacuous.
+    # T5: read the candidate count from the LogCache tail-read (Update-LogCache), not a whole-log
+    # Get-Content that bypasses the incremental reader.
     $cand = 0
-    $lines = Get-Content $logPath
-    foreach ($ln in $lines) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 4) { throw "expected >=4 candidate files for navigation, found $cand" }
 
     Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200              # j
@@ -698,15 +704,19 @@ Register-Scenario 'neovisual-window-nav' {
 Send-Ctrl 0x48                                              # Ctrl+H -> navigate left
     Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+H" 'Ctrl+H fired the shortcut binding'
     Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=L" 'Ctrl+H fired navigate left'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate activated index=\d+" 'Ctrl+H navigation activated a window (outcome)'
     Send-Ctrl 0x4C                                              # Ctrl+L -> navigate right
     Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+L" 'Ctrl+L fired the shortcut binding'
     Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=R" 'Ctrl+L fired navigate right'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate activated index=\d+" 'Ctrl+L navigation activated a window (outcome)'
     Send-Ctrl 0x4A                                              # Ctrl+J -> navigate down
     Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+J" 'Ctrl+J fired the shortcut binding'
     Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=D" 'Ctrl+J fired navigate down'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate activated index=\d+" 'Ctrl+J navigation activated a window (outcome)'
     Send-Ctrl 0x4B                                              # Ctrl+K -> navigate up
     Assert-NewLogLine $logPath "$($script:PfxNeo)shortcut-binding executed: Ctrl\+K" 'Ctrl+K fired the shortcut binding'
     Assert-NewLogLine $logPath "$($script:PfxNeo)navigate direction=U" 'Ctrl+K fired navigate up'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)navigate activated index=\d+" 'Ctrl+K navigation activated a window (outcome)'
 }
 
 # --- neovisual-leader -----------------------------------------------------
@@ -2447,7 +2457,7 @@ Register-Scenario 'seed-leak' {
     param($vs, $logPath)
     $expected = Join-Path $logDir 'seed-expected'
     $scratch = if ($env:NEOVISUAL_TEST_SOLUTION) { Split-Path $env:NEOVISUAL_TEST_SOLUTION } else { Join-Path $env:TEMP 'telescope_scratch' }
-    Assert-NoSeedLeak $scratch $expected
+    Assert-NoSeedLeak $scratch $expected -FullRun (-not $NoBootstrap)
 }
 
 # ---------------------------------------------------------------------------
@@ -2650,6 +2660,10 @@ if ($SelfCheck) {
             if (Wait-LogLine -LogPath $tmpLog65 -Pattern 'foo\s+bar' -FromIndex 0 -PollMs 1 -MaxMs 1000) {
                 throw "Wait-LogLine matched 'foo\s+bar' across two lines (must match per-line)"
             }
+            # The first call advanced the persistent cursor ($script:LogSearchedTo) to the end of the
+            # 2-line cache; reset it so the second assertion re-scans from the baseline (the
+            # fixed-baseline contract — the cursor advances on READ only, never on match).
+            $script:LogSearchedTo = 0
             if (-not (Wait-LogLine -LogPath $tmpLog65 -Pattern 'alpha foo' -FromIndex 0 -PollMs 1 -MaxMs 1000)) {
                 throw 'Wait-LogLine did not match a single-line pattern'
             }
@@ -2701,6 +2715,24 @@ if ($selected.Count -lt $Tests.Count) {
     Write-Fail "Unknown scenario(s): $($unknown -join ', ')"
     Write-Host "Valid: $($allNames -join ', ')"
     exit 1
+}
+
+# T6: enforce the suite-order invariants in a FULL run (no -Tests filter). seed-leak must be the
+# LAST scenario (it byte-compares the whole seed tree after every other scenario has run) and
+# neovisual-editor-insert (which intentionally writes Beta.cs) must run BEFORE it so its
+# expected-result refresh is in place before the final leak check. A mis-ordered full run fails
+# fast here instead of producing a false seed-leak failure at the end.
+if ($Tests.Count -eq 0) {
+    if ($selected[-1] -ne 'seed-leak') {
+        Write-Fail "suite-order invariant violated: 'seed-leak' must be the LAST scenario in a full run (got '$($selected[-1])')"
+        exit 1
+    }
+    $insertIdx = [Array]::IndexOf($selected, 'neovisual-editor-insert')
+    $leakIdx = [Array]::IndexOf($selected, 'seed-leak')
+    if ($insertIdx -lt 0 -or $insertIdx -gt $leakIdx) {
+        Write-Fail "suite-order invariant violated: 'neovisual-editor-insert' must run BEFORE 'seed-leak' in a full run"
+        exit 1
+    }
 }
 
 Write-Step "E2E scenarios: $($selected -join ', ')"

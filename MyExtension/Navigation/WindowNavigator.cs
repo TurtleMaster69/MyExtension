@@ -93,6 +93,8 @@ namespace MyExtension.Navigation
         /// Returns the adapters linked to the active window, or an empty list when the active
         /// window is null. The null check runs BEFORE <see cref="WindowFrameAdapter.LinkedTo"/> so a
         /// null active window degrades to a no-op instead of being dereferenced (m44).
+        /// A6: the cached linked list is never handed out directly — every caller receives a COPY,
+        /// so a navigator mutating the returned list can never corrupt the shared cache.
         /// </summary>
         public static List<WindowFrameAdapter> BuildActiveWindows(EnvDTE.Window? active, IReadOnlyList<WindowFrameAdapter> adapters)
         {
@@ -104,13 +106,13 @@ namespace MyExtension.Navigation
                 ReferenceEquals(_cachedLinkedActive, active) &&
                 _cachedLinked != null)
             {
-                return _cachedLinked;
+                return new List<WindowFrameAdapter>(_cachedLinked);
             }
             var linked = WindowFrameAdapter.LinkedTo(active, adapters).ToList();
             _cachedLinked = linked;
             _cachedLinkedSource = adapters;
             _cachedLinkedActive = active;
-            return linked;
+            return new List<WindowFrameAdapter>(linked);
         }
 
         /// <summary>

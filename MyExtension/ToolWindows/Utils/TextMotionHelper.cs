@@ -103,7 +103,9 @@ namespace MyExtension.ToolWindows
             if (focusedBox != null)
             {
                 // N19: caret-relative slice (R18) for the WPF path too — the motions only need the
-                // text around the caret, so the O(n) copy + LineIndex build run over a bounded slice.
+                // text around the caret, so the LineIndex build + motion run over a bounded slice.
+                // A5: WPF TextBox exposes no bounded read (only the full .Text property), so the
+                // O(n) copy is unavoidable here — the slice bounds the LineIndex build, not the copy.
                 string fullText = focusedBox.Text;
                 int caret = focusedBox.CaretIndex;
                 int fullLength = fullText.Length;

@@ -72,6 +72,15 @@ namespace MyExtension.Vim
         /// True while a code editor text view holds keyboard focus. Sourced event-driven from each
         /// view's <c>GotAggregateFocus</c>/<c>LostAggregateFocus</c>, so it cannot go stale like a
         /// cached window-frame selection.
+        ///
+        /// <para/>
+        /// <b>Fail-open risk (C5 — documented, NOT broadened):</b> this flag is deliberately NOT
+        /// broadened to track the Telescope preview view (a hosted read-only editor view that is
+        /// deliberately non-Editable — tracking it would flip the flag while the overlay preview
+        /// holds focus). The accepted consequence: a non-text editor with a stale
+        /// <c>IsToolWindow</c> fails the FocusGuard OPEN (tool-window action keys could leak into
+        /// the editor). The FocusGuard's editor-focus veto is best-effort; the tool-window
+        /// controllers' own input-mode gating is the real guard.
         /// </summary>
         public bool IsEditorFocused => _editorFocused;
 

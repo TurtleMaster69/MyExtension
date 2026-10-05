@@ -29,7 +29,10 @@ namespace MyExtension.Package
     internal sealed class RecentFilesGatherer
     {
         private readonly Func<DTE?> _dteFactory;
-        private readonly List<string> _sessionMru = new List<string>();
+        // A9: the session MRU is a bounded, O(1) move-to-front structure (RecentFilesMru) — no
+        // O(n) List.Remove + Insert(0) per DocumentOpened, and the list never grows unbounded
+        // (capped at the finder's Take(200) policy).
+        private readonly RecentFilesMru _sessionMru = new RecentFilesMru(capacity: 200);
         private DocumentEvents? _documentEvents;   // HOLD the reference: a GC'd COM connection point drops the subscription
         private bool _eventsHooked;
         private bool _probeFailureLogged;          // REV 2: the probe failure logs ONCE per gatherer
@@ -152,11 +155,10 @@ namespace MyExtension.Package
 
         private void OnDocumentOpened(Document document)
         {
-            // Move-to-front dedupe (VS canonicalizes FullName casing; List.Remove is ordinal —
-            // acceptable, the same source produces the same string).
-            string path = document.FullName;
-            _sessionMru.Remove(path);
-            _sessionMru.Insert(0, path);
+            // A9: move-to-front dedupe is O(1) via the RecentFilesMru linked list + index (VS
+            // canonicalizes FullName casing; the ordinal index is acceptable — the same source
+            // produces the same string).
+            _sessionMru.Add(document.FullName);
         }
     }
 }

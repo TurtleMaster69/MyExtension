@@ -132,24 +132,6 @@ namespace MyExtension.Package
                         _windowManager.RegisterController(new SolutionExplorerController(() => VsServices.Dte(this)!));
                         return Task.CompletedTask;
                     }),
-                    ("controllers", () =>
-                    {
-                        // Register a controller for every tool-window type explicitly (one per
-                        // type, so mode is remembered per window type): text-input surfaces get the
-                        // vim text-motion controller, everything else the general hjkl controller.
-                        // The factory returns null for SolutionExplorer (the specialized controller
-                        // above is the ONLY registration) and Unknown, so the specialized
-                        // controller is never overwritten regardless of registration order.
-                        foreach (ToolWindowType type in Enum.GetValues(typeof(ToolWindowType)))
-                        {
-                            var controller = WindowManager.DefaultControllerFor(type);
-                            if (controller != null)
-                            {
-                                _windowManager.RegisterController(controller);
-                            }
-                        }
-                        return Task.CompletedTask;
-                    }),
                     ("shell-wait", () =>
                     {
                         // The shell/main window is still configuring during early init and steals

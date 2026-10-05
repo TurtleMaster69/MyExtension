@@ -133,26 +133,27 @@ namespace Telescope.Tests
 
         public static void Run_ResultsFormatter_RenderedTextLength_SingleRowSingleCell()
         {
-            // One row: the 2-char marker allowance + the cell length (no separator).
-            Assert.Equal(7, ResultsFormatter.RenderedTextLength(new[] { new[] { "alpha" } }));
+            // One row: the sum of the visible cell text lengths (BP-11 — the legacy 2-char marker
+            // + separator math is gone).
+            Assert.Equal(5, ResultsFormatter.RenderedTextLength(new[] { new[] { "alpha" } }));
         }
 
         public static void Run_ResultsFormatter_RenderedTextLength_MultiRow()
         {
-            // Two rows: one '\n' separator between them (the legacy ToText layout).
-            Assert.Equal(7, ResultsFormatter.RenderedTextLength(new[] { new[] { "a" }, new[] { "b" } }));
+            // Two rows: the sum of the visible cell text lengths (no separator allowance).
+            Assert.Equal(2, ResultsFormatter.RenderedTextLength(new[] { new[] { "a" }, new[] { "b" } }));
         }
 
         public static void Run_ResultsFormatter_RenderedTextLength_MultiCell()
         {
-            // One row, two cells: the cells concatenate (the legacy row layout had no column gap).
-            Assert.Equal(5, ResultsFormatter.RenderedTextLength(new[] { new[] { "a", "bb" } }));
+            // One row, two cells: the cells' text lengths sum.
+            Assert.Equal(3, ResultsFormatter.RenderedTextLength(new[] { new[] { "a", "bb" } }));
         }
 
         public static void Run_ResultsFormatter_RenderedTextLength_EmptyCells()
         {
-            // Empty cell strings still count the marker + separator width.
-            Assert.Equal(5, ResultsFormatter.RenderedTextLength(new[] { new[] { "" }, new[] { "" } }));
+            // Empty cell strings contribute 0.
+            Assert.Equal(0, ResultsFormatter.RenderedTextLength(new[] { new[] { "" }, new[] { "" } }));
         }
 
         public static void Run_ResultsFormatter_ColumnsIdList_Empty()
@@ -4184,12 +4185,13 @@ namespace Telescope.Tests
         }
 
         // ================================================================
-        // PaneNavigationEngine — the pure geometric directional decision (Feature 7 rev 1;
-        // the WindowNavigationEngine pipeline over the pane rects)
-        // RED: `PaneNavigationEngine`/`PaneRect`/`PaneDirection` don't exist -> CS0246.
+        // The collapsed geometric selection pipeline (BP-1 — D1/D2): the mirrored
+        // PaneNavigationEngine was COLLAPSED into FocusTargetModel (the single pure focus
+        // resolver). These tests exercise the same pipeline through the machine's Handle API —
+        // the pinned tie-break (last-in-registry) + the no-op edges survive byte-identically.
         // ================================================================
 
-        public static void Run_PaneNavEngine_InDirectionFilter()
+        public static void Run_FocusTarget_InDirectionFilter()
         {
             // A candidate BEHIND the direction is rejected: from the List (100,0,100,100), RIGHT,
             // the Input (0,0,100,100) lies behind (X=0 is not > 100) and the Preview (250,0,100,100)
@@ -4200,27 +4202,35 @@ namespace Telescope.Tests
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(100, 0, 100, 100)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(250, 0, 100, 100)),
             };
-            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.List, PaneDirection.Right);
-            Assert.True(target == FocusTarget.Preview, $"expected Preview, got {target?.ToString() ?? "null"}");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Right);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
         }
 
-        public static void Run_PaneNavEngine_AlignmentFilter()
+        public static void Run_FocusTarget_AlignmentFilter()
         {
             // An in-direction candidate with NO perpendicular overlap is rejected: from the List
             // (0,100,100,50), RIGHT, the Preview (200,0,100,50) is in-direction (X=200 > 0) with a
             // positive gap (100) but shares NO Y range with the List (0-50 vs 100-150) -> not
-            // aligned -> rejected -> null (the Input (0,0,100,50) is not in-direction either).
+            // aligned -> rejected -> NoOp (the Input (0,0,100,50) is not in-direction either).
             var layout = new[]
             {
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Input, new PaneRect(0, 0, 100, 50)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 100, 100, 50)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(200, 0, 100, 50)),
             };
-            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.List, PaneDirection.Right);
-            Assert.True(target == null, $"expected null (no aligned candidate), got {target?.ToString() ?? "null"}");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Right);
+            Assert.Equal(FocusTargetAction.NoOp, action);
+            Assert.Equal(FocusTarget.List, model.Current);
         }
 
-        public static void Run_PaneNavEngine_OverlapGuardRejectsNegativeGap()
+        public static void Run_FocusTarget_OverlapGuardRejectsNegativeGap()
         {
             // THE PINNED DEVIATION: from the Preview, LEFT, the full-width Input is in-direction and
             // aligned but OVERLAPS the Preview (gap = 100 - 300 = -200). Without the guard the Input's
@@ -4232,11 +4242,15 @@ namespace Telescope.Tests
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
             };
-            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Preview, PaneDirection.Left);
-            Assert.True(target == FocusTarget.List, $"expected List, got {target?.ToString() ?? "null"}");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.Preview);
+            var action = model.Handle(PaneFocusKey.Left);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.List, model.Current);
         }
 
-        public static void Run_PaneNavEngine_ClosestGapWins()
+        public static void Run_FocusTarget_ClosestGapWins()
         {
             // Two stacked candidates ABOVE the focused pane (gaps 10 and 30): the closest-gap band
             // keeps only the gap-10 candidate -> the List.
@@ -4246,11 +4260,15 @@ namespace Telescope.Tests
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 60, 150, 30)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(0, 40, 150, 30)),
             };
-            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Input, PaneDirection.Up);
-            Assert.True(target == FocusTarget.List, $"expected List (gap 10 beats 30), got {target?.ToString() ?? "null"}");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.List, model.Current);
         }
 
-        public static void Run_PaneNavEngine_LargestAdjacencyWins()
+        public static void Run_FocusTarget_LargestAdjacencyWins()
         {
             // Equal gaps (both 0), unequal X-overlap: the wider overlap wins — the real K-from-Input
             // shape (the Preview's 200 of the Input's 300 width beats the List's 100).
@@ -4260,11 +4278,15 @@ namespace Telescope.Tests
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
             };
-            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Input, PaneDirection.Up);
-            Assert.True(target == FocusTarget.Preview, $"expected Preview (adjacency 200 vs 100), got {target?.ToString() ?? "null"}");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
         }
 
-        public static void Run_PaneNavEngine_AdjacencyTieGoesToLastInList()
+        public static void Run_FocusTarget_AdjacencyTieGoesToLastInList()
         {
             // THE PINNED TIE-BREAK: equal gaps, EQUAL adjacency (two 150-wide top panes) -> the LAST
             // entry in registry order wins (the window engine's own `>=` rule) -> the Preview.
@@ -4274,11 +4296,15 @@ namespace Telescope.Tests
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 150, 60)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(150, 0, 150, 60)),
             };
-            FocusTarget? target = PaneNavigationEngine.SelectTarget(layout, FocusTarget.Input, PaneDirection.Up);
-            Assert.True(target == FocusTarget.Preview, $"expected Preview (last in registry), got {target?.ToString() ?? "null"}");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.Input);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Preview, model.Current);
         }
 
-        public static void Run_PaneNavEngine_NoCandidateReturnsNull()
+        public static void Run_FocusTarget_NoCandidateReturnsNull()
         {
             var layout = new[]
             {
@@ -4286,8 +4312,12 @@ namespace Telescope.Tests
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.List, new PaneRect(0, 0, 100, 60)),
                 new KeyValuePair<FocusTarget, PaneRect>(FocusTarget.Preview, new PaneRect(100, 0, 200, 60)),
             };
-            Assert.True(PaneNavigationEngine.SelectTarget(layout, FocusTarget.List, PaneDirection.Up) == null,
-                "an edge direction with no pane must return null (the machine's NoOp source)");
+            var model = new FocusTargetModel();
+            model.SetLayout(layout);
+            model.Focus(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.NoOp, action);
+            Assert.Equal(FocusTarget.List, model.Current);
         }
 
         // ================================================================
@@ -4610,6 +4640,331 @@ namespace Telescope.Tests
             Assert.Equal(@"C:\other\solution\Deep\Dir\Order.cs", CellOf(cols, "path", hit));
             // Type disjointness: a Files payload (FileHit) renders EMPTY cells in the Recent catalog.
             Assert.Equal(string.Empty, CellOf(cols, "file", new FileHit(@"C:\x\File.cs", 0)));
+        }
+
+        // ================================================================
+        // Code-review fixes (45 findings) — RED phase (unit-only lane).
+        // BP-1: the pane-host collapse deletes PaneNavigationEngine — FocusTargetModel is the
+        // single focus resolver. RED: the mirrored engine still exists.
+        // ================================================================
+
+        public static void Run_FocusTargetModel_IsSingleResolver()
+        {
+            // BP-1 (D1/D2): the collapse deletes PaneNavigationEngine (the mirrored engine) —
+            // FocusTargetModel is the single pure focus resolver. RED: the type still exists.
+            var engineType = typeof(FocusTargetModel).Assembly.GetType("Telescope.Overlay.PaneNavigationEngine");
+            Assert.True(engineType == null,
+                "PaneNavigationEngine must be deleted (collapsed into FocusTargetModel) — BP-1");
+        }
+
+        // ================================================================
+        // BP-2: PaneHost becomes the single owner of the active pane — it must NOT store _active
+        // (the FocusTargetModel is the single owner of focused-pane state). RED: the field exists.
+        // ================================================================
+
+        public static void Run_PaneHost_SingleOwner()
+        {
+            // BP-2 (D6): PaneHost derives the previously-active pane from FocusTargetModel.Current
+            // instead of storing _active — a desync would log `focus target=X` while pane Y holds
+            // focus. RED: the _active field still exists.
+            var field = typeof(PaneHost).GetField("_active",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(field == null,
+                "PaneHost must not store _active (the FocusTargetModel is the single owner) — BP-2");
+        }
+
+        // ================================================================
+        // BP-5: FzfFilter registers the kill callback BEFORE the spawn/write — a hung fzf that
+        // blocks on stdin write must be killable during the write. RED: today the registration
+        // happens after the `await Task.Run(...)` write, so cancelling during the blocked write
+        // strands FilterAsync (the process is never killed).
+        // ================================================================
+
+        public static void Run_FzfFilter_KillRegisteredBeforeWrite()
+        {
+            using (var dir = new TempDir())
+            {
+                // A process that never reads stdin: the parent's write to the pipe blocks once the
+                // 64KB pipe buffer fills (the candidate list below is ~4MB). The block is an
+                // infinite loop INSIDE cmd.exe itself (no external command / grandchild) so that
+                // killing cmd.exe closes the pipe read end and unblocks the write — a grandchild
+                // (e.g. ping.exe) would inherit the pipe read end and survive the kill, stranding
+                // the write (BP-5 test-authoring fix).
+                string cmdPath = Path.Combine(dir.Path, "block.cmd");
+                File.WriteAllText(cmdPath, "@echo off\r\n:loop\r\ngoto loop\r\n");
+
+                var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 5000 };
+                var big = Enumerable.Range(0, 20000).Select(i => "line-" + i + new string('x', 200)).ToList();
+
+                using (var cts = new CancellationTokenSource())
+                {
+                    var task = fzf.FilterAsync(big, "query", cts.Token);
+                    // Let the write start and block on the full pipe buffer.
+                    Thread.Sleep(200);
+                    cts.Cancel();
+
+                    bool returned = false;
+                    try { returned = task.Wait(3000); }
+                    catch (AggregateException) { returned = true; }   // a faulted task DID return
+
+                    Assert.True(returned,
+                        "cancelling during the blocked stdin write must kill fzf and return promptly (BP-5) — today the kill callback is registered after the write, so the filter strands");
+                }
+            }
+        }
+
+        // ================================================================
+        // BP-6: the availability probe is cached once — a second IsAvailableAsync returns the
+        // cached value without re-spawning. Guard (pins already-correct behavior).
+        // ================================================================
+
+        public static void Run_FzfFilter_AvailabilityProbeOnce()
+        {
+            using (var dir = new TempDir())
+            {
+                string marker = Path.Combine(dir.Path, "probe-count.txt");
+                string stubPath = Path.Combine(dir.Path, "probe.cmd");
+                File.WriteAllText(stubPath, $"@echo off\r\necho x>> \"{marker}\"\r\nexit /b 0\r\n");
+
+                var fzf = new FzfFilter(stubPath);
+                Assert.True(fzf.IsAvailableAsync().GetAwaiter().GetResult(), "the probe reports available");
+                Assert.True(fzf.IsAvailableAsync().GetAwaiter().GetResult(), "the cached probe reports available");
+
+                string content = File.Exists(marker) ? File.ReadAllText(marker) : string.Empty;
+                int spawns = content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Length;
+                Assert.True(spawns == 1, $"the availability probe must run exactly once (cached) — BP-6 (got {spawns})");
+            }
+        }
+
+        // ================================================================
+        // BP-7: QuoteArg Windows argv-quoting edge cases. Guards (QuoteArg is already correct).
+        // ================================================================
+
+        public static void Run_QuoteArg_Empty()
+        {
+            Assert.Equal("\"\"", FzfFilter.QuoteArg(""));
+        }
+
+        public static void Run_QuoteArg_Spaces()
+        {
+            Assert.Equal("\"foo bar\"", FzfFilter.QuoteArg("foo bar"));
+            Assert.Equal("\"  \"", FzfFilter.QuoteArg("  "));
+        }
+
+        public static void Run_QuoteArg_EmbeddedQuote()
+        {
+            Assert.Equal("\"a\\\"b\"", FzfFilter.QuoteArg("a\"b"));
+            Assert.Equal("\"\\\"\"", FzfFilter.QuoteArg("\""));
+        }
+
+        public static void Run_QuoteArg_BackslashRun()
+        {
+            // A backslash run NOT before a quote is literal (preserved as-is, not doubled).
+            Assert.Equal("\"a\\b\"", FzfFilter.QuoteArg("a\\b"));
+            Assert.Equal("\"a\\\\b\"", FzfFilter.QuoteArg("a\\\\b"));
+        }
+
+        public static void Run_QuoteArg_TrailingBackslash()
+        {
+            // A trailing backslash is doubled before the closing quote so it cannot escape it.
+            Assert.Equal("\"foo\\\\\\\\\"", FzfFilter.QuoteArg("foo\\\\"));
+            Assert.Equal("\"\\\\\"", FzfFilter.QuoteArg("\\"));
+        }
+
+        // ================================================================
+        // BP-9: PreviewCaretMap clamps an out-of-range caret to the buffer length. Guard (pins
+        // already-correct behavior — the clamp is what prevents SnapshotPoint from throwing).
+        // ================================================================
+
+        public static void Run_PreviewCaretMap_Clamp()
+        {
+            Assert.Equal(5, PreviewCaretMap.Offset("hello", 100));
+            Assert.Equal(5, PreviewCaretMap.Offset("hello", 5));
+            Assert.Equal(0, PreviewCaretMap.Offset("hello", -3));
+            Assert.Equal(0, PreviewCaretMap.Offset("", 100));
+            Assert.Equal(0, PreviewCaretMap.Offset(null!, 100));
+        }
+
+        // ================================================================
+        // BP-11 (D9): RenderedTextLength must be a MEANINGFUL rendered length — the sum of the
+        // visible cell text lengths — NOT the legacy dead-layout math (the 2-char selection-marker
+        // allowance + the '\n' separators of the RETIRED TextBox render). RED: today the value
+        // includes the legacy marker/newline (a single "alpha" cell reports 7, not 5).
+        // NOTE: the existing Run_ResultsFormatter_RenderedTextLength_* tests pin the LEGACY value
+        // and must be updated by the build-agent as part of BP-11 (a plan-driven semantic change).
+        // ================================================================
+
+        public static void Run_ResultsFormatter_RenderedTextLength()
+        {
+            Assert.Equal(0, ResultsFormatter.RenderedTextLength(new string[][] { }));
+            Assert.Equal(5, ResultsFormatter.RenderedTextLength(new[] { new[] { "alpha" } }));
+            Assert.Equal(2, ResultsFormatter.RenderedTextLength(new[] { new[] { "a" }, new[] { "b" } }));
+            Assert.Equal(3, ResultsFormatter.RenderedTextLength(new[] { new[] { "a", "bb" } }));
+            Assert.Equal(0, ResultsFormatter.RenderedTextLength(new[] { new[] { "" }, new[] { "" } }));
+        }
+
+        // ================================================================
+        // BP-13 (D12): ResultMapper must group byDisplay with Ordinal (NOT OrdinalIgnoreCase) — a
+        // case-colliding duplicate ("Foo.cs"/"foo.cs") must map to its OWN payload. RED: today
+        // OrdinalIgnoreCase groups them, so the "Foo.cs" match consumes the "foo.cs" entry.
+        // ================================================================
+
+        public static void Run_ResultMapper_OrdinalCase()
+        {
+            var foo = new FileHit(@"C:\p\foo.cs", 0);
+            var Foo = new FileHit(@"C:\p\Foo.cs", 0);
+            var snapshot = new List<FinderEntry>
+            {
+                new FinderEntry("foo.cs", foo),
+                new FinderEntry("Foo.cs", Foo),
+            };
+            // fzf returns matches in its own order — here the case-colliding pair arrives with the
+            // UPPERCASE first. Ordinal mapping must route each to its own payload.
+            var items = new ResultMapper().MapBack(new[] { "Foo.cs", "foo.cs" }, snapshot);
+
+            Assert.Equal(2, items.Count);
+            Assert.True(ReferenceEquals(Foo, items[0].Payload),
+                "Foo.cs maps to the Foo.cs payload (Ordinal, not OrdinalIgnoreCase) — BP-13");
+            Assert.True(ReferenceEquals(foo, items[1].Payload),
+                "foo.cs maps to the foo.cs payload (Ordinal) — BP-13");
+        }
+
+        // ================================================================
+        // BP-38 (T2): the IPane contract with a FAKE pane (Activate/Deactivate, content wiring,
+        // registry order). Guards (the concrete panes are thin WPF shells; the contract is pinned).
+        // ================================================================
+
+        public static void Run_IPane_Contract_Activate()
+        {
+            var pane = new FakePane(FocusTarget.List);
+            var host = new PaneHost(new FakePane(FocusTarget.Input), pane, new FakePane(FocusTarget.Preview));
+            host.Activate(FocusTarget.List);
+            Assert.Equal("activate:List", pane.Events[0]);
+            Assert.True(pane.Content != null, "the pane's Content is wired (a FrameworkElement)");
+            Assert.True(pane.IsFocusable, "the pane is focusable");
+        }
+
+        public static void Run_IPane_Contract_Deactivate()
+        {
+            var list = new FakePane(FocusTarget.List);
+            var preview = new FakePane(FocusTarget.Preview);
+            var host = new PaneHost(new FakePane(FocusTarget.Input), list, preview);
+            host.Activate(FocusTarget.List);
+            host.Activate(FocusTarget.Preview);
+            Assert.Equal("deactivate:List", list.Events[1]);
+            Assert.Equal("activate:Preview", preview.Events[0]);
+        }
+
+        public static void Run_IPane_Contract_RegistryOrder()
+        {
+            var host = new PaneHost(
+                new FakePane(FocusTarget.Input), new FakePane(FocusTarget.List), new FakePane(FocusTarget.Preview));
+            var ids = host.Panes.Select(p => p.Id).ToList();
+            Assert.Equal(3, ids.Count);
+            Assert.Equal(FocusTarget.Input, ids[0]);
+            Assert.Equal(FocusTarget.List, ids[1]);
+            Assert.Equal(FocusTarget.Preview, ids[2]);
+        }
+
+        // ================================================================
+        // COMPILE-RED tests — the test DEFINES the contract the build-agent must implement.
+        // Each references a NEW API that does not exist yet (the missing symbol is the RED).
+        // ================================================================
+
+        // BP-3 (D14): the Ctrl+H/J/K/L chord→direction mapping must be single-sourced — the focus
+        // machine and the overlay's Ctrl-chord path resolve through ONE map. RED: the shared
+        // chord-map API (FocusTargetModel.ChordDirection) does not exist yet -> CS1061.
+        public static void Run_ChordMap_SingleSource()
+        {
+            Assert.Equal(PaneFocusKey.Left, FocusTargetModel.ChordDirection(Key.H, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Right, FocusTargetModel.ChordDirection(Key.L, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Down, FocusTargetModel.ChordDirection(Key.J, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.Up, FocusTargetModel.ChordDirection(Key.K, hasCtrl: true));
+            Assert.Equal(PaneFocusKey.None, FocusTargetModel.ChordDirection(Key.H, hasCtrl: false));
+            Assert.Equal(PaneFocusKey.Escape, FocusTargetModel.ChordDirection(Key.Escape, hasCtrl: false));
+        }
+
+        // BP-8 (D15): the fzf fast path must cancel the dedicated timeout CTS — no pending timer
+        // survives a normal filter. RED: the PendingTimeoutCount seam does not exist yet -> CS1061.
+        public static void Run_FzfFilter_TimeoutTimerCancelled()
+        {
+            using (var dir = new TempDir())
+            {
+                string stubPath = Path.Combine(dir.Path, "fzf-stub.cmd");
+                File.WriteAllText(stubPath, "@echo off\r\nfindstr /i /c:\"alp\"\r\n");
+
+                var fzf = new FzfFilter(stubPath) { FilterTimeoutMs = 5000 };
+                var result = fzf.FilterAsync(new[] { "alpha.cs" }, "alp", CancellationToken.None).GetAwaiter().GetResult();
+
+                Assert.Equal(1, result.Count);
+                Assert.True(fzf.PendingTimeoutCount == 0,
+                    "the fast path must cancel the dedicated timeout CTS — no pending timer survives (BP-8)");
+            }
+        }
+
+        // BP-10 (D5): the pure ScanFile loop must be off-thread-safe — the fix moves it to a
+        // background task (the DTE enumeration stays on the UI thread). RED: ScanFile is a private
+        // instance method, not the internal static pure loop -> CS0122.
+        public static void Run_GrepFinder_ScanFileBackground()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
+
+                var hits = new List<GrepHit>();
+                var cache = new FileContentCache();
+                // The pure scan loop, invoked from a background thread (the fix's off-thread shape).
+                Task.Run(() => GrepFinder.ScanFile(a, "needle", hits, cache)).GetAwaiter().GetResult();
+
+                Assert.Equal(2, hits.Count);
+                Assert.True(hits.All(h => h.FilePath == a), "the off-thread scan produces the same hits (BP-10)");
+            }
+        }
+
+        // BP-12 (D10): a prompt motion consumed before _keyHandler.Handle must clear the pending g
+        // via OverlayKeyHandler.CancelPendingG() — `g h g` must NOT fire MoveToFirst (gg). RED:
+        // CancelPendingG() does not exist -> CS1061.
+        public static void Run_OverlayKeyHandler_CancelPendingG()
+        {
+            var h = new OverlayKeyHandler();
+            h.Reset();
+            h.SetResults(4);
+            Assert.Equal(OverlayAction.EnterNormal, h.Handle(OverlayKey.Escape));
+            // 'g' arms the pending gg.
+            Assert.Equal(OverlayAction.None, h.Handle(OverlayKey.G));
+            // A prompt motion (h) consumed before Handle must clear the pending g (BP-12).
+            h.CancelPendingG();
+            // The next 'g' must NOT fire MoveToFirst (gg) — it re-arms.
+            Assert.Equal(OverlayAction.None, h.Handle(OverlayKey.G));
+            Assert.Equal(OverlayAction.MoveToFirst, h.Handle(OverlayKey.G));
+        }
+
+        // Reads the private _contentCache field of a finder (the shared-cache reference check).
+        private static object ReadContentCache(object finder)
+        {
+            var field = finder.GetType().GetField("_contentCache",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(field != null, $"{finder.GetType().Name} has a _contentCache field");
+            return field!.GetValue(finder)!;
+        }
+
+        // BP-14 (D7): all three finders must share ONE FileContentCache instance (injected from
+        // TelescopeController) — not 3×500-entry independent caches. RED: the finder ctors do not
+        // yet take a shared FileContentCache -> CS1729.
+        public static void Run_FileContentCache_Shared()
+        {
+            var shared = new FileContentCache(500);
+            var grep = new GrepFinder(shared, () => new[] { "a.cs" }, _ => { });
+            var fzf = new FzfFinder(shared, () => new[] { "a.cs" }, _ => { }, new FakeFzfEngine(true));
+            var issues = new CodeIssuesFinder(shared, () => new[] { "a.cs" }, _ => { });
+
+            Assert.True(ReferenceEquals(shared, ReadContentCache(grep)),
+                "GrepFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, ReadContentCache(fzf)),
+                "FzfFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, ReadContentCache(issues)),
+                "CodeIssuesFinder uses the injected shared FileContentCache (BP-14)");
         }
     }
 }

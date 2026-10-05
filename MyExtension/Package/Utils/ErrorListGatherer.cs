@@ -26,9 +26,27 @@ namespace MyExtension.Package
     /// </summary>
     internal static class ErrorListGatherer
     {
+        // A3: DTE ErrorItems has NO version counter, so a count-keyed cache is weak (same count,
+        // different items after a build). Use a short-TTL cache keyed on (file, severity) with the
+        // freshness decision in the pure ErrorListCacheDecision helper — consecutive ],e/[,e/],w/[,w
+        // presses reuse the scan instead of re-enumerating the whole Error List per press.
+        private const long CacheTtlMs = 2000;
+        private static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
+        private static string? _cacheKey;
+        private static long _cacheStampMs;
+        private static List<DiagnosticEntry>? _cache;
+
         public static List<DiagnosticEntry> Gather(DTE dte, string filePath, bool severityError)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            string key = (severityError ? "e:" : "w:") + filePath;
+            if (_cache != null
+                && string.Equals(_cacheKey, key, StringComparison.Ordinal)
+                && ErrorListCacheDecision.IsFresh(Clock.ElapsedMilliseconds - _cacheStampMs, CacheTtlMs))
+            {
+                return _cache;
+            }
 
             var entries = new List<DiagnosticEntry>();
             var dte2 = dte as DTE2;
@@ -70,11 +88,15 @@ namespace MyExtension.Package
                 }
             }
 
-            return entries
+            var result = entries
                 .OrderBy(e => e.Line)
                 .GroupBy(e => e.Line)
                 .Select(g => g.First())
                 .ToList();
+            _cache = result;
+            _cacheKey = key;
+            _cacheStampMs = Clock.ElapsedMilliseconds;
+            return result;
         }
     }
 }

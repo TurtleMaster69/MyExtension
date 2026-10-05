@@ -43,6 +43,11 @@ namespace MyExtension.ToolWindows
         // GetProperty(VSFPROPID_DocView) + Keyboard.FocusedElement + visual-tree walk runs only in
         // OnWindowFocusChanged (alongside _isTextInputType); the per-key getter reads this cached bool.
         private bool _textInputSurfaceFocused;
+
+        // C3: the focused-text-box-in-current-tool-window fact is cached on focus-change events (the
+        // M1 pattern) — the COM GetProperty(VSFPROPID_DocView) + visual-tree walk runs only in
+        // OnWindowFocusChanged, not per shift+key routed to a tool window.
+        private bool _focusedTextBoxInCurrentToolWindow;
     
         // Test-only fault injection: when the harness creates a 'stale-toolwindow' sentinel file under
         // NEOVISUAL_LOG_DIR, report the Solution Explorer frame as current even when it is not — the
@@ -123,35 +128,59 @@ namespace MyExtension.ToolWindows
                 {
                     return false;
                 }
-    
-                for (var current = focused; current != null; current = TextMotionHelper.GetParent(current))
-                {
-                    if (ReferenceEquals(current, frameContent))
-                    {
-                        return true;
-                    }
-                }
+
+                return IsDescendantOf(focused, frameContent);
             }
             catch
             {
                 return false;
             }
-    
+        }
+
+        /// <summary>
+        /// A10: the shared "walk up to the DocView content" loop — true when
+        /// <paramref name="start"/> is <paramref name="frameContent"/> or a descendant of it in
+        /// the WPF logical/visual tree. Used by <see cref="ComputeTextInputSurfaceFocused"/> and
+        /// <see cref="IsFocusedTextBoxInCurrentToolWindow"/> (previously duplicated inline).
+        /// </summary>
+        private static bool IsDescendantOf(System.Windows.DependencyObject start, System.Windows.FrameworkElement frameContent)
+        {
+            for (var current = start; current != null; current = TextMotionHelper.GetParent(current))
+            {
+                if (ReferenceEquals(current, frameContent))
+                {
+                    return true;
+                }
+            }
             return false;
         }
 
         /// <summary>
-        /// True when the focused WPF TextBox belongs to the CURRENT tool window. Primary path: the box is
-        /// a descendant of the current tool window's VSFPROPID_DocView content (the same walk
-        /// ComputeTextInputSurfaceFocused uses). Fallback when the DocView is a COM object (not a WPF
-        /// FrameworkElement — see ComputeTextInputSurfaceFocused:110-119): scope by the focused box's own
-        /// top-level window — the box must be hosted in the VS main window (Owner == null), NOT a separate
-        /// modal dialog (whose Window has an Owner). Scopes the D4 shift-gate exemption to the current
-        /// tool window's own search box, preserving R10. UI thread only.
+        /// True when the focused WPF TextBox belongs to the CURRENT tool window. C3: cached on
+        /// focus-change events (the M1 pattern) — the per-key getter reads the cached bool instead
+        /// of performing the COM <c>GetProperty(VSFPROPID_DocView)</c> + visual-tree walk on every
+        /// shift+key routed to a tool window. Sentinel-aware: a forced stale Solution Explorer
+        /// frame never reports a text box as focused.
         /// </summary>
         public bool IsFocusedTextBoxInCurrentToolWindow()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            return IsTestStaleInjected() ? false : _focusedTextBoxInCurrentToolWindow;
+        }
+
+        /// <summary>
+        /// The COM/visual-tree walk that computes whether the focused WPF TextBox belongs to the
+        /// current tool window. Runs only on focus-change events (C3/M1), not per key-down. UI
+        /// thread only. Primary path: the box is a descendant of the current tool window's
+        /// VSFPROPID_DocView content (the same walk ComputeTextInputSurfaceFocused uses). Fallback
+        /// when the DocView is a COM object (not a WPF FrameworkElement — see
+        /// ComputeTextInputSurfaceFocused): scope by the focused box's own top-level window — the
+        /// box must be hosted in the VS main window (Owner == null), NOT a separate modal dialog
+        /// (whose Window has an Owner). Scopes the D4 shift-gate exemption to the current tool
+        /// window's own search box, preserving R10.
+        /// </summary>
+        private bool ComputeFocusedTextBoxInCurrentToolWindow()
+        {
             if (!IsToolWindow || CurrentWindow == null)
             {
                 return false;
@@ -167,14 +196,7 @@ namespace MyExtension.ToolWindows
                 if (docViewObj is System.Windows.FrameworkElement frameContent)
                 {
                     // Primary: the focused box is a descendant of the current tool window's DocView content.
-                    for (var current = (System.Windows.DependencyObject)box; current != null; current = TextMotionHelper.GetParent(current))
-                    {
-                        if (ReferenceEquals(current, frameContent))
-                        {
-                            return true;
-                        }
-                    }
-                    return false;
+                    return IsDescendantOf(box, frameContent);
                 }
 
                 // Fallback: the DocView is a COM object (not a WPF FrameworkElement), so the descendant
@@ -330,6 +352,7 @@ namespace MyExtension.ToolWindows
                 _type = ToolWindowType.Unknown;
                 _isTextInputType = false;
                 _textInputSurfaceFocused = false;
+                _focusedTextBoxInCurrentToolWindow = false;
                 return;
             }
             int hr = CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
@@ -338,10 +361,18 @@ namespace MyExtension.ToolWindows
             if (hr == VSConstants.S_OK && value is int typeValue && (__WindowFrameTypeFlags)typeValue == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
             {
                 _isToolWindow = true;
-                CurrentWindow.GetGuidProperty(
+                int guidHr = CurrentWindow.GetGuidProperty(
                         (int)__VSFPROPID.VSFPROPID_GuidPersistenceSlot,
                         out Guid guid);
-                if (guid != Guid.Empty)
+                // C7: the GetGuidProperty HRESULT was discarded -> silent _type = Unknown on COM
+                // failure. Check it and log the failure (the n19 `window rect unavailable`
+                // precedent) instead of silently defaulting.
+                if (WindowTypeProbe.ShouldLogFailure(guidHr))
+                {
+                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window type probe failed: 0x{guidHr:X8}");
+                    _type = ToolWindowType.Unknown;
+                }
+                else if (guid != Guid.Empty)
                 {
                     _type = ToolWindowTypeResolver.FromGuid(guid);
                 }
@@ -351,7 +382,8 @@ namespace MyExtension.ToolWindows
                 }
                 _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
                 _textInputSurfaceFocused = ComputeTextInputSurfaceFocused();
-    
+                _focusedTextBoxInCurrentToolWindow = ComputeFocusedTextBoxInCurrentToolWindow();
+
             }
             else
             {
@@ -361,6 +393,7 @@ namespace MyExtension.ToolWindows
                 // n9: not a tool window — ComputeTextInputSurfaceFocused() would return false
                 // immediately (its first guard is !IsToolWindow), so skip the COM/visual-tree walk.
                 _textInputSurfaceFocused = false;
+                _focusedTextBoxInCurrentToolWindow = false;
             }
         }
         public void Dispose()

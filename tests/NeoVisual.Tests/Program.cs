@@ -3080,6 +3080,182 @@ namespace NeoVisual.Tests
             var usage = Enum.Parse(vuiType, isWrittenTo ? "Write" : "Read");
             return create.Invoke(null, new[] { usage })!;
         }
+
+        // ================================================================
+        // Code-review fixes (45 findings) — RED phase (unit-only lane).
+        // BP-15 (A1): the lazy _defaultControllers cache is the single controller mechanism —
+        // GetController returns the SAME instance per type (RED if the lazy cache is deleted).
+        // Guard — pins the already-correct same-instance invariant for multiple types.
+        // ================================================================
+
+        public static void Run_GetController_SameInstance()
+        {
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                var manager = new WindowManager(new FakeMonitorSelection());
+                var method = typeof(WindowManager).GetMethod(
+                    "GetController",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(method != null, "WindowManager.GetController must exist (private instance)");
+
+                var toolbox1 = method!.Invoke(manager, new object[] { ToolWindowType.Toolbox });
+                var toolbox2 = method.Invoke(manager, new object[] { ToolWindowType.Toolbox });
+                var output1 = method.Invoke(manager, new object[] { ToolWindowType.OutputWindow });
+                var output2 = method.Invoke(manager, new object[] { ToolWindowType.OutputWindow });
+
+                Assert.True(ReferenceEquals(toolbox1, toolbox2),
+                    "Toolbox resolves the SAME instance per type (BP-15 — the lazy _defaultControllers cache)");
+                Assert.True(ReferenceEquals(output1, output2),
+                    "OutputWindow resolves the SAME instance per type (BP-15)");
+                Assert.True(!ReferenceEquals(toolbox1, output1),
+                    "different types resolve DIFFERENT instances (per-type, never shared)");
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
+        // ================================================================
+        // BP-30 (C1): the common extra VsVim modes must emit NAMED tokens, not numerics —
+        // Command=3, Visual=4, VisualBlock=5, Select=6 (Vim.Core ModeKind). RED: today they fall
+        // through to the numeric fallback (Classify(4).Name == "4").
+        // ================================================================
+
+        public static void Run_VimModeClassifier_ExtraModes()
+        {
+            Assert.Equal("Command", VimModeClassifier.Classify(3).Name);
+            Assert.Equal("Visual", VimModeClassifier.Classify(4).Name);
+            Assert.Equal("VisualBlock", VimModeClassifier.Classify(5).Name);
+            Assert.Equal("Select", VimModeClassifier.Classify(6).Name);
+        }
+
+        // ================================================================
+        // BP-30 (C1): focus loss must emit ONLY the documented `Unknown` token (never a numeric or
+        // a stale mode name). Guard — pins already-correct behavior.
+        // ================================================================
+
+        public static void Run_VimModeState_FocusLoss()
+        {
+            var state = new VimModeState();
+            state.SetMode(VimModeClassifier.Insert);
+            state.OnViewLostFocus(isFocusedView: true);
+            Assert.Equal("Unknown", state.ModeName);
+            Assert.False(state.IsTyping);
+        }
+
+        // ================================================================
+        // COMPILE-RED tests — the test DEFINES the contract the build-agent must implement.
+        // Each references a NEW API that does not exist yet (the missing symbol is the RED).
+        // ================================================================
+
+        // BP-17 (A7): IsTextInputType must derive from a single classification source — a
+        // ToolWindowTypeResolver-owned classification table (not the hardcoded switch that must
+        // be manually kept in sync with the enum). COMPILE-RED: ToolWindowTypeResolver.IsTextInputType
+        // does not exist yet -> CS0117.
+        public static void Run_IsTextInputType_Classification()
+        {
+            // Every text-input type resolves consistently through the single classification source.
+            Assert.True(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.CommandWindow), "CommandWindow is text input");
+            Assert.True(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.ImmediateWindow), "ImmediateWindow is text input");
+            Assert.True(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.FindReplace), "FindReplace is text input");
+            Assert.True(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.WebBrowserWindow), "WebBrowserWindow is text input");
+            Assert.True(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.StartPage), "StartPage is text input");
+            // Navigation types are NOT text input.
+            Assert.False(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.SolutionExplorer), "SolutionExplorer is navigation");
+            Assert.False(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.OutputWindow), "OutputWindow is navigation");
+            Assert.False(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.Toolbox), "Toolbox is navigation");
+            Assert.False(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.Unknown), "Unknown is not text input");
+        }
+
+        // BP-18 (C7): the GetGuidProperty HRESULT must be checked — a failed HRESULT is logged
+        // (`[NeoVisual] window type probe failed: {msg}`), not silently `_type = Unknown`. The
+        // pure WindowTypeProbe.ShouldLogFailure(hr) decides. COMPILE-RED: WindowTypeProbe does
+        // not exist yet -> CS0246.
+        public static void Run_GetGuidProperty_HResult()
+        {
+            // FAILED(hr) is true for any negative HRESULT (the Win32 FAILED macro).
+            Assert.False(WindowTypeProbe.ShouldLogFailure(0), "S_OK (0) is not a failure");
+            Assert.False(WindowTypeProbe.ShouldLogFailure(1), "S_FALSE (1) is not a failure");
+            Assert.True(WindowTypeProbe.ShouldLogFailure(unchecked((int)0x80004005)), "E_FAIL is a failure");
+            Assert.True(WindowTypeProbe.ShouldLogFailure(unchecked((int)0x80004001)), "E_NOTIMPL is a failure");
+            Assert.True(WindowTypeProbe.ShouldLogFailure(-1), "a generic negative HRESULT is a failure");
+        }
+
+        // BP-19 (A2): the preview text is cached keyed on ITextSnapshot.Version.VersionNumber —
+        // the same version returns the cached text (no full-buffer GetText() per selection move);
+        // a new version has no cached text yet (re-read). COMPILE-RED: PreviewTextCache does not
+        // exist yet -> CS0246.
+        public static void Run_PreviewTextCache_VersionKeyed()
+        {
+            var cache = new PreviewTextCache();
+            cache.Store(1, "alpha");
+            Assert.Equal("alpha", cache.Get(1));
+            Assert.True(cache.Get(2) == null, "a new snapshot version has no cached text yet (re-read)");
+            cache.Store(2, "beta");
+            Assert.Equal("beta", cache.Get(2));
+            Assert.Equal("alpha", cache.Get(1));
+        }
+
+        // BP-20 (A3): the Error List cache decision is a pure helper — a fresh cache is a hit; a
+        // stale cache (past the TTL) expires and forces a re-scan. COMPILE-RED:
+        // ErrorListCacheDecision does not exist yet -> CS0246.
+        public static void Run_ErrorListCacheDecision_TTL()
+        {
+            Assert.True(ErrorListCacheDecision.IsFresh(0, 5000), "a just-written cache is fresh");
+            Assert.True(ErrorListCacheDecision.IsFresh(4999, 5000), "within the TTL is fresh");
+            Assert.False(ErrorListCacheDecision.IsFresh(5000, 5000), "at the TTL the cache is stale");
+            Assert.False(ErrorListCacheDecision.IsFresh(6000, 5000), "past the TTL the cache is stale");
+        }
+
+        // BP-24 (A9): the session MRU is a bounded, O(1) move-to-front structure — re-opening a
+        // path moves it to the front; the list never exceeds the cap. COMPILE-RED:
+        // RecentFilesMru does not exist yet -> CS0246.
+        public static void Run_RecentFilesMru_LinkedList()
+        {
+            var mru = new RecentFilesMru(capacity: 3);
+            mru.Add(@"C:\p\a.cs");
+            mru.Add(@"C:\p\b.cs");
+            mru.Add(@"C:\p\c.cs");
+            Assert.Equal(3, mru.Count);
+            Assert.Equal(@"C:\p\c.cs", mru.MostRecent);
+
+            // Re-opening a.cs moves it to the front (O(1) remove + insert) without growing the list.
+            mru.Add(@"C:\p\a.cs");
+            Assert.Equal(@"C:\p\a.cs", mru.MostRecent);
+            Assert.Equal(3, mru.Count);
+
+            // The cap: adding a 4th evicts the least-recent (b.cs).
+            mru.Add(@"C:\p\d.cs");
+            Assert.Equal(3, mru.Count);
+            Assert.Equal(@"C:\p\d.cs", mru.MostRecent);
+            var order = mru.ToList();
+            Assert.Equal(@"C:\p\d.cs", order[0]);
+            Assert.Equal(@"C:\p\a.cs", order[1]);
+            Assert.Equal(@"C:\p\c.cs", order[2]);
+        }
+
+        // BP-27 (C6): _focusKeeper must be reset to null after dispose — a disposed handle is
+        // never reused. The fix adds SolutionExplorerController.ResetFocusKeeper(). COMPILE-RED:
+        // ResetFocusKeeper() does not exist yet -> CS1061.
+        public static void Run_FocusKeeper_ResetAfterDispose()
+        {
+            var controller = new SolutionExplorerController(() => null!);
+            var field = typeof(SolutionExplorerController).GetField("_focusKeeper",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(field != null, "SolutionExplorerController has a _focusKeeper field");
+
+            // The new seam: reset the keeper to null after dispose (BP-27).
+            controller.ResetFocusKeeper();
+
+            Assert.True(field!.GetValue(controller) == null,
+                "_focusKeeper must be null after ResetFocusKeeper (BP-27) — a disposed handle is never reused");
+        }
     }
 
     /// <summary>

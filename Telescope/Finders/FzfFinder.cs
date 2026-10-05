@@ -30,7 +30,7 @@ namespace Telescope.Finders
 
         private readonly Func<DTE> _dteFactory;
         private readonly ProjectFileCache _fileCache;
-        private readonly FileContentCache _contentCache = new FileContentCache(500);
+        private readonly FileContentCache _contentCache;
         private readonly IFzfEngine _fzf;
         private string? _cachedSolutionName;
 
@@ -45,11 +45,13 @@ namespace Telescope.Finders
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
         /// <param name="fzf">The fzf availability + filter engine.</param>
-        internal FzfFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, IFzfEngine fzf)
+        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller).</param>
+        internal FzfFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, IFzfEngine fzf, FileContentCache? contentCache = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
             _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
+            _contentCache = contentCache ?? new FileContentCache(500);
         }
 
         /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
@@ -66,6 +68,18 @@ namespace Telescope.Finders
             _testOpener = opener;
             _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
             _dteFactory = () => null!;
+            _contentCache = new FileContentCache(500);
+        }
+
+        /// <summary>Test-only constructor: routes the enumerate delegate through the shared content cache (D7/BP-14).</summary>
+        internal FzfFinder(FileContentCache contentCache, Func<IReadOnlyList<string>> enumerate, Action<FzfHit> opener, IFzfEngine fzf)
+        {
+            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
+            _testEnumerate = enumerate;
+            _testOpener = opener;
+            _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
+            _dteFactory = () => null!;
+            _fileCache = new ProjectFileCache();
         }
 
         protected override IReadOnlyList<FzfHit> GatherHits() => throw new NotSupportedException("FzfFinder is query-driven; call GetCandidatesAsync(query)");

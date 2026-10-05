@@ -138,3 +138,8 @@ FIX: use the call operator `& tools/harness/test-e2e.ps1 -Tests a,b,c` (or `pwsh
 COMMAND: `pwsh -NoProfile -Command "$errs=$null; ... [ref]$errs ... if ($errs) {...}"` (a double-quoted `-Command` argument containing an inner pwsh script).
 ERROR: `ParserError: Missing condition in if statement after 'if ('` — the OUTER pwsh interpolated `$errs`/`$toks`/`$_` before the inner pwsh parsed them, so the inner `if ($errs)` arrived empty.
 FIX: pass the inner script as a SINGLE-quoted `-Command` argument (or a script file) so the outer shell does not interpolate the inner script's variables. Recovered with a single-quoted `-Command`. FIXED 2026-10-03 (workaround noted).
+
+## 2026-10-05 | feature-researcher | agent-syntax
+COMMAND: (1) `webfetch` of the fzf man page `man/man1/fzf.1.md` (github blob + raw) and (2) `webfetch` of `VsVim/Src/VimCore/ModeKind.fs`; (3) `grep` tool on the tool-output dir; (4) `Add-Content` to `.opencode/command/command-log.md`.
+ERROR: (1)+(2) `404` — guessed remote paths (the fzf CHANGELOG/README are the right sources; the VsVim ModeKind enum lives inside another file — the repo's reflection-verified comment suffices); (3) "No files found" — the known directory-scoped silent-skip class; (4) `permission denied` — this agent's bash policy is `{"*": deny, "rg *": allow}`, so it could not append the failure-log entry itself (`edit` is also denied for it).
+FIX: (1)+(2) use the CHANGELOG/README + the repo's own reflection-verified comments (recovered — all four research questions answered); (3) known class, no action; (4) the hub (single writer) appends the entry — this entry. FIXED 2026-10-05 (hub-wired).

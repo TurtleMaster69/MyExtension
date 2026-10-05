@@ -27,6 +27,13 @@ namespace Telescope.Controller
         private TelescopeOverlay? _overlay;
         private readonly Func<IPreviewEditor>? _previewEditorFactory;
 
+        /// <summary>
+        /// The ONE shared file-content cache (D7/BP-14): injected into every finder so the
+        /// per-finder 500-entry caches collapse into a single shared cache. The host extension
+        /// passes this to the finder constructors.
+        /// </summary>
+        internal FileContentCache ContentCache { get; } = new FileContentCache(500);
+
         /// <param name="previewEditorFactory">
         /// Optional factory for the preview pane's editor-view host (Section P). The overlay invokes
         /// it ONCE per open (a fresh overlay is built per open) and disposes the product on close.

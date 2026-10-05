@@ -79,6 +79,13 @@ namespace MyExtension.Hooks
         /// Consumes ONE pending record of the VK and returns true; returns false if no record
         /// for that VK is pending. A record older than the TTL is treated as absent (removed
         /// without consuming), so a stale record never swallows the next physical key-down.
+        ///
+        /// <para/>
+        /// <b>Accepted risk (C4):</b> matching is keyed by VK + TTL only — the guard cannot
+        /// distinguish an injected event from a physical one. A dropped injected event could
+        /// therefore consume the next PHYSICAL same-VK key-down within the 1s TTL. This is
+        /// theoretical: <c>keybd_event</c> queues the injected event synchronously, so the
+        /// injected key-down is always the next same-VK event the hook sees. No behavior change.
         /// </summary>
         public bool TryConsume(int vk)
         {

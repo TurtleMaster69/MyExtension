@@ -9,14 +9,18 @@ namespace MyExtension.ToolWindows
     /// focus steal. The per-tick decision is delegated to the pure <see cref="FocusKeeperSchedule"/>;
     /// the tick receives the elapsed milliseconds and returns false to stop the keeper early
     /// (e.g. stop-on-close when the window is no longer visible).
+    ///
+    /// <para/>
+    /// C2: per-controller (an instance, not a shared static) — each controller owns its own
+    /// <c>_current</c>, so one controller's <see cref="Run"/> can never stop another's keeper.
     /// </summary>
-    internal static class FocusKeeper
+    internal sealed class FocusKeeper
     {
         // R8: the current keeper timer, cancelled when a new Run starts (stacked keepers would
         // otherwise race — g then i→Esc re-selects the wrong node).
-        private static DispatcherTimer? _current;
+        private DispatcherTimer? _current;
 
-        public static IDisposable Run(TimeSpan interval, int durationMs, Func<int, bool> tick)
+        public IDisposable Run(TimeSpan interval, int durationMs, Func<int, bool> tick)
         {
             _current?.Stop();
             var keeper = new DispatcherTimer(DispatcherPriority.Normal);
@@ -46,15 +50,17 @@ namespace MyExtension.ToolWindows
             };
             _current = keeper;
             keeper.Start();
-            return new KeeperHandle(keeper);
+            return new KeeperHandle(this, keeper);
         }
 
         private sealed class KeeperHandle : IDisposable
         {
+            private readonly FocusKeeper _owner;
             private DispatcherTimer? _timer;
 
-            public KeeperHandle(DispatcherTimer timer)
+            public KeeperHandle(FocusKeeper owner, DispatcherTimer timer)
             {
+                _owner = owner;
                 _timer = timer;
             }
 
@@ -65,9 +71,9 @@ namespace MyExtension.ToolWindows
                     return;
                 }
                 _timer.Stop();
-                if (ReferenceEquals(_current, _timer))
+                if (ReferenceEquals(_owner._current, _timer))
                 {
-                    _current = null;
+                    _owner._current = null;
                 }
                 _timer = null;
             }

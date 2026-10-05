@@ -29,10 +29,13 @@ namespace Telescope.Overlay
             if (!ReferenceEquals(_cachedSnapshot, snapshot))
             {
                 _cachedSnapshot = snapshot;
+                // BP-13 (D12): the byDisplay map groups with ORDINAL (not OrdinalIgnoreCase) — a
+                // case-colliding duplicate ("Foo.cs"/"foo.cs") must map to its OWN payload, not
+                // collapse to the first case-insensitive match.
                 _cachedByDisplay = snapshot
                     .Select((entry, index) => (entry, index))
-                    .GroupBy(x => x.entry.Display, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+                    .GroupBy(x => x.entry.Display, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
             }
             var byDisplay = _cachedByDisplay!;
             var consumed = new HashSet<int>();

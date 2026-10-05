@@ -113,9 +113,11 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **Gap 4 (the recent-files finder) reached GREEN 2026-10-05** with
-  e2e enabled; see the Done section. **The build loop is PAUSED by the user** — "after u have
-  finished gap 4 stop".)
+- **In progress:** (none — **the Code review fixes (45 findings, incl. nits) reached GREEN
+  2026-10-05** in the unit-only lane (e2e DEFERRED — the gates E2E-CR45-1..4 stay QUEUED in
+  `docs/e2e-queue.md`); see the Done section. The build loop is PAUSED after this item — the
+  user's 2026-10-05 instruction was to execute the first pending item in the unit-only lane
+  and stop.)
 - **Next up:** **Gap 5 — the LSP symbols finder** (the next planning
   batch — NOT yet planned; triage=BUILD 2026-09-28). Then the remaining "smallest first"
   order: gap 10 (hover/signature) → gap 9 (search/replace) → feature 8 (+gap 8, the
@@ -378,10 +380,23 @@ were known-backlog assertion bugs, not regressions).
 
 Top of the queue, in priority order:
 
+> ~~**FIRST ITEM (2026-10-05, gate-APPROVED, handed off):** the **Code review fixes (45
+> findings, incl. nits)** plan~~ — **DONE** (GREEN 2026-10-05, feature lane, **unit-only,
+> e2e DEFERRED**; M-M7: C1 named vim-mode tokens, D9 boxText re-pin, C7's new
+> `window type probe failed` literal; see the Done section). Source: `docs/reviews/code-review.md` (2026-10-05,
+> 45 findings: 0 critical, 9 major, 24 minor, 12 nit — the user requested fixes for ALL
+> findings, incl. nits). 12 phases, 44 BP steps, 45/45 finding coverage. **DEFER e2e tests
+> (unit-only lane):** the user's 2026-10-05 instruction — "we are not on e2e capable machine
+> so they should be put into queue" — the e2e gates are queued in `e2e-queue.md`
+> (E2E-CR45-1..4, status QUEUED) and run on a capable machine after this plan is GREEN.
+> RED was proven at the unit level only. Telescope.Tests 268 → **288**; NeoVisual.Tests
+> 191 → **200**; both lints PASS; the harness `-SelfCheck` PASS.
+
 > **RUN ORDER (user-chosen 2026-10-03, "smallest first"):** ~~feature 6~~ (**DONE** GREEN
 > 2026-10-04) → ~~gap 1~~ (**DONE** GREEN 2026-10-04) → ~~gap 3~~ (**DONE** GREEN
-> 2026-10-04) → **gap 11 (next)** →
-> feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
+> 2026-10-04) → ~~gap 11~~ (**DONE** GREEN 2026-10-04) →
+> ~~feature 7~~ (**DONE** GREEN 2026-10-05) → ~~gap 4~~ (**DONE** GREEN 2026-10-05) →
+> **gap 5 (next)** → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
 > feature 9 → which-key last. Gaps 8/9/10 are **custom-view builds** (feature lane); gap 11
 > is **native bindings** (small); gap 8 is **folded into feature 8**. The which-key item is
 > built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
@@ -818,6 +833,44 @@ Top of the queue, in priority order:
 
 ## Done (durable completion history — appended on every GREEN)
 
+- **2026-10-05 — Code review fixes (45 findings, incl. nits)** (Lane: `feature`, unit-only,
+  e2e DEFERRED, M-M7; 12 delegations, 0 VS boots, 0 iterations). All 45 findings from
+  `docs/reviews/code-review.md` (2026-10-05) fixed: the pane-host consolidation (D1/D2/D6/D14 —
+  `PaneNavigationEngine` + TryDispatch DELETED, the geometric pipeline collapsed into
+  `FocusTargetModel` as the single pure focus resolver + the single `ChordDirection` chord map;
+  `PaneHost` single-owner), the fzf hardening (D3/D8/D11/D15 — kill-before-write, `_probed`/
+  `_value` split, `PendingTimeoutCount` + timeout CTS, `QuoteArg` tests), the overlay
+  correctness (D4/D5/D9/D10/D12 — `ApplyPreviewCaret` clamp, `GrepFinder.ScanFile` off-thread,
+  `RenderedTextLength` re-pin, `CancelPendingG`, `ResultMapper` Ordinal), the shared
+  `FileContentCache` (D7), the WindowManager/navigation cleanup (A1/A6/A7/C7 — eager loop
+  deleted, `BuildActiveWindows` copy, `ToolWindowTypeResolver.IsTextInputType`, `WindowTypeProbe`
+  + the `window type probe failed` log), the preview/Error-List perf (A2/A3 — `PreviewTextCache`,
+  `ErrorListCacheDecision`), the tool-window controllers (A4/A5/A8/A9/A10/A11/C2/C3/C6 —
+  `TryMove` delegate, `RecentFilesMru`, per-controller `FocusKeeper`, box-walk cache,
+  `ResetFocusKeeper`, DocView-walk dedupe, single `CurrentController` resolve), the vim-mode
+  contract (C1/C5 — named Visual/Command/VisualBlock/Select tokens + the documented fail-open),
+  the `InjectedKeyGuard` risk doc (C4), the harness gates (T1/T3/T4/T5/T6 — the outcome gate,
+  the seed-leak throw, the persistent cursor, the LogCache tail-read, the suite-order
+  enforcement), the `IPane` contract tests (T2), and the doc refreshes (DOC1-DOC6). Telescope.Tests
+  268 → **288**; NeoVisual.Tests 191 → **200**; `dotnet build` 0 errors; both lints PASS; the
+  harness `-SelfCheck` PASS (the m65 self-check fixed for the BP-35 persistent cursor). The e2e
+  gates **E2E-CR45-1..4** stay QUEUED in `docs/e2e-queue.md` (run on a capable machine).
+  **Change summary:** created `WindowTypeProbe.cs`, `PreviewTextCache.cs`,
+  `ErrorListCacheDecision.cs`, `RecentFilesMru.cs`; deleted PaneNavigationEngine.cs +
+  TryDispatch.cs; modified `FocusTargetModel.cs` (collapse + `ChordDirection`), `PaneHost.cs`
+  (single owner), `FzfFilter.cs`, `TelescopeOverlay.cs`, `GrepFinder.cs`/`FzfFinder.cs`/
+  `CodeIssuesFinder.cs`/`TelescopeController.cs` (shared cache), `ResultsFormatter.cs`,
+  `ResultMapper.cs`, `OverlayKeyHandler.cs`, `WindowManager.cs`, `WindowNavigator.cs`,
+  `GeneralToolWindowController.cs`, `SolutionExplorerController.cs`, `TextMotionHelper.cs`,
+  `InputHandler.cs`, `RecentFilesGatherer.cs`, `FocusKeeper.cs`, `VimModeClassifier.cs`,
+  `VimModeTracker.cs`, `InjectedKeyGuard.cs`, `MyExtensionPackage.cs`, the harness
+  (`test-e2e.ps1`/`harness-common.ps1`), and the docs. Key diagnostics: `vim-mode=Visual|
+  Command|VisualBlock|Select` (M-M7, replacing numerics), `[NeoVisual] window type probe failed:
+  {msg}` (NEW), `results count=... boxText=` re-pinned. **Look first if this regresses:** the
+  pane-host collapse (BP-1) — the pinned tie-break (Ctrl+K Input→Preview) + the no-op edges must
+  stay byte-identical (`telescope-focus-panes` is the queued e2e guard); the `FocusTargetModel`
+  unit tests + `Run_FocusTarget_*` are the unit guard.
+
 - **2026-10-05 — Gap 4: the recent-files finder (`Name="Recent"`, the USER-CONFIRMED `f,e`
   binding)** (Lane: `feature`, e2e ENABLED, M-M7; 14 delegations, 6 VS boots, 2 iterations).
   A Telescope-style recent-files finder: `Space+f,e` opens an overlay listing the VS MRU
@@ -889,10 +942,11 @@ Top of the queue, in priority order:
   `Telescope/Overlay/Utils/Panes/` (7 files, flat `Telescope.Overlay` namespace) — `IPane`
   (+`PaneChrome` frozen brushes: Dim #333841 / Active #8b9dc3, a 1px bottom accent line,
   brush-only switch, no layout shift), `PaneHost` (the ordered registry, idempotent
-  activation, the `NotifyClicked` left-click seam), the pure `PaneNavigationEngine`
-  (+`PaneRect`/`PaneDirection`/`PaneAxis` — the MIRRORED Cardinal pipeline: in-direction →
-  aligned → closest-gap → largest-adjacency, the `>=` last-in-list tie-break, the overlap
-  guard; the window `WindowNavigationEngine` untouched), `PromptPane`/`ListPane`(+`ListKeyMap`
+activation, the `NotifyClicked` left-click seam), the pure geometric focus decision
+collapsed INTO `FocusTargetModel` (the MIRRORED Cardinal pipeline — in-direction →
+aligned → closest-gap → largest-adjacency, the `>=` last-in-list tie-break, the overlap
+guard — absorbed from the deleted PaneNavigationEngine/PaneRect/PaneDirection/PaneAxis types;
+the window `WindowNavigationEngine` untouched), `PromptPane`/`ListPane`(+`ListKeyMap`
   — the arrows fall through: THE pinned decision)/`PreviewPane`/`PaneSelectionSync` (the
   signed-delta native-selection replay). `FocusTargetModel` EVOLVED in place (the M34 history
   carries): the `Input` token, `PaneFocusKey`, the GEOMETRIC spatial map (Ctrl+H/J/K/L =

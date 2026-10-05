@@ -15,11 +15,9 @@ namespace Telescope.Overlay
     {
         /// <summary>
         /// The rendered row-text length the <c>results count=N selected=M boxText=L</c> diagnostic
-        /// reports: per row, the legacy 2-char selection-marker allowance plus the sum of the
-        /// visible cell text lengths, plus one newline separator between rows (the legacy
-        /// <c>ToText</c> layout). Empty input → 0. For a degenerate single-column finder whose
-        /// cell equals the entry's Display, the value is byte-identical to the legacy
-        /// <c>ToText(results, selectedIndex).Length</c>.
+        /// reports: the SUM of the visible cell text lengths across all rows (BP-11/D9 — the
+        /// legacy 2-char selection-marker allowance + the <c>'\n'</c> separators of the RETIRED
+        /// TextBox render are gone; the value is now a real rendered length). Empty input → 0.
         /// </summary>
         internal static int RenderedTextLength(IReadOnlyList<string[]> rows)
         {
@@ -27,8 +25,6 @@ namespace Telescope.Overlay
             int total = 0;
             for (int i = 0; i < rows.Count; i++)
             {
-                if (i > 0) total++;   // the legacy '\n' separator
-                total += 2;           // the legacy "> "/"  " marker width
                 string[] cells = rows[i];
                 if (cells != null)
                 {

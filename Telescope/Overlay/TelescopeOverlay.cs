@@ -1088,6 +1088,9 @@ namespace Telescope.Overlay
                 return false;
             }
 
+            // D10/BP-12: a prompt motion consumed before _keyHandler.Handle clears the pending g —
+            // `g h g` must NOT fire gg (MoveToFirst).
+            _keyHandler.CancelPendingG();
             _promptBox.CaretIndex = _promptNavigator.Caret;
             TelescopeLog.Log($"prompt-motion key={key} caret={_promptNavigator.Caret}");
             return true;
@@ -1118,7 +1121,15 @@ namespace Telescope.Overlay
 
         private void ApplyPreviewCaret()
         {
-            _previewEditor?.ApplyCaret(_previewNavigator.Caret);
+            if (_previewEditor == null)
+            {
+                return;
+            }
+            // D4/BP-9: clamp the navigator's target against the current editor text exactly as
+            // ShowPreview does — a stale buffer must never hand an out-of-range index to
+            // SnapshotPoint.
+            int caret = PreviewCaretMap.Offset(_previewNavigator.Text, _previewNavigator.Caret);
+            _previewEditor.ApplyCaret(caret);
         }
 
         /// <summary>One focus change: the machine's decision + the M-M7 diagnostic + the UI apply.

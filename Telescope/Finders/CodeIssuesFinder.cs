@@ -36,25 +36,36 @@ namespace Telescope.Finders
         private string? _cachedSolutionName;
 
         // m15: shared mtime-keyed content cache — CollectTodos reads through it so a second scan
-        // over the same file is served from memory instead of re-reading from disk.
-        private readonly FileContentCache _contentCache = new FileContentCache(500);
+        // over the same file is served from memory instead of re-reading from disk. D7/BP-14: ONE
+        // shared instance injected from the controller.
+        private readonly FileContentCache _contentCache;
 
         public override string Name => "Issues";
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
-        internal CodeIssuesFinder(Func<DTE> dteFactory, ProjectFileCache fileCache)
+        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller).</param>
+        internal CodeIssuesFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache? contentCache = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
+            _contentCache = contentCache ?? new FileContentCache(500);
         }
 
         /// <summary>Test-only constructor: scans the given files for TODO markers and reports opens without DTE.</summary>
         internal CodeIssuesFinder(Func<IReadOnlyList<string>> fileSource, Action<CodeIssue> opener)
+            : this(new FileContentCache(500), fileSource, opener)
         {
+        }
+
+        /// <summary>Test-only constructor: routes the file source through the shared content cache (D7/BP-14).</summary>
+        internal CodeIssuesFinder(FileContentCache contentCache, Func<IReadOnlyList<string>> fileSource, Action<CodeIssue> opener)
+        {
+            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
             _testFileSource = fileSource;
             _testOpener = opener;
             _dteFactory = () => null!;
+            _fileCache = new ProjectFileCache();
         }
 
         protected override IReadOnlyList<CodeIssue> GatherHits()

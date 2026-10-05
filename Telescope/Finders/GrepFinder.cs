@@ -25,7 +25,7 @@ namespace Telescope.Finders
 
         private readonly Func<DTE> _dteFactory;
         private readonly ProjectFileCache _fileCache;
-        private readonly FileContentCache _contentCache = new FileContentCache(500);
+        private readonly FileContentCache _contentCache;
         private string? _cachedSolutionName;
 
         // Hermetic-test seams: when set, candidate gathering and opening bypass DTE entirely.
@@ -38,10 +38,12 @@ namespace Telescope.Finders
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
-        internal GrepFinder(Func<DTE> dteFactory, ProjectFileCache fileCache)
+        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller).</param>
+        internal GrepFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache? contentCache = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
+            _contentCache = contentCache ?? new FileContentCache(500);
         }
 
         /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
@@ -57,6 +59,17 @@ namespace Telescope.Finders
             _testEnumerate = enumerate;
             _testOpener = opener;
             _dteFactory = () => null!;
+            _contentCache = new FileContentCache(500);
+        }
+
+        /// <summary>Test-only constructor: routes the enumerate delegate through the shared content cache (D7/BP-14).</summary>
+        internal GrepFinder(FileContentCache contentCache, Func<IReadOnlyList<string>> enumerate, Action<GrepHit> opener)
+        {
+            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
+            _testEnumerate = enumerate;
+            _testOpener = opener;
+            _dteFactory = () => null!;
+            _fileCache = new ProjectFileCache();
         }
 
         protected override IReadOnlyList<GrepHit> GatherHits() => throw new NotSupportedException("GrepFinder is query-driven; call GetCandidates(query)");
@@ -81,7 +94,7 @@ namespace Telescope.Finders
                 // delegate once across queries.
                 foreach (string path in _fileCache.Get(_testEnumerate))
                 {
-                    ScanFile(path, query, hits);
+                    ScanFile(path, query, hits, _contentCache);
                     if (hits.Count >= HitCap)
                     {
                         break;
@@ -110,7 +123,7 @@ namespace Telescope.Finders
                     IReadOnlyList<string> files = _fileCache.Get(() => ProjectFiles.Enumerate(dte));
                     foreach (string path in files)
                     {
-                        ScanFile(path, query, hits);
+                        ScanFile(path, query, hits, _contentCache);
                         if (hits.Count >= HitCap)
                         {
                             break;
@@ -205,11 +218,16 @@ namespace Telescope.Finders
 
         protected override string OpenErrorNoun => "grep";
 
-        private void ScanFile(string path, string query, List<GrepHit> hits)
+        /// <summary>
+        /// Pure per-file scan loop (D5/BP-10): no instance state, so it can run on a background
+        /// task while the DTE enumeration stays on the UI thread. The caller supplies the content
+        /// cache (the shared instance).
+        /// </summary>
+        internal static void ScanFile(string path, string query, List<GrepHit> hits, FileContentCache cache)
         {
             try
             {
-                string[] lines = _contentCache.GetLines(path);
+                string[] lines = cache.GetLines(path);
                 foreach (int ln in LiteralLineScanner.Scan(lines, query, HitCap - hits.Count))
                 {
                     hits.Add(new GrepHit(path, ln, lines[ln - 1]));

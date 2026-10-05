@@ -399,3 +399,12 @@
 - NEEDS-PERMISSION: no
 - AGENT: verification-agent
 - DATE: 2026-10-05
+
+### 2026-10-05 — e2e-test-builder (Gap 4 RED) — RECURRENCE of the indexed glob-wildcard class
+- CMD: `rg -n 'Order\.cs' tools/harness/*.ps1`
+- RESULT: `rg: tools/harness/*.ps1: ... os error 123` — same class as the 2026-10-05 verification-agent row above (glob wildcard in a literal path arg)
+- REASON: misuse
+- ALTERNATIVE: pass the DIRECTORY (`rg -n 'Order\.cs' tools/harness`) — verified working; no new index row needed (the existing row covers it)
+- NEEDS-PERMISSION: no
+- AGENT: e2e-test-builder
+- DATE: 2026-10-05

@@ -42,6 +42,12 @@ namespace Telescope.Filter
     {
         private const int DefaultFilterTimeoutMs = 3000;
 
+        // m11 (BP-4): a filter that completes a few ms AFTER the timeout fires is not genuinely
+        // hung — the timeout-vs-completion race. Before killing, wait this long for `all` to
+        // complete; if it does, fall through to the boundary fast path (the filtered output, no
+        // spurious `fzf filter failed: timeout` line).
+        private const int FilterTimeoutGraceMs = 250;
+
         // m16: a hung `fzf --version` must not block the UI up to 3s — the availability probe
         // waits only this long before reporting unavailable.
         private const int IsAvailableTimeoutMs = 500;
@@ -54,6 +60,11 @@ namespace Telescope.Filter
         // (the volatile write of `_probed` publishes the preceding `_value` write).
         private volatile bool _probed;
         private bool _value;
+
+        // n7 (BP-19): the probe interlock — two CONCURRENT IsAvailableAsync callers must run the
+        // bounded probe ONCE. The first caller acquires the gate and probes; concurrent callers
+        // wait on the gate, then re-check `_probed` (double-checked) and return the cached value.
+        private readonly SemaphoreSlim _probeGate = new SemaphoreSlim(1, 1);
 
         /// <summary>
         /// Timeout for a single fzf <c>--filter</c> run; a hung subprocess is killed and the filter
@@ -96,10 +107,24 @@ namespace Telescope.Filter
             {
                 return _value;
             }
-            bool result = await Task.Run(ProbeIsAvailable).ConfigureAwait(false);
-            _value = result;
-            _probed = true;
-            return _value;
+            // n7 (BP-19): interlock the probe — concurrent callers wait on the gate, then re-check
+            // `_probed` (double-checked) so the bounded probe runs exactly once.
+            await _probeGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (_probed)
+                {
+                    return _value;
+                }
+                bool result = await Task.Run(ProbeIsAvailable).ConfigureAwait(false);
+                _value = result;
+                _probed = true;
+                return _value;
+            }
+            finally
+            {
+                _probeGate.Release();
+            }
         }
 
         private bool ProbeIsAvailable()
@@ -221,6 +246,33 @@ namespace Telescope.Filter
                     }
                     if (winner == timeout)
                     {
+                        // m11 (BP-4): the timeout and the completion can race — if the filter
+                        // actually completed at the boundary, fall through to the fast path (the
+                        // filtered output, NO spurious `fzf filter failed: timeout` line).
+                        if (all.IsCompleted)
+                        {
+                            timeoutCts.Cancel();
+                            PendingTimeoutCount--;
+                            await all;
+                            var boundaryOutput = await outputTask;
+                            return boundaryOutput
+                                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                .ToList();
+                        }
+                        // m11 (BP-4): a filter completing a few ms after the timeout fires is NOT
+                        // genuinely hung — give it a short grace period before killing. If it
+                        // completes within the grace, fall through to the SAME boundary fast path.
+                        var graceWinner = await Task.WhenAny(all, Task.Delay(FilterTimeoutGraceMs));
+                        if (graceWinner == all)
+                        {
+                            timeoutCts.Cancel();
+                            PendingTimeoutCount--;
+                            await all;
+                            var boundaryOutput = await outputTask;
+                            return boundaryOutput
+                                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                .ToList();
+                        }
                         PendingTimeoutCount--;
                         TryKill(p);
                         TelescopeLog.Log($"fzf filter failed: timeout after {FilterTimeoutMs}ms");

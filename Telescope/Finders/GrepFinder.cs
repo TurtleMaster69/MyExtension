@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Telescope.Logging;
 
 namespace Telescope.Finders
@@ -38,12 +39,12 @@ namespace Telescope.Finders
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
-        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller).</param>
-        internal GrepFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache? contentCache = null)
+        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller; m8/BP-14 makes it a REQUIRED param so a finder can never silently revert to its own cache).</param>
+        internal GrepFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache contentCache)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
-            _contentCache = contentCache ?? new FileContentCache(500);
+            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
         }
 
         /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
@@ -111,24 +112,27 @@ namespace Telescope.Finders
                 DTE dte = _dteFactory();
                 if (dte?.Solution != null)
                 {
-                    string? solutionName = dte?.Solution?.FullName;
-                    if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _fileCache.Invalidate();
-                        _cachedSolutionName = solutionName;
-                    }
-                    // M2: the per-file content scan is pure file I/O (no VS API) but the
-                    // synchronous blocking is unchanged — drop the wasted Task.Run thread hop and
-                    // scan inline on the UI thread.
+                    // m7 (BP-13): the ONE shared solution-invalidation helper (replaces the
+                    // duplicated compare + Invalidate block).
+                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
+                    // M1 (BP-2): the per-file content scan is pure file I/O (no VS API) — run it on
+                    // a background task so the UI thread is not blocked by the synchronous reads.
+                    // The DTE enumeration + _fileCache.Get + the solution-name compare stay on the
+                    // UI thread (ThreadHelper.ThrowIfNotOnUIThread above). The shared content cache
+                    // is thread-safe (m10/BP-1), and the _queryGeneration marshal-back guard in
+                    // TelescopeOverlay.RefreshQueryDrivenAsync discards stale results.
                     IReadOnlyList<string> files = _fileCache.Get(() => ProjectFiles.Enumerate(dte));
-                    foreach (string path in files)
+                    Task.Run(() =>
                     {
-                        ScanFile(path, query, hits, _contentCache);
-                        if (hits.Count >= HitCap)
+                        foreach (string path in files)
                         {
-                            break;
+                            ScanFile(path, query, hits, _contentCache);
+                            if (hits.Count >= HitCap)
+                            {
+                                break;
+                            }
                         }
-                    }
+                    }).GetAwaiter().GetResult();
                 }
             }
             catch (Exception ex)
@@ -163,12 +167,8 @@ namespace Telescope.Finders
                 DTE dte = _dteFactory();
                 if (dte?.Solution != null)
                 {
-                    string? solutionName = dte?.Solution?.FullName;
-                    if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _fileCache.Invalidate();
-                        _cachedSolutionName = solutionName;
-                    }
+                    // m7 (BP-13): the ONE shared solution-invalidation helper.
+                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
                     foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
                     {
                         WarmFile(path);

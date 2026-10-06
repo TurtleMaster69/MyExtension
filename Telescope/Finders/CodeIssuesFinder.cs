@@ -44,12 +44,12 @@ namespace Telescope.Finders
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
-        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller).</param>
-        internal CodeIssuesFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache? contentCache = null)
+        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller; m8/BP-14 makes it a REQUIRED param so a finder can never silently revert to its own cache).</param>
+        internal CodeIssuesFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache contentCache)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
-            _contentCache = contentCache ?? new FileContentCache(500);
+            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
         }
 
         /// <summary>Test-only constructor: scans the given files for TODO markers and reports opens without DTE.</summary>
@@ -85,12 +85,9 @@ namespace Telescope.Finders
             DTE dte = _dteFactory();
             if (dte?.Solution != null)
             {
-                string? solutionName = dte?.Solution?.FullName;
-                if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
-                {
-                    _fileCache.Invalidate();
-                    _cachedSolutionName = solutionName;
-                }
+                // m7 (BP-13): the ONE shared solution-invalidation helper (replaces the duplicated
+                // compare + Invalidate block).
+                ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
                 foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
                 {
                     CollectTodos(path, issues);

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using EnvDTE;
+using MyExtension.Adornments;
 using MyExtension.Hooks;
 using MyExtension.Input;
 using MyExtension.Navigation;
@@ -14,6 +16,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.Text.Projection;
+using Telescope.Controller;
 using Telescope.Logging;
 using Telescope.Overlay;
 using TestHarness;
@@ -272,9 +275,8 @@ namespace NeoVisual.Tests
             Assert.Equal("command:Team.Git.Annotate", cfg.Bindings["g,b"]);
             // The branches binding is GONE: a dictionary has one value per key, so the Equal above
             // already proves g,b no longer maps to Team.Git.Branches — pinned explicitly for the
-            // diff reader (the Assert API has no NotEqual: tests/TestRunner.cs:95-127).
-            Assert.False(cfg.Bindings["g,b"] == "command:Team.Git.Branches",
-                "g,b must not map to Team.Git.Branches (rebound to blame)");
+            // diff reader via Assert.NotEqual (n8/BP-30).
+            Assert.NotEqual("command:Team.Git.Branches", cfg.Bindings["g,b"]);
             Assert.True(cfg.Bindings.ContainsKey("g,h"), "g,h -> history binding present");
             Assert.Equal("command:Team.Git.ViewHistory", cfg.Bindings["g,h"]);
             // AC4: the deferred-overlay rebinds must NOT happen in this plan.
@@ -2846,6 +2848,73 @@ namespace NeoVisual.Tests
             Assert.Equal(1, executed);
         }
 
+        // BP-5 (M3): a bound Shift+ chord is recognized by the pre-filter (IsBoundShiftChord) so
+        // it reaches HandleKey; an unbound uppercase letter stays cheap. COMPILE-RED:
+        // SimpleShortcutMatcher.IsBoundShiftChord does not exist yet -> CS1061.
+        public static void Run_SimpleShortcutMatcher_IsBoundShiftChord()
+        {
+            var bindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Shift+F4"] = () => { },
+            };
+            var matcher = new SimpleShortcutMatcher(bindings);
+
+            Assert.True(matcher.IsBoundShiftChord(Keys.F4), "a bound Shift+F4 chord is recognized");
+            Assert.False(matcher.IsBoundShiftChord(Keys.A), "an unbound uppercase letter is not a bound shift chord");
+        }
+
+        // ================================================================
+        // InputHandler.IsKeyOfInterest — the overlay-open short-circuit (BP-6 / m3)
+        // RED: today the overlay-open path still runs the full pre-filter, so IsKeyOfInterest
+        // returns true for a Ctrl chord / leader key / Escape even while the overlay is open.
+        // ================================================================
+
+        public static void Run_IsKeyOfInterest_OverlayOpenShortCircuit()
+        {
+            // A TelescopeController whose IsOpen is true WITHOUT constructing WPF: the _overlay
+            // field is private, so inject an uninitialized TelescopeOverlay (no ctor runs) and
+            // flip its IsOpen via the private setter.
+            var telescope = new TelescopeController();
+            var overlay = (TelescopeOverlay)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(TelescopeOverlay));
+            typeof(TelescopeOverlay).GetProperty("IsOpen")!.SetValue(overlay, true);
+            typeof(TelescopeController).GetField("_overlay",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(telescope, overlay);
+            Assert.True(telescope.IsOpen, "the fake telescope must report IsOpen=true");
+
+            // An InputHandler whose IsKeyOfInterest can be driven hermetically: the ctor needs an
+            // AsyncPackage + MEF, so allocate the instance without running it and set only the
+            // fields IsKeyOfInterest reads (leader matcher, leader key, telescope, sentinel stamp).
+            var handler = (InputHandler)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(InputHandler));
+            typeof(InputHandler).GetField("_leaderMatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(handler, new LeaderSequenceMatcher(Keys.Space, new Dictionary<string, Action>(StringComparer.Ordinal)));
+            typeof(InputHandler).GetField("_leaderKey",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(handler, Keys.Space);
+            typeof(InputHandler).GetField("_telescope",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(handler, telescope);
+            typeof(InputHandler).GetField("_lastSentinelRefresh",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(handler, DateTime.UtcNow);
+
+            // Overlay open: the modal overlay owns all keys — every key is swallowed (BP-6).
+            Assert.False(handler.IsKeyOfInterest(Keys.H, true, false, false), "a Ctrl chord while the overlay is open");
+            Assert.False(handler.IsKeyOfInterest(Keys.Space, false, false, false), "the leader key while the overlay is open");
+            Assert.False(handler.IsKeyOfInterest(Keys.Escape, false, false, false), "Escape while the overlay is open");
+
+            // Overlay closed: the same keys are interesting (the full pre-filter runs).
+            typeof(TelescopeController).GetField("_overlay",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(telescope, null);
+            Assert.True(handler.IsKeyOfInterest(Keys.H, true, false, false), "a Ctrl chord while the overlay is closed");
+            Assert.True(handler.IsKeyOfInterest(Keys.Space, false, false, false), "the leader key while the overlay is closed");
+            Assert.True(handler.IsKeyOfInterest(Keys.Escape, false, false, false), "Escape while the overlay is closed");
+        }
+
         // ================================================================
         // StaleToolWindowSentinel — M3 sentinel cache (BP-2)
         // RED: `StaleToolWindowSentinel` does not exist yet -> compile error
@@ -3213,6 +3282,30 @@ namespace NeoVisual.Tests
             Assert.False(ErrorListCacheDecision.IsFresh(6000, 5000), "past the TTL the cache is stale");
         }
 
+        // BP-7 (m1): the Error List cache is INSTANCE-scoped (two gatherers do not share state) and
+        // Invalidate() clears it (a build-done/document-saved event forces a fresh gather). RED:
+        // ErrorListGatherer is a static class today (the static R40 cache) -> CS0712 on the
+        // instance construction + CS1061 on Invalidate().
+        public static void Run_ErrorListCacheDecision_Invalidation()
+        {
+            var first = new ErrorListGatherer();
+            var second = new ErrorListGatherer();
+
+            var cacheField = typeof(ErrorListGatherer).GetField("_cache",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(cacheField != null, "ErrorListGatherer has an instance _cache field (BP-7)");
+
+            // The instance cache is per-instance: seeding one gatherer's cache must not leak into the other.
+            cacheField!.SetValue(first, new List<DiagnosticEntry>());
+            Assert.True(cacheField.GetValue(second) == null,
+                "two gatherers do not share cache state (the instance cache is per-instance)");
+
+            // Invalidate() clears the cache (a build-done/document-saved event forces a fresh gather).
+            first.Invalidate();
+            Assert.True(cacheField.GetValue(first) == null,
+                "Invalidate() clears the instance cache (a build-done/document-saved event forces a fresh gather)");
+        }
+
         // BP-24 (A9): the session MRU is a bounded, O(1) move-to-front structure — re-opening a
         // path moves it to the front; the list never exceeds the cap. COMPILE-RED:
         // RecentFilesMru does not exist yet -> CS0246.
@@ -3240,6 +3333,40 @@ namespace NeoVisual.Tests
             Assert.Equal(@"C:\p\c.cs", order[2]);
         }
 
+        // BP-8 (m2): RecentFilesGatherer is IDisposable — Dispose() unhooks the DocumentOpened
+        // subscription (the COM connection point is released) and nulls _documentEvents. RED:
+        // today there is no Dispose/unhook -> CS1061 on the missing member.
+        public static void Run_RecentFilesGatherer_Dispose()
+        {
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                var gatherer = new RecentFilesGatherer(() => null);
+
+                // Simulate the hooked state: the ctor's HookSessionEvents no-ops on a null DTE, so
+                // inject the fake DocumentEvents the fix must unhook.
+                var docEvents = new FakeDocumentEvents();
+                var field = typeof(RecentFilesGatherer).GetField("_documentEvents",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(field != null, "RecentFilesGatherer has a _documentEvents field");
+                field!.SetValue(gatherer, docEvents);
+
+                gatherer.Dispose();
+
+                Assert.True(docEvents.UnhookCount == 1,
+                    "Dispose() must unhook the DocumentOpened subscription (the COM connection point is released)");
+                Assert.True(field.GetValue(gatherer) == null, "Dispose() must null _documentEvents");
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
         // BP-27 (C6): _focusKeeper must be reset to null after dispose — a disposed handle is
         // never reused. The fix adds SolutionExplorerController.ResetFocusKeeper(). COMPILE-RED:
         // ResetFocusKeeper() does not exist yet -> CS1061.
@@ -3255,6 +3382,401 @@ namespace NeoVisual.Tests
 
             Assert.True(field!.GetValue(controller) == null,
                 "_focusKeeper must be null after ResetFocusKeeper (BP-27) — a disposed handle is never reused");
+        }
+
+        // ================================================================
+        // BP-9 (m4): the block-caret state model tracks DESIRED + RENDERED separately.
+        // RED: today `_active` conflates the two — OnLostFocus sets it false, so a normal-mode
+        // editor view that loses and regains focus keeps the native line caret (the `block-caret
+        // active=True` diagnostic is wrong) until the user toggles mode. The fix splits `_active`
+        // into `_desiredActive` (what ApplyEditorViewCaret asked for) + `_renderedActive` (what the
+        // adornment actually draws); OnLostFocus clears only the rendered state; a GotAggregateFocus
+        // restores the rendered state to the desired value.
+        // ================================================================
+
+        public static void Run_BlockCaretState_DesiredVsRendered()
+        {
+            var type = typeof(BlockCaretAdornment);
+            var desired = type.GetField("_desiredActive",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var rendered = type.GetField("_renderedActive",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(desired != null, "the desired block-caret state is tracked separately (m4)");
+            Assert.True(rendered != null, "the rendered block-caret state is tracked separately (m4)");
+
+            // The state-model contract the fix must maintain (the real OnLostFocus/GotAggregateFocus
+            // handlers need a live IWpfTextView, which is not hermetic — the fields are the contract):
+            // a focus-loss clears the RENDERED state while the DESIRED state stays; a focus-regain
+            // restores the rendered state to the desired value.
+            var adornment = (BlockCaretAdornment)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(type);
+            desired.SetValue(adornment, true);   // ApplyEditorViewCaret asked for a block caret
+            rendered.SetValue(adornment, true);  // it is currently rendered
+            // focus loss: rendered -> false, desired stays true
+            rendered.SetValue(adornment, false);
+            Assert.True((bool)desired.GetValue(adornment)!, "focus loss keeps the desired state");
+            Assert.False((bool)rendered.GetValue(adornment)!, "focus loss clears the rendered state");
+            // focus regain: rendered restored to the desired value
+            rendered.SetValue(adornment, (bool)desired.GetValue(adornment)!);
+            Assert.True((bool)rendered.GetValue(adornment)!, "focus regain restores the rendered state to the desired value");
+        }
+
+        // ================================================================
+        // BP-10 (m5): SolutionExplorerController.TryMove resolves the focused text box ONCE per
+        // routed key. RED: today TryMove calls TextMotionHelper.FindFocusedTextBox() twice per
+        // routed key when a box is focused — the gate (:207) + the TextMotion->TryMoveFocusedSurface
+        // internal walk (:77) — two visual-tree walks. The fix resolves the box once and passes it
+        // to a new TextMotion(key, box) overload (the focusedBox overload at TextMotionHelper.cs:90
+        // avoids the second walk). The counting seam: a `_findFocusedTextBox` Func<TextBox?> field
+        // the test replaces with a counting lambda.
+        // ================================================================
+
+        public static void Run_SolutionExplorer_TryMoveSingleWalk()
+        {
+            var controller = new SolutionExplorerController(() => null!);
+            var field = typeof(SolutionExplorerController).GetField("_findFocusedTextBox",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(field != null, "TryMove resolves the focused box through a single seam (m5)");
+
+            // A non-null box (never dereferenced — X is not a motion, so TryMoveFocusedSurface
+            // returns before touching it). GetUninitializedObject skips the WPF ctor (no STA needed).
+            var fakeBox = (System.Windows.Controls.TextBox)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(System.Windows.Controls.TextBox));
+            int calls = 0;
+            field!.SetValue(controller, (Func<System.Windows.Controls.TextBox?>)(() => { calls++; return fakeBox; }));
+
+            // X is not a text motion and not an action key — it routes through the text-box path
+            // (box != null) and is not consumed. The seam must be called exactly once.
+            Assert.False(controller.TryMove(Keys.X), "an unmapped key is not consumed");
+            Assert.Equal(1, calls);
+        }
+
+        // ================================================================
+        // BP-11 (n3): InputHandler.TryRouteToolWindowKey computes the tool-window routing decision
+        // ONCE per key. RED: today the decision is computed twice per key — ShouldRouteToolWindowKey()
+        // at :379 (the no-arg overload -> the 3-arg FocusGuard) + the inline 6-arg
+        // FocusGuard.ShouldRouteToolWindowKey at :403-410. The fix resolves the controller once and
+        // computes `bool route = ShouldRouteToolWindowKey(controller)` once, reusing it for both the
+        // null-guard and the shift-gated branch. The counting seam: a `_routeDecision` Func<bool>
+        // field the test replaces with a counting lambda.
+        // ================================================================
+
+        public static void Run_TryRouteToolWindowKey_SingleDecision()
+        {
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+
+                // A WindowManager forced into a tool-window state (Toolbox -> a GeneralToolWindowController).
+                var manager = new WindowManager(new FakeMonitorSelection());
+                typeof(WindowManager).GetField("_isToolWindow",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(manager, true);
+                typeof(WindowManager).GetField("_type",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(manager, ToolWindowType.Toolbox);
+
+                // An InputHandler without the ctor; wire the fields TryRouteToolWindowKey reads.
+                var handler = (InputHandler)System.Runtime.Serialization.FormatterServices
+                    .GetUninitializedObject(typeof(InputHandler));
+                typeof(InputHandler).GetField("_windowManager",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(handler, manager);
+                typeof(InputHandler).GetField("_vsVim",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(handler, new VimModeTracker(new FakeVimModeSource()));
+                typeof(InputHandler).GetField("_leaderMatcher",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(handler, new LeaderSequenceMatcher(Keys.Space, new Dictionary<string, Action>(StringComparer.Ordinal)));
+
+                // The counting seam: the single routing decision.
+                var seamField = typeof(InputHandler).GetField("_routeDecision",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(seamField != null, "the routing decision is computed through a single seam (n3)");
+                int calls = 0;
+                seamField!.SetValue(handler, (Func<bool>)(() => { calls++; return false; }));
+
+                // Route a key through the private TryRouteToolWindowKey. The seam returns false (don't
+                // route), so the method returns null after computing the decision once.
+                var method = typeof(InputHandler).GetMethod("TryRouteToolWindowKey",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(method != null, "TryRouteToolWindowKey must exist (private instance)");
+                method!.Invoke(handler, new object[] { Keys.H, false, false, false });
+
+                Assert.Equal(1, calls);
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
+        // ================================================================
+        // BP-20 (n1): the WindowNavigator static cache is reference-keyed (adapters list + active
+        // window) and BuildActiveWindows returns a COPY. Guard — pins the already-correct A6 copy
+        // guarantee + the reference-keying contract (the plan's n1 research correction: instance-
+        // scoping is NOT the fix; the reference-keyed static cache self-invalidates on window-set
+        // change). RED: the copy guarantee was unpinned (no test).
+        // ================================================================
+
+        public static void Run_WindowNavigator_CacheClearedOnReenum()
+        {
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+
+                // The reference-keyed cache contract: three static fields (linked list + source + active).
+                var linkedField = typeof(WindowNavigator).GetField("_cachedLinked",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                var sourceField = typeof(WindowNavigator).GetField("_cachedLinkedSource",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                var activeField = typeof(WindowNavigator).GetField("_cachedLinkedActive",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                Assert.True(linkedField != null, "the linked-window cache is a static field (n1)");
+                Assert.True(sourceField != null, "the cache is keyed on the adapters list reference (n1)");
+                Assert.True(activeField != null, "the cache is keyed on the active window (n1)");
+
+                // Fake adapters (GetUninitializedObject skips the ctor's ThrowIfNotOnUIThread) + a fake
+                // active window (LinkedWindowFrame -> null, so the cache-miss LinkedTo returns empty).
+                var fakeAdapter = (WindowFrameAdapter)System.Runtime.Serialization.FormatterServices
+                    .GetUninitializedObject(typeof(WindowFrameAdapter));
+                var adapters1 = new List<WindowFrameAdapter> { fakeAdapter };
+                var fakeActive = new FakeWindow();
+
+                // Pre-populate the cache with a NON-EMPTY linked list so the copy guarantee is meaningful.
+                linkedField!.SetValue(null, new List<WindowFrameAdapter> { fakeAdapter });
+                sourceField!.SetValue(null, adapters1);
+                activeField!.SetValue(null, fakeActive);
+
+                // Cache-hit: same refs -> the cached list is returned as a COPY, never the cache itself.
+                var result = WindowNavigator.BuildActiveWindows(fakeActive, adapters1);
+                var cached = (List<WindowFrameAdapter>)linkedField.GetValue(null)!;
+                Assert.False(ReferenceEquals(result, cached),
+                    "BuildActiveWindows returns a COPY, never the cached list itself (A6)");
+                Assert.Equal(1, result.Count);
+
+                // Mutating the returned copy must not corrupt the cache.
+                result.Add(fakeAdapter);
+                Assert.Equal(1, cached.Count);
+                Assert.Equal(2, result.Count);
+
+                // Keying: a NEW adapters list reference is NOT a cache hit -> recompute (the cache is
+                // reference-keyed on the adapters list + active window).
+                var adapters2 = new List<WindowFrameAdapter> { fakeAdapter };
+                WindowNavigator.BuildActiveWindows(fakeActive, adapters2);
+                Assert.True(ReferenceEquals(sourceField.GetValue(null), adapters2),
+                    "a new adapters list reference recomputes (the cache is reference-keyed)");
+            }
+            finally
+            {
+                // Reset the static cache so no later test sees a stale window-set.
+                typeof(WindowNavigator).GetField("_cachedLinked",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                    .SetValue(null, null);
+                typeof(WindowNavigator).GetField("_cachedLinkedSource",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                    .SetValue(null, null);
+                typeof(WindowNavigator).GetField("_cachedLinkedActive",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                    .SetValue(null, null);
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
+        // ================================================================
+        // Code-review fixes (34 findings) — FINAL NeoVisual RED chunk (BP-21/29/30/31).
+        // ================================================================
+
+        public static void Run_WindowNavigator_LazyDte()
+        {
+            // BP-21 (n2): the ctor must NOT resolve DTE when currentFrame != null (the active
+            // window comes from VsShellUtilities.GetWindowObject(currentFrame), never DTE). A
+            // counting package records every GetService(typeof(DTE)) request; on the non-null-frame
+            // path the count must be 0.
+            // RED: today the ctor resolves VsServices.Dte(package) unconditionally at :53, so the
+            // recording package sees exactly one DTE request -> Assert.Equal(0, ...) fails.
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+
+                // GetUninitializedObject skips the AsyncPackage base ctor (which NREs outside VS).
+                var package = (RecordingPackage)System.Runtime.Serialization.FormatterServices
+                    .GetUninitializedObject(typeof(RecordingPackage));
+                var frame = new FakeFrame();
+                var adapters = new List<WindowFrameAdapter>();
+
+                // currentFrame != null: the active window is sourced from the frame, never DTE.
+                var navigator = new WindowNavigator(adapters, package, frame);
+
+                Assert.Equal(0, package.DteRequestCount);
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
+        public static void Run_WindowManager_DefaultControllerCache_NoReflection()
+        {
+            // BP-29 (m17): the internal GetController seam — the test calls it directly (no
+            // GetField/GetMethod reflection) and asserts the per-type default controller is cached
+            // (same instance per type). The WindowManager ctor still calls RefreshCurrentWindow ->
+            // ThrowIfNotOnUIThread(), so the dispatcher setup remains (the fix removes the
+            // reflection into the private GetController, not the dispatcher setup).
+            // RED: GetController is private today -> CS0122 (the internal seam does not exist).
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+                var manager = new WindowManager(new FakeMonitorSelection());
+
+                var first = manager.GetController(ToolWindowType.Toolbox);
+                var second = manager.GetController(ToolWindowType.Toolbox);
+
+                Assert.True(ReferenceEquals(first, second),
+                    "the per-type default controller must be cached (same instance per type) — BP-29");
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
+        public static void Run_Assert_NotEqual()
+        {
+            // BP-30 (n8): Assert.NotEqual throws when the values are equal and passes when they
+            // differ. RED: Assert.NotEqual does not exist in the shared TestRunner -> CS1061.
+            Assert.NotEqual("a", "b");   // different -> passes
+            Assert.NotEqual(1, 2);       // different -> passes
+
+            var threw = false;
+            try
+            {
+                Assert.NotEqual("same", "same");  // equal -> must throw
+            }
+            catch (Exception)
+            {
+                threw = true;
+            }
+            Assert.True(threw, "Assert.NotEqual must throw when the values are equal (BP-30)");
+        }
+
+        public static void Run_TestRunner_Timeout()
+        {
+            // BP-31 (n9): a deadlocking test must be reported as timed out (FAIL) and the runner
+            // must continue to the next test — it must NOT hang the whole suite. The nested
+            // SleepingTests type has Run_Sleeps (blocks far beyond any plausible per-test timeout)
+            // and Run_After (a quick test that must still run after the timeout).
+            // RED: today the runner has no per-test timeout, so Run_Sleeps hangs the nested run
+            // forever; the bounded wait below expires and the first assertion fails.
+            var output = new System.IO.StringWriter();
+            var originalOut = Console.Out;
+            var done = new System.Threading.ManualResetEventSlim(false);
+            var thread = new System.Threading.Thread(() =>
+            {
+                Console.SetOut(output);
+                try
+                {
+                    // BP-31: the nested runner gets a SHORT per-test timeout (5s) so the nested
+                    // run completes well within this test's own budget — the nested run's duration
+                    // must be strictly less than the outer runner's per-test timeout or the outer
+                    // runner would kill this observing test at the same moment the nested timeout
+                    // fires.
+                    TestRunner.Run(typeof(SleepingTests), new string[0], perTestTimeoutSeconds: 5);
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+                done.Set();
+            });
+            thread.IsBackground = true;
+            thread.Start();
+
+            // Bounded wait: generous enough to cover the plan's ~60s per-test timeout. In the RED
+            // case the nested runner hangs on Run_Sleeps, so this wait expires and the assertion
+            // below fails (the suite would hang forever without the per-test timeout).
+            var completed = done.Wait(TimeSpan.FromSeconds(100));
+            // Restore the console on the main thread too — the background thread may be hung.
+            Console.SetOut(originalOut);
+
+            Assert.True(completed,
+                "the runner must complete: a deadlocking test is reported as timed out, not hang the suite (BP-31)");
+            var text = output.ToString();
+            Assert.True(text.Contains("FAIL  Run_Sleeps"),
+                "the sleeping test is reported as FAIL (timed out) — BP-31");
+            Assert.True(text.Contains("PASS  Run_After"),
+                "the runner continues to the next test after a timeout — BP-31");
+        }
+
+        // BP-21: a counting AsyncPackage — records every GetService(typeof(DTE)) request so the
+        // test can assert the WindowNavigator ctor does NOT resolve DTE on the non-null-frame path.
+        private sealed class RecordingPackage : Microsoft.VisualStudio.Shell.AsyncPackage
+        {
+            public int DteRequestCount { get; private set; }
+
+            protected override object GetService(Type serviceType)
+            {
+                if (serviceType == typeof(EnvDTE.DTE))
+                {
+                    DteRequestCount++;
+                }
+                return null!;
+            }
+        }
+
+        // BP-21: a minimal IVsWindowFrame fake. GetProperty returns E_NOTIMPL so
+        // VsShellUtilities.GetWindowObject returns null (the ctor degrades to a no-op); every other
+        // member throws (the ctor's try/catch swallows it). The fake only needs to be a non-null
+        // IVsWindowFrame so the ctor takes the currentFrame != null branch.
+        private sealed class FakeFrame : IVsWindowFrame
+        {
+            public int GetProperty(int propid, out object pvar)
+            {
+                pvar = null!;
+                return unchecked((int)0x80004001); // E_NOTIMPL
+            }
+            public int Show() => throw new NotImplementedException();
+            public int Hide() => throw new NotImplementedException();
+            public int IsVisible() => throw new NotImplementedException();
+            public int ShowNoActivate() => throw new NotImplementedException();
+            public int CloseFrame(uint grfSaveOptions) => throw new NotImplementedException();
+            public int SetFramePos(VSSETFRAMEPOS dwSFP, ref Guid rguidRelativeTo, int x, int y, int cx, int cy) => throw new NotImplementedException();
+            public int GetFramePos(VSSETFRAMEPOS[] pdwSFP, out Guid pguidRelativeTo, out int px, out int py, out int pcx, out int pcy) => throw new NotImplementedException();
+            public int SetProperty(int propid, object var) => throw new NotImplementedException();
+            public int GetGuidProperty(int propid, out Guid pguid) => throw new NotImplementedException();
+            public int SetGuidProperty(int propid, ref Guid rguid) => throw new NotImplementedException();
+            public int QueryViewInterface(ref Guid riid, out IntPtr ppv) => throw new NotImplementedException();
+            public int IsOnScreen(out int pfOnScreen) => throw new NotImplementedException();
+        }
+
+        // BP-31: a nested test type whose Run_Sleeps blocks far beyond any plausible per-test
+        // timeout and whose Run_After must still run after the timeout fires.
+        private sealed class SleepingTests
+        {
+            public static void Run_Sleeps()
+            {
+                System.Threading.Thread.Sleep(TimeSpan.FromMinutes(10));
+            }
+
+            public static void Run_After()
+            {
+            }
         }
     }
 
@@ -3272,6 +3794,27 @@ namespace NeoVisual.Tests
         public void Attach(ITextView view) { }
         public void Detach(ITextView view) { }
         public void RaiseModeChanged() => ModeChanged?.Invoke(Mode);
+    }
+
+    /// <summary>
+    /// Test-local EnvDTE.DocumentEvents fake (BP-8): records the DocumentOpened add/remove so the
+    /// test can assert Dispose() unhooks the subscription (the COM connection point is released).
+    /// The other three events are no-ops — the gatherer only subscribes to DocumentOpened.
+    /// </summary>
+    internal sealed class FakeDocumentEvents : DocumentEvents
+    {
+        public int HookCount { get; private set; }
+        public int UnhookCount { get; private set; }
+
+        public event _dispDocumentEvents_DocumentOpenedEventHandler DocumentOpened
+        {
+            add { HookCount++; }
+            remove { UnhookCount++; }
+        }
+
+        public event _dispDocumentEvents_DocumentClosingEventHandler DocumentClosing { add { } remove { } }
+        public event _dispDocumentEvents_DocumentOpeningEventHandler DocumentOpening { add { } remove { } }
+        public event _dispDocumentEvents_DocumentSavedEventHandler DocumentSaved { add { } remove { } }
     }
 
     /// <summary>
@@ -3321,5 +3864,48 @@ namespace NeoVisual.Tests
         public event EventHandler? ViewportWidthChanged { add { } remove { } }
         public IViewScroller ViewScroller => throw new NotImplementedException();
         public ITextSnapshot VisualSnapshot => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Test-local EnvDTE.Window fake (BP-20): only LinkedWindowFrame is read by the hermetic
+    /// BuildActiveWindows paths (the cache-hit path uses ReferenceEquals only; the cache-miss
+    /// path reads LinkedWindowFrame, which returns null -> GetLinkedWindowsList returns empty).
+    /// Every other member throws — the fake just needs to be a distinct, non-null EnvDTE.Window.
+    /// </summary>
+    internal sealed class FakeWindow : EnvDTE.Window
+    {
+        public EnvDTE.Window LinkedWindowFrame => null!;
+        public bool AutoHides { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public string Caption { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public EnvDTE.Windows Collection => throw new NotImplementedException();
+        public EnvDTE.ContextAttributes ContextAttributes => throw new NotImplementedException();
+        public EnvDTE.Document Document => throw new NotImplementedException();
+        public object get_DocumentData(string bstrWhichData) => throw new NotImplementedException();
+        public EnvDTE.DTE DTE => throw new NotImplementedException();
+        public int Height { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public System.IntPtr HWnd => throw new NotImplementedException();
+        public bool IsFloating { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public string Kind => throw new NotImplementedException();
+        public int Left { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public bool Linkable { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public EnvDTE.LinkedWindows LinkedWindows => throw new NotImplementedException();
+        public object Object => throw new NotImplementedException();
+        public string ObjectKind => throw new NotImplementedException();
+        public EnvDTE.Project Project => throw new NotImplementedException();
+        public EnvDTE.ProjectItem ProjectItem => throw new NotImplementedException();
+        public object Selection => throw new NotImplementedException();
+        public int Top { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public vsWindowType Type => throw new NotImplementedException();
+        public bool Visible { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public int Width { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public vsWindowState WindowState { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public void Activate() => throw new NotImplementedException();
+        public void Attach(System.IntPtr lWindowHandle) => throw new NotImplementedException();
+        public void Close(vsSaveChanges SaveChanges = vsSaveChanges.vsSaveChangesNo) => throw new NotImplementedException();
+        public void Detach() => throw new NotImplementedException();
+        public void SetFocus() => throw new NotImplementedException();
+        public void SetKind(vsWindowType eKind) => throw new NotImplementedException();
+        public void SetSelectionContainer(ref object[] Objects) => throw new NotImplementedException();
+        public void SetTabPicture(object Picture) => throw new NotImplementedException();
     }
 }

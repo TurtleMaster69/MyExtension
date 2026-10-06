@@ -45,13 +45,13 @@ namespace Telescope.Finders
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
         /// <param name="fzf">The fzf availability + filter engine.</param>
-        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller).</param>
-        internal FzfFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, IFzfEngine fzf, FileContentCache? contentCache = null)
+        /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller; m8/BP-14 makes it a REQUIRED param so a finder can never silently revert to its own cache).</param>
+        internal FzfFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, IFzfEngine fzf, FileContentCache contentCache)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
             _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
-            _contentCache = contentCache ?? new FileContentCache(500);
+            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
         }
 
         /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
@@ -102,7 +102,7 @@ namespace Telescope.Finders
             throw new NotSupportedException("FzfFinder is query-driven; call GetCandidatesAsync(query)");
         }
 
-        public override async Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "")
+        public override async Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "", CancellationToken cancellationToken = default)
         {
             // The overlay calls this on every prompt change, including a cleared prompt: an empty
             // query must NOT spawn fzf. Delegate to the sync short-circuit (warm cache + empty
@@ -124,6 +124,12 @@ namespace Telescope.Finders
 
             foreach (string path in files)
             {
+                // M2 (BP-3): a cancelled gather stops spawning fzf subprocesses (the overlay's
+                // _filterCts is cancelled on every query change + close).
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
                 if (hits.Count >= HitCap)
                 {
                     break;
@@ -142,7 +148,7 @@ namespace Telescope.Finders
 
                 if (available)
                 {
-                    IReadOnlyList<string> matched = await _fzf.FilterAsync(lines, query, CancellationToken.None);
+                    IReadOnlyList<string> matched = await _fzf.FilterAsync(lines, query, cancellationToken);
                     foreach (int ln in FzfLineMapper.Map(lines, matched))
                     {
                         if (hits.Count >= HitCap)
@@ -184,12 +190,8 @@ namespace Telescope.Finders
                 DTE dte = _dteFactory();
                 if (dte?.Solution != null)
                 {
-                    string? solutionName = dte?.Solution?.FullName;
-                    if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _fileCache.Invalidate();
-                        _cachedSolutionName = solutionName;
-                    }
+                    // m7 (BP-13): the ONE shared solution-invalidation helper.
+                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
                     return _fileCache.Get(() => ProjectFiles.Enumerate(dte));
                 }
                 return Array.Empty<string>();
@@ -224,12 +226,8 @@ namespace Telescope.Finders
                 DTE dte = _dteFactory();
                 if (dte?.Solution != null)
                 {
-                    string? solutionName = dte?.Solution?.FullName;
-                    if (!string.Equals(_cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _fileCache.Invalidate();
-                        _cachedSolutionName = solutionName;
-                    }
+                    // m7 (BP-13): the ONE shared solution-invalidation helper.
+                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
                     foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
                     {
                         WarmFile(path);

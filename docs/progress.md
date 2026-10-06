@@ -113,8 +113,8 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **the Code review fixes (45 findings, incl. nits) reached GREEN
-  2026-10-05** in the unit-only lane (e2e DEFERRED — the gates E2E-CR45-1..4 stay QUEUED in
+- **In progress:** (none — **the Code review fixes (34 findings, incl. nits) reached GREEN
+  2026-10-06** in the unit-only lane (e2e DEFERRED — the gates E2E-CR34-1..4 stay QUEUED in
   `docs/e2e-queue.md`); see the Done section. The build loop is PAUSED after this item — the
   user's 2026-10-05 instruction was to execute the first pending item in the unit-only lane
   and stop.)
@@ -254,8 +254,8 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **268 passed**; `tests/NeoVisual.Tests`
-  **191 passed** (after Gap 4 — the recent-files finder, 2026-10-05).
+- Offline units: `tests/Telescope.Tests` **297 passed**; `tests/NeoVisual.Tests`
+  **212 passed** (after Gap 4 — the recent-files finder, 2026-10-05).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **44 scenarios** — ALL executed GREEN
   (full-suite fresh boot with `-TimeoutSec 2400`, run 185, 2026-10-05; Gap 4's final gate —
   `telescope-recent` verified end-to-end, `telescope-goto` GREEN outright after its in-item
@@ -379,6 +379,16 @@ were known-backlog assertion bugs, not regressions).
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
+
+> ~~**FIRST ITEM (2026-10-05, gate-APPROVED, handed off):** the **Code review fixes (34
+> findings, incl. nits)** plan~~ — **DONE** (GREEN 2026-10-06, feature lane, **unit-only,
+> e2e DEFERRED**; see the Done section). Source: `docs/reviews/code-review.md` (2026-10-05
+> refresh, 34 findings: 0 critical, 4 major, 19 minor, 11 nit — the net-new residuals +
+> new issues after the 45-findings plan went GREEN in `cea9798`). 10 phases, 34 BP steps,
+> 34/34 finding coverage. **DEFER e2e tests (unit-only lane):** the e2e gates are queued in
+> `e2e-queue.md` (E2E-CR34-1..4, status QUEUED) and run on a capable machine after this
+> plan is GREEN. RED was proven at the unit level only. Telescope.Tests 288 → **297**;
+> NeoVisual.Tests 200 → **212**; both lints PASS; the harness `-SelfCheck` PASS; `-List` 44.
 
 > ~~**FIRST ITEM (2026-10-05, gate-APPROVED, handed off):** the **Code review fixes (45
 > findings, incl. nits)** plan~~ — **DONE** (GREEN 2026-10-05, feature lane, **unit-only,
@@ -832,6 +842,54 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-06 — Code review fixes (34 findings, incl. nits)** (Lane: `feature`, unit-only,
+  e2e DEFERRED; 8 delegations, 0 VS boots, 0 iterations). All 34 findings from
+  `docs/reviews/code-review.md` (2026-10-05 refresh) fixed: the query-driven finder hazards
+  (M1/M2/m10/m11 — the Grep scan off-thread, the cancellable Fzf gather, the thread-safe
+  `FileContentCache`, the fzf timeout-vs-completion race with the `FilterTimeoutGraceMs`
+  grace period), the bound Shift+ shortcut (M3 — `SimpleShortcutMatcher.IsBoundShiftChord`),
+  the overlay-open hot-path short-circuit (m3), the Error-List/RecentFiles COM lifecycle
+  (m1/m2 — instance-scoped `ErrorListGatherer` + `BuildEvents.OnBuildDone` invalidation +
+  `RecentFilesGatherer` IDisposable), the block-caret focus-regain (m4), the tool-window
+  single-walk/single-decision routing (m5/n3), the pane-focus resolver (m6 — `SelectTarget`
+  → `ResolveTarget`, hub-ACCEPTED deviation), the shared solution-invalidation helper (m7),
+  the required `FileContentCache` param (m8), the LinkedList+Dictionary LRU (m9), the
+  overlay/fzf nits (m12/n5/n6/n7), the WindowNavigator/PreviewEditorHost docs (n1/n2/n4),
+  the harness gates (m13/m14/m15/m16/n10/n11 — LogCache tail-read ×5, the TARGET-form
+  severity-nav assertions with the DiagProbe.cs seed + build-settle gate, the tokens gate,
+  the `w,d` DTE poll, the goto count assert, the searchbox DTE poll), the test infra
+  (m17/n8/n9 — internal `GetController`, `Assert.NotEqual`, the per-test timeout), and the
+  docs/lint (M4/m18/m19 — counts 268/191 → 297/212, code-review.md in the lint doc set).
+  Telescope.Tests 288 → **297**; NeoVisual.Tests 200 → **212**; `dotnet build` 0 errors;
+  both lints PASS; `-SelfCheck` PASS; `-List` 44. The e2e gates **E2E-CR34-1..4** stay
+  QUEUED in `docs/e2e-queue.md` (run on a capable machine).
+  **Change summary:** modified `Telescope/Finders/Utils/FileContentCache.cs` (thread-safe +
+  LRU), `Telescope/Filter/FzfFilter.cs` (grace period + probe interlock),
+  `Telescope/Finders/GrepFinder.cs`/`FzfFinder.cs`/`CodeIssuesFinder.cs`/`TelescopeFinder.cs`/
+  `FinderBase.cs` (off-thread scan + cancellation + shared invalidation + required cache),
+  `Telescope/Overlay/TelescopeOverlay.cs` (CancelPendingG on focus change),
+  `Telescope/Overlay/Utils/FocusTargetModel.cs` (ResolveTarget),
+  `Telescope/Overlay/Utils/Panes/PaneSelectionSync.cs` (Steps deleted),
+  `MyExtension/Input/InputHandler.cs` (overlay short-circuit + shift-chord + single routing
+  decision), `MyExtension/Input/Utils/SimpleShortcutMatcher.cs` (IsBoundShiftChord),
+  `MyExtension/Package/Utils/ErrorListGatherer.cs` (instance + BuildEvents),
+  `MyExtension/Package/Utils/RecentFilesGatherer.cs` (IDisposable),
+  `MyExtension/Adornments/BlockCaretAdornment.cs` (desired/rendered),
+  `MyExtension/ToolWindows/SolutionExplorerController.cs` + `ToolWindowControllerBase.cs`
+  (box-once), `MyExtension/Navigation/WindowNavigator.cs` (lazy DTE + cache doc),
+  `MyExtension/Package/Utils/PreviewEditorHost.cs` (mtime doc),
+  `MyExtension/ToolWindows/WindowManager.cs` (GetController internal),
+  `MyExtension/Package/MyExtensionPackage.cs` + `GlobalKeyboardHook.cs` (gatherer wiring),
+  `tests/TestRunner.cs` (NotEqual + per-test timeout), both test projects, the harness
+  (`test-e2e.ps1`/`dte-command.ps1`), `tools/lint/check-doc-refs.ps1`, and the docs.
+  Key diagnostics: NO new literals — the only behavior change is m11 (the spurious
+  `fzf filter failed: timeout` line no longer fires on a completed filter). **Look first if
+  this regresses:** the `FzfFilter` timeout/grace path (BP-4 — a wrong grace/kill ordering
+  breaks `Run_FzfFilter_TimeoutRace`/`Run_FzfFilter_TimeoutAwaitsTasks`) and the
+  `ErrorListGatherer` `BuildEvents` subscription (BP-7 — a wrong event source breaks the
+  build-done invalidation); the harness's `neovisual-diagnostic-nav` TARGET-form assertions
+  (BP-24) are the queued e2e guard.
 
 - **2026-10-05 — Code review fixes (45 findings, incl. nits)** (Lane: `feature`, unit-only,
   e2e DEFERRED, M-M7; 12 delegations, 0 VS boots, 0 iterations). All 45 findings from

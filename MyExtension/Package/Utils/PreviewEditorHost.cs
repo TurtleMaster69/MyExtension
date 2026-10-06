@@ -96,6 +96,11 @@ namespace MyExtension.Package
                     return PreviewEditorResult.Empty;
                 }
 
+                // n4 (BP-22): the mtime stat IS the change detector — the review's "cache mtime per
+                // file" fix is UNSOUND (skipping the stat breaks on-disk-edit refresh). It is a cheap
+                // metadata read on a per-selection-move path; the _documentPath/_documentStamp
+                // compare gates RebuildView, and the A2 PreviewTextCache already avoids the
+                // full-buffer GetText() on the cache-hit path.
                 DateTime stamp = File.GetLastWriteTimeUtc(location.FilePath);
                 if (_documentPath != location.FilePath || _documentStamp != stamp)
                 {

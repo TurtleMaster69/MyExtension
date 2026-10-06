@@ -39,6 +39,11 @@ namespace MyExtension.ToolWindows
         // restyle does not re-walk the visual tree.
         private System.Windows.Controls.TextBox? _pendingStyleBox;
 
+        // m5 (BP-10): the single seam through which TryMove resolves the focused WPF text box — a
+        // test replaces it with a counting lambda to prove the box is resolved ONCE per routed key
+        // (no double visual-tree walk).
+        private Func<System.Windows.Controls.TextBox?> _findFocusedTextBox = TextMotionHelper.FindFocusedTextBox;
+
         /// <summary>How long the focus-keeper re-asserts tree focus/selection (m9 — single source).</summary>
         private const int FocusKeeperDurationMs = 1500;
 
@@ -204,9 +209,12 @@ namespace MyExtension.ToolWindows
             // the tree and replace the collapse/expand diagnostics with toolwindow-move.
             // A4: delegate to the shared text-input routing block (ToolWindowControllerBase.TextMotion)
             // — it applies the motion + the N21 enteredInputMode → EnterInputMode() side effect.
-            if (TextMotionHelper.FindFocusedTextBox() != null)
+            // m5 (BP-10): the box is resolved ONCE and passed to the TextMotion(key, box) overload —
+            // no second visual-tree walk per routed key.
+            var box = _findFocusedTextBox();
+            if (box != null)
             {
-                return TextMotion(key)();
+                return TextMotion(key, box)();
             }
 
             return _actions.TryGetValue(key, out var action) && action();

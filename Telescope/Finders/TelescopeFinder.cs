@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Telescope.Finders
@@ -29,9 +30,11 @@ namespace Telescope.Finders
         /// Async variant of <see cref="GetCandidates(string)"/> for query-driven finders whose
         /// gather is asynchronous (e.g. an fzf subprocess). The overlay awaits this on the
         /// query-driven path so a slow gather never blocks the UI thread. Abstract (NOT a default
-        /// interface method — net472 rejects C# 8 default implementations).
+        /// interface method — net472 rejects C# 8 default implementations). The optional
+        /// <paramref name="cancellationToken"/> lets the overlay cancel an in-flight gather when
+        /// the query changes or the overlay closes (M2/BP-3).
         /// </summary>
-        Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "");
+        Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "", CancellationToken cancellationToken = default);
 
         /// <summary>
         /// True when the finder is <b>query-driven</b>: every query change re-gathers candidates

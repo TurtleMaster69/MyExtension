@@ -51,6 +51,11 @@ namespace MyExtension.Input
         private readonly TelescopeController _telescope;
         private readonly TelescopeLauncher _launcher;
 
+        // m1 (BP-7): the instance-scoped Error List gatherer (the static R40 cache is gone). The
+        // package constructs it, hooks the build-done/document-saved invalidation, and disposes it;
+        // NavigateDiagnostic reads through this instance so the invalidation reaches the nav path.
+        private readonly ErrorListGatherer _errorListGatherer;
+
         // Leader-sequence state machine (pure, unit-tested): owns the leader key start, sequence
         // building, binding match, prefix detection, and abort.
         private readonly LeaderSequenceMatcher _leaderMatcher;
@@ -58,6 +63,12 @@ namespace MyExtension.Input
         // Simple-shortcut matcher (pure, unit-tested): builds the canonical shortcut string
         // (e.g. "Ctrl+H") from a key + modifiers and looks it up in the simple bindings.
         private readonly SimpleShortcutMatcher _simpleMatcher;
+
+        // n3 (BP-11): the SINGLE tool-window routing decision seam — TryRouteToolWindowKey computes
+        // the decision ONCE per key through this Func<bool> (the test replaces it with a counting
+        // lambda to prove the single computation). The shift-sensitive gate (R10) is folded into
+        // the branch, not a second FocusGuard call.
+        private Func<bool> _routeDecision;
 
         // M2: the stale-toolwindow sentinel file is re-stat'd at most once per bounded interval
         // (not on every key-down) so IsKeyOfInterest stays cheap when NEOVISUAL_LOG_DIR is set.
@@ -132,12 +143,13 @@ namespace MyExtension.Input
         // Simple modifier shortcuts (matched directly): "Ctrl+H", "Alt+X"...
         private readonly Dictionary<string, Action> _simpleBindings;
 
-        public InputHandler(AsyncPackage package, TelescopeController telescope, WindowManager windowManager, TelescopeLauncher launcher)
+        public InputHandler(AsyncPackage package, TelescopeController telescope, WindowManager windowManager, TelescopeLauncher launcher, ErrorListGatherer errorListGatherer)
         {
             _package = package;
             _telescope = telescope ?? throw new ArgumentNullException(nameof(telescope));
             _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
             _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
+            _errorListGatherer = errorListGatherer ?? throw new ArgumentNullException(nameof(errorListGatherer));
 
             // The Vim mode tracker is a shared MEF part (also an IWpfTextViewCreationListener
             // that VS instantiates for every code view). We retrieve the same singleton instance
@@ -151,6 +163,9 @@ namespace MyExtension.Input
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
             _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
             _simpleMatcher = new SimpleShortcutMatcher(_simpleBindings);
+            // n3 (BP-11): the single routing decision — the controller overload (the 3-arg
+            // FocusGuard) resolved once per key.
+            _routeDecision = () => ShouldRouteToolWindowKey(_windowManager.CurrentController);
         }
 
         /// <summary>
@@ -376,7 +391,11 @@ namespace MyExtension.Input
         {
             try
             {
-                if (!ShouldRouteToolWindowKey())
+                // n3 (BP-11): the routing decision is computed ONCE per key through the single
+                // _routeDecision seam (the test replaces it with a counting lambda). The
+                // shift-sensitive gate (R10 — shift must not fire non-text-input tree actions) is
+                // folded into the branch below, NOT a second FocusGuard call.
+                if (!_routeDecision())
                 {
                     return null;
                 }
@@ -400,14 +419,7 @@ namespace MyExtension.Input
                 // controllers (Shift+O/R/M/A/G in Solution Explorer must not fire tree actions
                 // and swallow the key); text-input controllers still need shift to tell I/i and
                 // A/a apart, so they are exempt from the shift gate.
-                if (!ctrl && !alt && FocusGuard.ShouldRouteToolWindowKey(
-                    _windowManager.IsToolWindow,
-                    _vsVim.IsEditorFocused,
-                    controller.IsInputMode,
-                    _windowManager.IsTextInputType,
-                    _windowManager.TextInputSurfaceFocused,
-                    shift,
-                    shift && _windowManager.IsFocusedTextBoxInCurrentToolWindow()))
+                if (!ctrl && !alt && !(shift && !_windowManager.IsTextInputType && !_windowManager.IsFocusedTextBoxInCurrentToolWindow()))
                 {
                     // A controller-specific insert key (text-input I = insert at line start) is
                     // handled by TryMove first; the generic 'i' below is the plain-insert
@@ -452,6 +464,15 @@ namespace MyExtension.Input
         /// </summary>
         public bool IsKeyOfInterest(Keys key, bool ctrl, bool shift, bool alt)
         {
+            // BP-6 (m3): the modal overlay owns all keys while open — skip the sentinel re-stat,
+            // the CurrentController resolution, and the marshal for every key (HandleKey already
+            // returns false at :290). The short-circuit is the FIRST check so the overlay-open
+            // hot path never runs the full pre-filter.
+            if (_telescope.IsOpen)
+            {
+                return false;
+            }
+
             // M2: re-stat the stale-toolwindow sentinel at most once per bounded interval (the
             // test-only fault toggles without a focus change, so the harness creates/removes the
             // sentinel file between scenarios — but the file must not be File.Exists-stat'd on
@@ -471,6 +492,14 @@ namespace MyExtension.Input
             // a tool window with action keys is in normal mode (the tool-window branch below) or a
             // leader sequence is active (IsLeaderActive above).
             if (IsLeaderActive || ctrl || alt)
+            {
+                return true;
+            }
+
+            // BP-5 (M3): a bound Shift+ chord is a candidate simple shortcut — it must reach
+            // HandleKey (where _simpleMatcher.HandleKey executes it and logs `shortcut-binding
+            // executed: Shift+...`). Unbound uppercase letters stay cheap (the R11 rationale).
+            if (shift && _simpleMatcher.IsBoundShiftChord(key))
             {
                 return true;
             }
@@ -636,7 +665,7 @@ namespace MyExtension.Input
                     ? selection.ActivePoint.Line
                     : 0;
 
-                var entries = ErrorListGatherer.Gather(dte, activePath, severityError);
+                var entries = _errorListGatherer.Gather(dte, activePath, severityError);
                 if (entries.Count == 0)
                 {
                     NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}diagnostic-nav no-op: no-entries");

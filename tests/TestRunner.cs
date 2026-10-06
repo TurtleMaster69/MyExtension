@@ -23,7 +23,7 @@ namespace TestHarness
     /// </summary>
     internal static class TestRunner
     {
-        public static int Run(Type testsType, string[] args)
+        public static int Run(Type testsType, string[] args, int perTestTimeoutSeconds = 60)
         {
             var methods = testsType.GetMethods(BindingFlags.Public | BindingFlags.Static)
                 .Where(m => m.Name.StartsWith("Run_", StringComparison.Ordinal))
@@ -54,25 +54,56 @@ namespace TestHarness
 
             int passed = 0;
             int failed = 0;
+            // n9 (BP-31): a per-test timeout so a deadlocking test is reported as FAILED
+            // ("timed out after Ns") and the runner CONTINUES — it must never hang the whole
+            // suite. A timed-out test leaves an abandoned thread that may mutate static state
+            // (e.g. ThreadHelper.uiThreadDispatcher); that risk is documented and accepted
+            // (killing the process would abort the whole suite). Each test runs on its own STA
+            // thread (the test host is [STAThread] and WPF construction — e.g. a FrameworkElement
+            // in the PaneHost fakes — requires STA; a Task.Run thread-pool thread is MTA and
+            // throws). The timeout is a parameter (default 60s) so a test that itself runs a
+            // nested runner (Run_TestRunner_Timeout) can pass a SHORTER nested timeout — the
+            // nested run's duration must be strictly less than the outer test's own budget or the
+            // outer runner would kill the observing test at the same moment the nested timeout
+            // fires.
             foreach (var method in methods)
             {
-                try
+                Exception? testError = null;
+                var thread = new System.Threading.Thread(() =>
                 {
-                    object? result = method.Invoke(null, null);
-                    // m62 (BP-62): await Task-returning methods instead of discarding the return
-                    // value — a future async test's failure must not be silently swallowed.
-                    if (result is Task task)
+                    try
                     {
-                        task.GetAwaiter().GetResult();
+                        object? result = method.Invoke(null, null);
+                        // m62 (BP-62): await Task-returning methods instead of discarding the
+                        // return value — a future async test's failure must not be silently
+                        // swallowed.
+                        if (result is Task task)
+                        {
+                            task.GetAwaiter().GetResult();
+                        }
                     }
-                    Console.WriteLine($"PASS  {method.Name}");
-                    passed++;
-                }
-                catch (Exception ex)
+                    catch (Exception ex)
+                    {
+                        testError = ex;
+                    }
+                });
+                thread.IsBackground = true;
+                thread.SetApartmentState(System.Threading.ApartmentState.STA);
+                thread.Start();
+                if (!thread.Join(TimeSpan.FromSeconds(perTestTimeoutSeconds)))
                 {
-                    Console.WriteLine($"FAIL  {method.Name}: {Unwrap(ex).Message}");
+                    Console.WriteLine($"FAIL  {method.Name}: timed out after {perTestTimeoutSeconds}s");
                     failed++;
+                    continue;
                 }
+                if (testError != null)
+                {
+                    Console.WriteLine($"FAIL  {method.Name}: {Unwrap(testError).Message}");
+                    failed++;
+                    continue;
+                }
+                Console.WriteLine($"PASS  {method.Name}");
+                passed++;
             }
 
             Console.WriteLine();
@@ -97,6 +128,16 @@ namespace TestHarness
             if (!EqualityComparer<T>.Default.Equals(expected, actual))
             {
                 throw new Exception($"Expected [{expected}] but got [{actual}]");
+            }
+        }
+
+        // n8 (BP-30): the inverse of Equal — throws when the values are equal, passes when they
+        // differ. Replaces the Assert.False(a == b, ...) workaround for "must NOT be X" pins.
+        public static void NotEqual<T>(T notExpected, T actual)
+        {
+            if (EqualityComparer<T>.Default.Equals(notExpected, actual))
+            {
+                throw new Exception($"Expected a value different from [{notExpected}] but got [{actual}]");
             }
         }
 

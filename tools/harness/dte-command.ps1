@@ -145,6 +145,127 @@ if ($Command -eq 'GetActiveDocument') {
     exit 0
 }
 
+# 'GetSolutionExplorerVisible' is a HARNESS-ONLY QUERY (m16/BP-26): prints 'True' when the
+# Solution Explorer tool window is visible, 'False' otherwise — the same check the
+# SolutionExplorerController's IsSolutionExplorerVisible uses
+# (dte.Windows.Item(vsWindowKindSolutionExplorer).Visible). A missing window or a read failure
+# prints 'False' (the controller's catch returns false too). No product code or diagnostic is
+# touched.
+if ($Command -eq 'GetSolutionExplorerVisible') {
+    $visible = $false
+    try {
+        $visible = [bool](Invoke-DteWithTimeout { param($dte)
+            $win = $dte.Windows.Item([EnvDTE.Constants]::vsWindowKindSolutionExplorer)
+            if ($win) { return [bool]$win.Visible }
+            return $false
+        } $QueryTimeoutSec 'GetSolutionExplorerVisible' @($dte))
+    } catch { $visible = $false }
+    Write-Output $visible
+    exit 0
+}
+
+# 'GetSolutionExplorerFiles' is a HARNESS-ONLY QUERY (n11/BP-28): walks the Solution Explorer
+# tree and prints the visible physical .cs file paths (one per line). The native search-box
+# filter is reflected in the UIHierarchyItems enumeration, so after typing a query the tree shows
+# only the matching items — the explorer-open-searchbox scenario polls this until the visible set
+# is exactly the single GrepProbe.cs result (native filtering emits no log line, so wait-on-log
+# is not feasible). Mirrors the SolutionExplorerController's MapChildren walk (physical folders
+# recurse, physical .cs files pass through). No product code or diagnostic is touched.
+if ($Command -eq 'GetSolutionExplorerFiles') {
+    $paths = Invoke-DteWithTimeout { param($dte)
+        $result = [System.Collections.Generic.List[string]]::new()
+        function Get-CsFiles($item) {
+            foreach ($child in $item.UIHierarchyItems) {
+                $obj = $child.Object
+                if ($obj -is [EnvDTE.ProjectItem]) {
+                    $pi = $obj
+                    if ($pi.Kind -eq '{6BB5F8EF-4483-11D3-8BCF-00C04F8EC28C}') {
+                        Get-CsFiles $child
+                    } elseif ($pi.Kind -eq '{6BB5F8EE-4483-11D3-8BCF-00C04F8EC28C}') {
+                        if ($pi.Name -like '*.cs') {
+                            $result.Add([string]$pi.FileNames.Item(1))
+                        }
+                    }
+                }
+            }
+        }
+        function Find-ProjectNode($node) {
+            if ($node.Object -is [EnvDTE.Project]) { return $node }
+            if ($node.Object -is [EnvDTE.Solution] -or $node.Object -is [EnvDTE80.SolutionFolder]) {
+                foreach ($child in $node.UIHierarchyItems) {
+                    $hit = Find-ProjectNode $child
+                    if ($hit) { return $hit }
+                }
+            }
+            return $null
+        }
+        try {
+            $seh = $dte.ToolWindows.SolutionExplorer
+            if ($seh.UIHierarchyItems.Count -gt 0) {
+                $solutionNode = $seh.UIHierarchyItems.Item(1)
+                $projectNode = Find-ProjectNode $solutionNode
+                if ($projectNode) {
+                    $projectNode.UIHierarchyItems.Expanded = $true
+                    Get-CsFiles $projectNode
+                }
+            }
+        } catch { }
+        $result
+    } $QueryTimeoutSec 'GetSolutionExplorerFiles' @($dte)
+    foreach ($p in $paths) { Write-Output $p }
+    exit 0
+}
+
+# 'BuildSolution' is a HARNESS-ONLY COMMAND (m14/BP-24): invokes the native Build.BuildSolution
+# command and waits for BuildState == Done (vsBuildStateDone) so the Error List is populated
+# deterministically before the severity-nav assertions. Prints 'True' on completion, 'False' on
+# timeout. No product code or diagnostic is touched.
+if ($Command -eq 'BuildSolution') {
+    $done = Invoke-DteWithTimeout { param($dte)
+        $dte.ExecuteCommand('Build.BuildSolution') | Out-Null
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt 120) {
+            $state = $dte.Solution.SolutionBuild.BuildState
+            if ([int]$state -eq 3) { return $true }   # vsBuildStateDone
+            Start-Sleep -Milliseconds 500
+        }
+        return $false
+    } $TimeoutSec 'BuildSolution' @($dte)
+    Write-Output $done
+    exit 0
+}
+
+# 'GetActiveDocumentDiagnostics' is a HARNESS-ONLY QUERY (m14/BP-24): prints the error/warning
+# counts for the ACTIVE document from the VS Error List, filtered to the active file — the same
+# filter the ErrorListGatherer uses (severity + file + Line > 0). Prints 'errors=N' and
+# 'warnings=M' on separate lines. No product code or diagnostic is touched.
+if ($Command -eq 'GetActiveDocumentDiagnostics') {
+    $result = Invoke-DteWithTimeout { param($dte)
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $doc = $dte.ActiveDocument
+        $errors = 0; $warnings = 0
+        if ($doc) {
+            $path = $doc.FullName
+            $items = $dte.ToolWindows.ErrorList.ErrorItems
+            $count = $items.Count
+            for ($i = 1; $i -le $count; $i++) {
+                try {
+                    $item = $items.Item($i)
+                    if ($item.Line -gt 0 -and $item.FileName -and $item.FileName -eq $path) {
+                        if ($item.ErrorLevel -eq 3) { $errors++ }          # vsBuildErrorLevelHigh
+                        elseif ($item.ErrorLevel -eq 2) { $warnings++ }     # vsBuildErrorLevelMedium
+                    }
+                } catch { }
+            }
+        }
+        $lines.Add("errors=$errors")
+        $lines.Add("warnings=$warnings")
+        return $lines
+    } $QueryTimeoutSec 'GetActiveDocumentDiagnostics' @($dte)
+    foreach ($ln in $result) { Write-Output $ln }
+    exit 0
+}
+
 # 'File.Open' opens a file via dte.ItemOperations.OpenFile — no file-picker dialog. The
 # ExecuteCommand('File.Open*', path) arg path is UNTRUSTED in this VS build (see the
 # Solution.Open note below: File.OpenProject ignored its arg and opened the dialog). Used by

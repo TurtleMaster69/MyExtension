@@ -60,6 +60,22 @@ namespace MyExtension.ToolWindows
         };
 
         /// <summary>
+        /// m5 (BP-10): the <paramref name="focusedBox"/> overload — the caller resolves the focused
+        /// WPF text box ONCE and passes it through, so the visual tree is not walked twice per
+        /// routed key (the gate + the internal walk). The <see cref="TextMotionHelper.TryMoveFocusedSurface(Keys, out bool, System.Windows.Controls.TextBox?)"/>
+        /// overload at TextMotionHelper.cs:90 already avoids the second walk.
+        /// </summary>
+        protected Func<bool> TextMotion(Keys key, System.Windows.Controls.TextBox? focusedBox) => () =>
+        {
+            bool handled = TextMotionHelper.TryMoveFocusedSurface(key, out bool enteredInputMode, focusedBox);
+            if (handled && enteredInputMode)
+            {
+                EnterInputMode();
+            }
+            return handled;
+        };
+
+        /// <summary>
         /// Adds the shared w/b/e vim text-motion action wiring to <paramref name="actions"/> (m16 —
         /// the single source for the text-input surfaces' word motions).
         /// </summary>

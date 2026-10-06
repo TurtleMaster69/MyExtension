@@ -50,7 +50,8 @@ if (-not $Docs) {
         '.opencode/skills/vs-extension-dev/SKILL.md',
         'docs/spec.md',
         'docs/progress.md',
-        'docs/reviews/architecture-review.md'
+        'docs/reviews/architecture-review.md',
+        'docs/reviews/code-review.md'
     ) + (Get-ChildItem (Join-Path $repoRoot '.opencode/agent') -Filter '*.md' |
         ForEach-Object { '.opencode/agent/' + $_.Name })
 }
@@ -110,6 +111,11 @@ $docScopedAllowlist = @{
     'docs/spec.md' = @('CardinalNavigation')
     'docs/progress.md' = @('CardinalNavigationConstants', 'RectCoordinate', 'UtilityMethods', 'WindowAdapter', 'WindowMatrix')
     'docs/reviews/architecture-review.md' = @('DistinctBy', 'CardinalMovment', 'CardinalNavigation', 'RectCoordinate', 'WindowAdapter', 'WindowMatrix')
+    # m19 (BP-34): the code-review.md prose cites the DELETED symbols (PaneNavigationEngine.cs,
+    # TryDispatch.cs) — the same pattern as architecture-review.md above. `Unhook` is a proposed
+    # method name in the m2 finding's prose (the gatherer "has no Dispose/Unhook") that was never
+    # implemented under that name (the fix used Dispose/HookEvents) — scoped to this review doc.
+    'docs/reviews/code-review.md' = @('PaneNavigationEngine', 'TryDispatch', 'Unhook')
     '.opencode/agent/code-review-worker.md' = @('DistinctBy')
     # Trailmark PYTHON types cited by the Trailmark-guidance doc (the QueryEngine
     # construction CORRECTION, 2026-10-04) — unresolvable in the C#-scoped lint by design.
@@ -223,8 +229,7 @@ function Test-ToolFunctionExists([string]$token) {
 }
 
 function Test-PathRef([string]$token) {
-    $p = $token -replace ':[\d,]+$', ''       # strip "file.cs:123" / "file.cs:806,910" line refs
-    $p = $p -replace ':\d+-\d+$', ''          # strip "file.cs:102-115" line RANGE refs
+    $p = $token -replace ':[\d,\-]+$', '' # strip "file.cs:123" / "file.cs:806,910" / "file.cs:102-115" / "file.cs:120-131,148-182" line refs
     $p = $p.TrimEnd('/') -replace '\\', '/'
     if ($intentionallyAbsent -contains $p) { return $true }
     if ($runtimeArtifacts -contains $p) { return $true }

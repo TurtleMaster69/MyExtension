@@ -266,6 +266,56 @@ function Get-ActiveDocumentPath([int]$devenvPid) {
     return ''
 }
 
+function Get-SolutionExplorerVisible([int]$devenvPid) {
+    # Harness-only query (m16/BP-26): returns $true while the Solution Explorer tool window is
+    # visible — the same check the SolutionExplorerController's IsSolutionExplorerVisible uses
+    # (dte.Windows.Item(vsWindowKindSolutionExplorer).Visible). FAIL-CLOSED: a query failure
+    # returns $true (still visible) so the close-outcome poll times out and fails rather than
+    # passing on an unverifiable state.
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { return $true }
+    try {
+        $out = & $dteCmd -DevenvPid $devenvPid -Command 'GetSolutionExplorerVisible' 2>$null
+        if ($out) { return ([string]($out | Select-Object -Last 1)).Trim() -eq 'True' }
+    } catch { }
+    return $true
+}
+
+function Get-SolutionExplorerFiles([int]$devenvPid) {
+    # Harness-only query (n11/BP-28): returns the visible physical .cs file paths in the Solution
+    # Explorer tree (the native search-box filter is reflected in the UIHierarchyItems
+    # enumeration). Used to poll the filtered tree until it shows the single GrepProbe.cs result.
+    # A query failure returns an empty list (the poll keeps waiting and eventually times out).
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { return @() }
+    try {
+        $out = & $dteCmd -DevenvPid $devenvPid -Command 'GetSolutionExplorerFiles' 2>$null
+        if ($out) { return @($out | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -ne '' }) }
+    } catch { }
+    return @()
+}
+
+function Get-ActiveDocumentDiagnostics([int]$devenvPid) {
+    # Harness-only query (m14/BP-24): returns @{ Errors = <n>; Warnings = <n> } for the ACTIVE
+    # document from the VS Error List, filtered to the active file — the same filter the
+    # ErrorListGatherer uses (severity + file + Line > 0). FAIL-CLOSED: a query failure returns
+    # @{ Errors = -1; Warnings = -1 } so the scenario treats an unverifiable Error List as "cannot
+    # prove empty" and fails rather than passing on a no-op.
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    if (-not (Test-Path $dteCmd)) { return @{ Errors = -1; Warnings = -1 } }
+    try {
+        $out = & $dteCmd -DevenvPid $devenvPid -Command 'GetActiveDocumentDiagnostics' 2>$null
+        $errors = -1; $warnings = -1
+        foreach ($ln in @($out)) {
+            $s = ([string]$ln).Trim()
+            if ($s -match '^errors=(\d+)$') { $errors = [int]$Matches[1] }
+            elseif ($s -match '^warnings=(\d+)$') { $warnings = [int]$Matches[1] }
+        }
+        return @{ Errors = $errors; Warnings = $warnings }
+    } catch { }
+    return @{ Errors = -1; Warnings = -1 }
+}
+
 function Get-LastLogMatch([string]$logPath, [string]$pattern) {
     # N52: return the first capture group of the LAST line matching $pattern (harness-only). Used to
     # pin the exact path a diagnostic reported (e.g. `solution-explorer select file=<path>`) so the
@@ -413,6 +463,11 @@ $script:SeedCanonical = @{
     # Uniform CRLF.
     'GotoProbe.cs'             = "partial class GotoProbe`r`n{`r`n    public void First() { }`r`n}`r`n"
     'Models/GotoProbe.More.cs' = "partial class GotoProbe`r`n{`r`n    public void Second() { }`r`n}`r`n"
+    # Deterministic diagnostics for the severity-nav scenario (m14/BP-24): CS0169 warnings (unused
+    # private fields, lines 4/6/8) + CS0029 errors (type mismatches, lines 5/7/9) so the Error List
+    # is populated deterministically after a build and the four ],e/[,e/],w/[,w assertions can
+    # assert the TARGET form. Uniform CRLF.
+    'DiagProbe.cs'          = "// DiagProbe.cs`r`nclass DiagProbe`r`n{`r`n    int unusedA;`r`n    int badA = `"x`";`r`n    int unusedB;`r`n    int badB = `"y`";`r`n    int unusedC;`r`n    int badC = `"z`";`r`n}`r`n"
 }
 
 function Assert-SeedConsistent([string]$scratchDir) {
@@ -831,6 +886,17 @@ Register-Scenario 'neovisual-window-management' {
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 150                # w (prefix)
     Send-Tap $script:VkD; Start-Sleep -Milliseconds 800                # d -> close-window
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: w,d" 'Space w d fired close-window (tool window focused)'
+    # m16 (BP-26): the close-window binding must actually CLOSE the tool window — poll via DTE
+    # that Solution Explorer is no longer visible (the IsSolutionExplorerVisible-style check the
+    # controller uses). A close-window that fires the binding but fails to close the tool window
+    # now FAILS.
+    $seClosed = $false
+    $swClose = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($swClose.Elapsed.TotalMilliseconds -lt 3000) {
+        if (-not (Get-SolutionExplorerVisible $vs.Id)) { $seClosed = $true; break }
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not $seClosed) { throw 'w,d fired the close binding but the Solution Explorer tool window is still visible' }
 }
 
 # --- neovisual-diagnostic-nav --------------------------------------------
@@ -839,12 +905,15 @@ Register-Scenario 'neovisual-window-management' {
 # Edit.GotoPreviousIssueinFile — pure command: bindings, no extension diagnostic beyond the
 # leader-binding line), and Space ] e / Space [ e / Space ] w / Space [ w fire the custom
 # severity-filtered navigator (next/prev error/warning). QUEUED (e2e deferred): registered but
-# the live gate runs later (E2E-GAP3-1). The leader-binding executed: lines are asserted ALWAYS
-# (they prove the six bindings fire); the diagnostic-nav outcome lines are asserted with
-# TOLERANT patterns (target form OR no-op form — see the comment at each assertion) because the
-# seeded scratch solution's Error List state is not deterministic across machines (build /
-# IntelliSense analysis timing): the OUTCOME (fired vs no-op + why) is the contract, never a
-# specific target line. Key injection: '[' / ']' go through Send-Text, whose punct table maps
+# the live gate runs later (E2E-CR34-3). The leader-binding executed: lines are asserted ALWAYS
+# (they prove the six bindings fire). m14/BP-24: the four severity-nav outcome assertions now
+# assert the TARGET form `[NeoVisual] diagnostic-nav direction=next|prev severity=error|warning
+# target=<file> line=<n>` — the scratch solution seeds DiagProbe.cs with deterministic CS0169
+# warnings (lines 4/6/8) + CS0029 errors (lines 5/7/9), a build-settle gate (BuildSolution +
+# BuildState == Done) populates the Error List deterministically, and the Error List is queried
+# for the active document; the TARGET form is asserted when the relevant severity count > 0 (a
+# navigator that ALWAYS no-ops must now FAIL), the no-op form only when the Error List is
+# provably empty. Key injection: '[' / ']' go through Send-Text, whose punct table maps
 # them UNSHIFTED ('[' -> @(0xDB, $false), ']' -> @(0xDD, $false) — harness-common.ps1:119); the
 # matcher's non-letter path is shift-insensitive, so the sequence names are ],d / [,d / ],e /
 # [,e / ],w / [,w (no Shift+bracket chord is sent — '{'/'}' would build the same names and no
@@ -871,44 +940,114 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     # custom pairs below).
     Assert-VsFocused $vs 'diagnostics navigation (custom pairs)'
 
-    # 3. Space ] e -> next ERROR (custom navigator). The diagnostic-nav outcome is asserted from
-    #    a pre-key snapshot (Assert-NewLogLineAfter): the no-op form carries NO direction/severity,
-    #    so a baseline-window search could be satisfied by the PREVIOUS pair's no-op line — the
-    #    snapshot attributes the outcome to THIS key press (R5 discipline). Tolerant pattern:
-    #    direction+severity are KEY-DERIVED (deterministic, D5 contract order) and pinned; the
-    #    outcome form (target vs no-op) is Error-List-state-dependent and accepted either way.
-    #    The 'failed:' variant is deliberately NOT accepted — a gather failure on a healthy
+    # 3. Open DiagProbe.cs (the deterministic diagnostics file) via DTE.
+    $dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+    $scratch = Join-Path $env:TEMP 'telescope_scratch'
+    $diagPath = Join-Path (Join-Path $scratch 'Probe') 'DiagProbe.cs'
+    & $dteCmd -DevenvPid $vs.Id -Command 'File.Open' -Arg $diagPath 2>$null | Out-Null
+    Start-Sleep -Milliseconds 600
+    $active = Get-ActiveDocumentPath $vs.Id
+    if (-not $active -or -not $active.EndsWith('DiagProbe.cs', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "neovisual-diagnostic-nav: DiagProbe.cs is not the active document ('$active') - setup drift"
+    }
+
+    # 4. Build-settle gate: build the solution + wait for BuildState == Done so the Error List is
+    #    populated deterministically (the old tolerant assertions accepted the Error-List
+    #    nondeterminism; the build makes it deterministic).
+    $builtOut = & $dteCmd -DevenvPid $vs.Id -Command 'BuildSolution' 2>$null
+    $built = ([string]($builtOut | Select-Object -Last 1)).Trim() -eq 'True'
+    if (-not $built) { throw 'neovisual-diagnostic-nav: BuildSolution did not complete (timeout)' }
+    Start-Sleep -Milliseconds 800
+
+    # 5. Query the Error List for the active document (DiagProbe.cs). The build populates the Error
+    #    List asynchronously, so poll until the deterministic seed's errors AND warnings are visible
+    #    (bounded). A query failure (-1) fails the scenario — an unverifiable Error List must not
+    #    pass on a no-op. Only a genuinely empty Error List (both counts 0 after the poll) accepts
+    #    the no-op form.
+    $diag = $null
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 15) {
+        $diag = Get-ActiveDocumentDiagnostics $vs.Id
+        if ($diag.Errors -gt 0 -and $diag.Warnings -gt 0) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($null -eq $diag -or $diag.Errors -lt 0 -or $diag.Warnings -lt 0) {
+        throw "neovisual-diagnostic-nav: could not query the Error List (errors=$($diag.Errors) warnings=$($diag.Warnings))"
+    }
+    $hasErrors = ($diag.Errors -gt 0)
+    $hasWarnings = ($diag.Warnings -gt 0)
+
+    # 6. Re-activate the DiagProbe.cs tab (the build may have moved focus) + position the caret at
+    #    a known line (line 6 — between the first error/warning pair and the rest) so BOTH next and
+    #    prev have targets for both severities. DiagProbe.cs:
+    #      1: // DiagProbe.cs
+    #      2: class DiagProbe
+    #      3: {
+    #      4:     int unusedA;      <- CS0169 warning
+    #      5:     int badA = "x";   <- CS0029 error
+    #      6:     int unusedB;      <- CS0169 warning
+    #      7:     int badB = "y";   <- CS0029 error
+    #      8:     int unusedC;      <- CS0169 warning
+    #      9:     int badC = "z";   <- CS0029 error
+    #     10: }
+    #    After opening, the caret is line 1 col 0; j x5 descends to line 6.
+    & $dteCmd -DevenvPid $vs.Id -Command 'File.Open' -Arg $diagPath 2>$null | Out-Null
+    Start-Sleep -Milliseconds 400
+    Enter-NormalContext $vs
+    Assert-VsFocused $vs 'diagnostics navigation caret positioning'
+    foreach ($i in 1..5) { Send-Tap $script:VkJ; Start-Sleep -Milliseconds 200 }
+
+    # 7. Space ] e -> next ERROR (custom navigator). The outcome is asserted from a pre-key
+    #    snapshot (Assert-NewLogLineAfter) so it is attributed to THIS key press (R5 discipline).
+    #    TARGET form when errors exist; no-op form only when the Error List is provably empty for
+    #    errors. The 'failed:' variant is deliberately NOT accepted — a gather failure on a healthy
     #    instance is a defect the live gate must surface (M15 proves it cannot crash the hook).
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
     Send-Text ']'; Start-Sleep -Milliseconds 150               # ]
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkE; Start-Sleep -Milliseconds 800        # e -> next-error
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],e" 'Space ] e fired next-error'
-    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=next severity=error |no-op: )" '],e logged a diagnostic-nav outcome (target or no-op)'
+    if ($hasErrors) {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=next severity=error target=.*DiagProbe\.cs line=\d+" '],e navigated to the next error (target form)'
+    } else {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '],e logged a no-op (Error List provably empty for errors)'
+    }
 
-    # 4. Space [ e -> previous ERROR.
+    # 8. Space [ e -> previous ERROR.
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
     Send-Text '['; Start-Sleep -Milliseconds 150               # [
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkE; Start-Sleep -Milliseconds 800        # e -> prev-error
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,e" 'Space [ e fired prev-error'
-    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=prev severity=error |no-op: )" '[,e logged a diagnostic-nav outcome (target or no-op)'
+    if ($hasErrors) {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=prev severity=error target=.*DiagProbe\.cs line=\d+" '[,e navigated to the previous error (target form)'
+    } else {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '[,e logged a no-op (Error List provably empty for errors)'
+    }
 
-    # 5. Space ] w -> next WARNING.
+    # 9. Space ] w -> next WARNING.
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
     Send-Text ']'; Start-Sleep -Milliseconds 150               # ]
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> next-warning
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],w" 'Space ] w fired next-warning'
-    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=next severity=warning |no-op: )" '],w logged a diagnostic-nav outcome (target or no-op)'
+    if ($hasWarnings) {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=next severity=warning target=.*DiagProbe\.cs line=\d+" '],w navigated to the next warning (target form)'
+    } else {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '],w logged a no-op (Error List provably empty for warnings)'
+    }
 
-    # 6. Space [ w -> previous WARNING.
+    # 10. Space [ w -> previous WARNING.
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
     Send-Text '['; Start-Sleep -Milliseconds 150               # [
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> prev-warning
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,w" 'Space [ w fired prev-warning'
-    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav (direction=prev severity=warning |no-op: )" '[,w logged a diagnostic-nav outcome (target or no-op)'
+    if ($hasWarnings) {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=prev severity=warning target=.*DiagProbe\.cs line=\d+" '[,w navigated to the previous warning (target form)'
+    } else {
+        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '[,w logged a no-op (Error List provably empty for warnings)'
+    }
 }
 
 # --- neovisual-git-bindings ------------------------------------------------
@@ -1350,7 +1489,19 @@ Register-Scenario 'explorer-open-searchbox' {
     Assert-NewLogLine $logPath "$($script:PfxNeo)toolwindow-enter-input" 'i entered tool-window input mode'
     # Type a query that filters the tree to a single file (native live filtering).
     Send-Text 'GrepProbe'
-    Start-Sleep -Milliseconds 500
+    # n11 (BP-28): native search-box filtering emits no log line, so wait-on-log-line is NOT
+    # feasible — poll the filtered tree via DTE until it shows the single GrepProbe.cs result
+    # (the native filter is reflected in the UIHierarchyItems enumeration). Replaces the fixed
+    # 500ms sleep (no sleepy-test smell).
+    $swFilter = [System.Diagnostics.Stopwatch]::StartNew()
+    $filtered = $false
+    while ($swFilter.Elapsed.TotalMilliseconds -lt 10000) {
+        $files = Get-SolutionExplorerFiles $vs.Id
+        $cs = @($files | Where-Object { $_ -match '\.cs$' })
+        if ($cs.Count -eq 1 -and $cs[0] -match 'GrepProbe\.cs$') { $filtered = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $filtered) { throw 'the Solution Explorer search-box filter did not show the single GrepProbe.cs result' }
     # Escape exits input mode and refocuses the tree (View.SolutionExplorer); the native filter
     # keeps the single GrepProbe.cs result selected.
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400
@@ -1408,9 +1559,11 @@ Register-Scenario 'telescope-wrap' {
     Reset-LogBaseline $logPath
     Open-Telescope $vs $logPath
     Assert-OverlayFocused $vs
-    $lines = Get-Content $logPath
+    # T5 (m13): read the candidate count from the LogCache tail-read (Update-LogCache), not a
+    # whole-log Get-Content that bypasses the incremental reader.
     $cand = 0
-    foreach ($ln in $lines) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) { if ($ln -match 'open finder=Files candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 3) { throw "expected >=3 candidates for wrap test, found $cand" }
 
     Send-Tap $script:VkEscape; Start-Sleep -Milliseconds 400   # normal mode
@@ -1433,11 +1586,14 @@ Register-Scenario 'telescope-preview' {
 
     # The selected (first) candidate must be a real file so the preview has content.
     Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*\.cs" 'preview loaded the selected file content'
-    # The preview hosts a real editor view; the count is the classifier's span count. KNOWN LIMITATION
-    # (2026-10-04): the workspace-detached preview buffer gets no Roslyn C# classifier, so the count
-    # reads 0 (no semantic highlighting) until the workspace-attach fix lands (in flight in the
-    # planning hub); the assertion pins the line's PRESENCE, not a non-zero count.
-    Assert-NewLogLine $logPath "$($script:PfxTel)preview tokens=\d+" 'preview rendered syntax-highlighted tokens'
+    # The preview hosts a real editor view; the count is the classifier's span count. KNOWN
+    # LIMITATION (2026-10-04, m15): the count is read synchronously at view creation — BEFORE async
+    # classification lands — so it reads 0 for BOTH buffer sources (the workspace-attached Peek
+    # buffer and the standalone content-type buffer) and cannot discriminate engagement. This is a
+    # KNOWN-LIMITATION SMOKE CHECK ONLY: it pins the line's PRESENCE (the preview emitted the
+    # tokens= diagnostic), NOT a non-zero count and NOT highlighting proof. Do NOT assert a non-zero
+    # count here — the semantic coloring is verified by the manual visual pass, not by this line.
+    Assert-NewLogLine $logPath "$($script:PfxTel)preview tokens=\d+" 'preview emitted the tokens= diagnostic (known-limitation smoke check — count reads 0 for both buffer sources)'
     # M-M7 FOCUS PREAMBLE: the overlay opens on the INPUT pane, where Ctrl+L (RIGHT) is a
     # pinned no-op edge (nothing right of the full-width Input). Land on the LIST first:
     # Ctrl+K (Input -> Preview, the pinned UP target) then Ctrl+H (Preview -> List).
@@ -1696,14 +1852,15 @@ Register-Scenario 'telescope-references' {
     Assert-OverlayFocused $vs
     Assert-NewLogLine $logPath "$($script:PfxTel)open finder=References candidates=(\d+)" 'references finder listed candidates'
     $cand = 0
-    $lines = Get-Content $logPath
-    foreach ($ln in $lines) { if ($ln -match 'open finder=References candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) { if ($ln -match 'open finder=References candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 2) { throw "expected >=2 references, found $cand" }
 
     # Step 4: gather summary proves read AND write coverage (seeded read + write sites).
     Assert-NewLogLine $logPath "$($script:PfxTel)references gathered reads=(\d+) writes=(\d+)" 'references gather summary logged'
     $reads = 0; $writes = 0
-    foreach ($ln in (Get-Content $logPath)) {
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) {
         if ($ln -match 'references gathered reads=(\d+) writes=(\d+)') { $reads = [int]$Matches[1]; $writes = [int]$Matches[2] }
     }
     if ($reads -lt 1) { throw "expected >=1 read reference, found $reads" }
@@ -1760,8 +1917,8 @@ Register-Scenario 'telescope-implementation' {
     Assert-OverlayFocused $vs
     Assert-NewLogLine $logPath "$($script:PfxTel)open finder=Implementation candidates=(\d+)" 'implementation finder listed candidates'
     $cand = 0
-    $lines = Get-Content $logPath
-    foreach ($ln in $lines) { if ($ln -match 'open finder=Implementation candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) { if ($ln -match 'open finder=Implementation candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 1) { throw "expected >=1 implementation candidate, found $cand" }
     Assert-NewLogLine $logPath "$($script:PfxTel)implementations gathered count=(\d+)" 'implementations gather summary logged'
     Assert-NewLogLine $logPath "$($script:PfxTel)results columns=kind,file$" 'Implementation default columns rendered'
@@ -1862,7 +2019,12 @@ Register-Scenario 'telescope-goto' {
         # which throw with the real signature.
         if (Wait-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 15000) { break }
         if ($attempt -eq 2) { break }
-        if (-not (Wait-NewLogLineAfter $logPath $idx "$($script:PfxTel)definitions gathered count=0" 2000)) { break }
+        # n10 (BP-27): the re-walk is gated on the OBSERVED 0-gather signature — assert the first
+        # attempt's 'definitions gathered count=0' (the existing diagnostic; NO new extension
+        # diagnostic) so a retry that runs without the 0-gather signature (or a first attempt that
+        # neither jumped directly nor gathered 0) fails HERE instead of being silently masked by
+        # the re-walk.
+        Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)definitions gathered count=0" 'first goto attempt gathered 0 definitions (the re-walk trigger)' 2000
     }
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 'goto-definition single hit jumped directly' 15000
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto line=1$" 'the direct jump opened Models/Shared.cs at line 1' 15000
@@ -1941,7 +2103,8 @@ Register-Scenario 'telescope-goto' {
     & $dteCmd -DevenvPid $vs.Id -Command $gotoRefCmd | Out-Null
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)open finder=References candidates=(\d+)" 'goto-references multi hit opened the References overlay' 15000
     $cand = 0
-    foreach ($ln in (Get-Content $logPath)) { if ($ln -match 'open finder=References candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) { if ($ln -match 'open finder=References candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 2) { throw "expected >=2 references, found $cand" }
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)references gathered reads=(\d+) writes=(\d+)" 'references gather summary logged' 15000
     Close-Telescope $vs $logPath
@@ -2378,8 +2541,8 @@ Register-Scenario 'telescope-recent' {
     # 'open finder=Recent' is unique to this step (the Recent finder is NEW — no
     # earlier scenario or Step 1 emits it), so whole-file last-match is Step 2's line.
     $cand = 0
-    $lines = Get-Content $logPath
-    foreach ($ln in $lines) { if ($ln -match 'open finder=Recent candidates=(\d+)') { $cand = [int]$Matches[1] } }
+    Update-LogCache $logPath
+    foreach ($ln in $script:LogCache) { if ($ln -match 'open finder=Recent candidates=(\d+)') { $cand = [int]$Matches[1] } }
     if ($cand -lt 1) { throw "expected >=1 recent-file candidate, found $cand" }
     Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)recent files gathered count=(\d+)" 'recent-files gather summary logged'
     Assert-NewLogLineAfter $logPath $preOpen "$($script:PfxTel)results columns=file,dir$" 'Recent default columns rendered (file,dir)'

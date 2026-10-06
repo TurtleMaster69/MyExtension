@@ -269,7 +269,7 @@ namespace MyExtension.ToolWindows
             return GetController(registered, new Dictionary<ToolWindowType, IToolWindowController>(), type);
         }
 
-        private IToolWindowController? GetController(ToolWindowType type)
+        internal IToolWindowController? GetController(ToolWindowType type)
             => GetController(_controllers, _defaultControllers, type);
 
         private static IToolWindowController? GetController(

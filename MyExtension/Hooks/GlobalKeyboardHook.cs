@@ -55,11 +55,11 @@ namespace MyExtension.Hooks
         // Our process id never changes; cached because the focus check runs for every key.
         private static readonly int CurrentProcessId = Process.GetCurrentProcess().Id;
 
-        public GlobalKeyboardHook(AsyncPackage package, Telescope.Controller.TelescopeController telescope, WindowManager windowManager, MyExtension.Package.TelescopeLauncher launcher)
+        public GlobalKeyboardHook(AsyncPackage package, Telescope.Controller.TelescopeController telescope, WindowManager windowManager, MyExtension.Package.TelescopeLauncher launcher, MyExtension.Package.ErrorListGatherer errorListGatherer)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
 
-            _inputHandler = new InputHandler(package, telescope, windowManager, launcher);
+            _inputHandler = new InputHandler(package, telescope, windowManager, launcher, errorListGatherer);
 
             // Prime the NeoVisual log pane eagerly (on the UI thread) so later any-thread writes
             // (OutputStringThreadSafe) work without a thread switch. N58: use the Log() helper

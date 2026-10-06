@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using DTE = EnvDTE.DTE;
 using EnvDTE80;
 using Telescope.Controller;
 using Telescope.Filter;
@@ -1272,6 +1274,46 @@ namespace Telescope.Tests
                     Assert.True(fzf.AwaitedReadCount >= 2,
                         "the cancellation path must observe both ReadToEndAsync tasks (AwaitedReadCount >= 2)");
                 }
+            }
+        }
+
+        // ================================================================
+        // m11 (BP-4): the fzf timeout-vs-completion race. Task.WhenAny can return `timeout` in the
+        // same instant `all` completes; the code then kills the process and returns the unfiltered
+        // `lines` even though the filter actually produced output — a wrong result + a spurious
+        // `fzf filter failed: timeout after {ms}ms` line. The stub sleeps ~FilterTimeoutMs then
+        // emits a match, so the timeout fires at the boundary. RED: today the boundary completion
+        // returns the unfiltered list + logs the spurious timeout line.
+        // ================================================================
+
+        public static void Run_FzfFilter_TimeoutRace()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    string stubPath = Path.Combine(dir.Path, "fzf-boundary.cmd");
+                    File.WriteAllText(stubPath,
+                        "@echo off\r\n" +
+                        "ping -n 2 127.0.0.1 > nul\r\n" +
+                        "echo alpha.cs\r\n");
+
+                    var fzf = new FzfFilter(stubPath) { FilterTimeoutMs = 1000 };
+                    var result = fzf.FilterAsync(new[] { "alpha.cs", "beta.txt" }, "alp", CancellationToken.None).GetAwaiter().GetResult();
+                    LogFileWriter.Flush();
+
+                    // The filter completed at the boundary: its output (only the match) must be
+                    // returned, NOT the unfiltered candidate list.
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha.cs"), "the boundary-completed filter returns its match");
+                    Assert.False(result.Contains("beta.txt"),
+                        "the boundary-completed filter must NOT return the unfiltered list (m11)");
+                    Assert.True(fzf.PendingTimeoutCount == 0, "no pending timeout timer survives");
+                    string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                    Assert.False(content.Contains("fzf filter failed: timeout after"),
+                        "a completed filter must not log the spurious timeout line (m11)");
+                });
             }
         }
 
@@ -3250,6 +3292,51 @@ namespace Telescope.Tests
             }
         }
 
+        // BP-13 (m7): the shared solution-invalidation helper must invalidate the cache exactly when
+        // the solution name changes — ONE call per solution change (the duplicated blocks in
+        // GrepFinder/FzfFinder/CodeIssuesFinder are replaced by this single helper used by all three
+        // finders; the two paths GetCandidates/WarmContentCache can no longer disagree on cache
+        // validity). RED: the shared helper does not exist -> CS0117 (the duplicated blocks are
+        // still verbatim in the finders).
+        public static void Run_GrepFinder_SharedInvalidation()
+        {
+            // Long TTL + fixed clock so the 5s ProjectFileCache expiry can never re-enumerate
+            // mid-test (the counting seam must observe ONLY the helper's invalidations).
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var cache = new ProjectFileCache(() => fixedTime, TimeSpan.FromHours(1));
+            string? cached = null;
+
+            // First call: no cached name -> a solution change -> invalidates (returns true).
+            Assert.True(ProjectFileCache.EnsureSolutionCache(cache, ref cached, "slnA.sln"),
+                "a first call with no cached name is a solution change -> invalidates (BP-13)");
+
+            // The cache is now invalidated: the next Get re-enumerates (the counting seam — one
+            // re-enumeration per invalidation).
+            int enumerations = 0;
+            cache.Get(() => { enumerations++; return new[] { "a.cs" }; });
+            Assert.Equal(1, enumerations);
+
+            // The same solution name again -> NOT a change -> does NOT invalidate (returns false).
+            Assert.False(ProjectFileCache.EnsureSolutionCache(cache, ref cached, "slnA.sln"),
+                "the same solution name is not a change -> no invalidation (BP-13)");
+
+            // The cache is still valid: Get does NOT re-enumerate.
+            cache.Get(() => { enumerations++; return new[] { "a.cs" }; });
+            Assert.Equal(1, enumerations);
+
+            // A different solution name -> a change -> invalidates (returns true).
+            Assert.True(ProjectFileCache.EnsureSolutionCache(cache, ref cached, "slnB.sln"),
+                "a different solution name is a change -> invalidates (BP-13)");
+
+            // The cache is invalidated again: Get re-enumerates (the second invalidation).
+            cache.Get(() => { enumerations++; return new[] { "a.cs" }; });
+            Assert.Equal(2, enumerations);
+
+            // The compare is case-insensitive: the same name in a different case is NOT a change.
+            Assert.False(ProjectFileCache.EnsureSolutionCache(cache, ref cached, "SLNB.SLN"),
+                "the solution-name compare is case-insensitive (BP-13)");
+        }
+
         // ================================================================
         // FzfFinder — query-driven fuzzy content finder over the solution's files
         // (hermetic seams mirroring GrepFinder: injected file-PATH source + Action<FzfHit>
@@ -3269,6 +3356,10 @@ namespace Telescope.Tests
 
             public int FilterCalls { get; private set; }
 
+            // BP-3 (M2): records the CancellationToken the finder passed to FilterAsync, so a test
+            // can assert the caller's token is threaded through (not CancellationToken.None).
+            public CancellationToken LastToken { get; private set; }
+
             public FakeFzfEngine(bool available, Func<IEnumerable<string>, string, IReadOnlyList<string>>? filter = null)
             {
                 _available = available;
@@ -3281,6 +3372,13 @@ namespace Telescope.Tests
             public Task<IReadOnlyList<string>> FilterAsync(IEnumerable<string> candidates, string query, CancellationToken ct)
             {
                 FilterCalls++;
+                LastToken = ct;
+                if (ct.IsCancellationRequested)
+                {
+                    // A cancelled gather must stop spawning fzf subprocesses: the fake surfaces the
+                    // cancellation the finder is expected to propagate.
+                    throw new OperationCanceledException(ct);
+                }
                 return Task.FromResult(_filter(candidates, query));
             }
         }
@@ -3574,6 +3672,37 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // BP-3 (M2): the query-driven gather must thread the caller's CancellationToken into
+        // FilterAsync (today FzfFinder.cs:145 passes CancellationToken.None), so a cancelled
+        // gather stops spawning fzf subprocesses. RED: GetCandidatesAsync has no token parameter
+        // yet -> CS1501 (the token threading does not exist).
+        // ================================================================
+
+        public static async Task Run_FzfFinder_Cancellation()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// NEEDLE here\n");
+
+                var engine = new FakeFzfEngine(true);
+                var finder = new FzfFinder(() => new[] { a }, _ => { }, engine);
+
+                using (var cts = new CancellationTokenSource())
+                {
+                    // The caller's token must reach FilterAsync (not CancellationToken.None), so a
+                    // cancelled gather stops spawning fzf subprocesses. RED: GetCandidatesAsync has
+                    // no token parameter -> CS1501 (the missing token threading).
+                    var entries = await finder.GetCandidatesAsync("NEEDLE", cts.Token);
+
+                    Assert.Equal(1, entries.Count);
+                    Assert.True(engine.LastToken == cts.Token,
+                        "the caller's CancellationToken must reach FilterAsync (not CancellationToken.None) — BP-3");
+                }
+            }
+        }
+
+        // ================================================================
         // FileContentCache (BP-2/M5b) — per-file content cache keyed by
         // LastWriteTimeUtc, so ScanFile stops re-reading every file per query.
         // RED: FileContentCache does not exist -> compile error (CS0246).
@@ -3654,6 +3783,167 @@ namespace Telescope.Tests
 
             Assert.Equal(2, reads);
         }
+
+        // BP-1 (m10): FileContentCache must be thread-safe — the M1 fix moves the Grep scan's pure
+        // ScanFile loop off the UI thread, so a background thread mutates the cache concurrently with
+        // the UI thread. RED: without the lock, a concurrent EvictIfNeeded scan + insert throws/races
+        // (InvalidOperationException in the foreach, or a lost/corrupted entry).
+        public static void Run_FileContentCache_ThreadSafe()
+        {
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var cache = new FileContentCache(
+                maxEntries: 3,
+                timestamp: _ => fixedTime,
+                reader: _ => new[] { "line" },
+                contentReader: _ => "content");
+
+            const int workers = 8;
+            const int perWorker = 500;
+            var barrier = new Barrier(workers);
+            var errors = new ConcurrentQueue<Exception>();
+            var threads = new List<Thread>();
+            for (int w = 0; w < workers; w++)
+            {
+                int worker = w;
+                var t = new Thread(() =>
+                {
+                    barrier.SignalAndWait();
+                    try
+                    {
+                        for (int i = 0; i < perWorker; i++)
+                        {
+                            string path = "file" + ((worker * perWorker + i) % 12) + ".cs";
+                            if ((worker + i) % 3 == 0) cache.GetLines(path);
+                            else if ((worker + i) % 3 == 1) cache.GetContent(path);
+                            else { cache.GetLines(path); cache.GetContent(path); }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Enqueue(ex);
+                    }
+                });
+                threads.Add(t);
+                t.Start();
+            }
+            foreach (var t in threads) t.Join();
+
+            Assert.True(errors.IsEmpty,
+                "no concurrent GetLines/GetContent may throw (a concurrent EvictIfNeeded scan + insert races): "
+                + (errors.IsEmpty ? "" : errors.First().GetType().Name + ": " + errors.First().Message + "\n" + errors.First().StackTrace));
+
+            // The Dictionary is uncorrupted: count never exceeds the cap and every key resolves.
+            var entries = ReadEntries(cache);
+            Assert.True(entries.Count <= 3, "the exact-total invariant holds under concurrency (count <= cap)");
+            // Snapshot the keys before the loop: cache.GetLines on a GetContent-created entry
+            // (Lines == null) re-reads + inserts + may EvictIfNeeded (removing entries), mutating
+            // the LIVE dictionary DURING the foreach enumeration -> "Collection was modified"
+            // (test-authoring bug, m10 — the production lock is correct).
+            var keys = entries.Keys.Cast<string>().ToList();
+            foreach (var key in keys)
+            {
+                string path = key;
+                Assert.Equal(1, cache.GetLines(path).Length);
+                Assert.Equal("content", cache.GetContent(path));
+            }
+        }
+
+        // BP-14 (m8): the DTE-factory finder ctors must REQUIRE the shared FileContentCache — no
+        // `?? new FileContentCache(500)` default (a finder registered without injection silently
+        // reverts to its own 500-entry cache). RED: today the param is optional
+        // (`FileContentCache? contentCache = null`), so passing null is silently swallowed by the
+        // `?? new FileContentCache(500)` fallback instead of throwing ArgumentNullException.
+        public static void Run_FileContentCache_RequiredParam()
+        {
+            // The DTE-factory ctor must reject a null cache (the required-param contract).
+            AssertThrowsArgumentNull(() => new GrepFinder(() => null!, new ProjectFileCache(), null!));
+            AssertThrowsArgumentNull(() => new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), null!));
+            AssertThrowsArgumentNull(() => new CodeIssuesFinder(() => null!, new ProjectFileCache(), null!));
+
+            // The shared instance is used when passed (reference equality on the private _contentCache).
+            var shared = new FileContentCache(500);
+            var grep = new GrepFinder(() => null!, new ProjectFileCache(), shared);
+            var fzf = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), shared);
+            var issues = new CodeIssuesFinder(() => null!, new ProjectFileCache(), shared);
+            Assert.True(ReferenceEquals(shared, ReadContentCache(grep)), "GrepFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, ReadContentCache(fzf)), "FzfFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, ReadContentCache(issues)), "CodeIssuesFinder uses the injected shared FileContentCache (BP-14)");
+        }
+
+        // BP-15 (m9): FileContentCache must evict via an O(1) LinkedList+Dictionary LRU (not the O(n)
+        // linear scan). RED: today the O(1) LRU seam (_lru) does not exist — EvictIfNeeded is O(n) per
+        // insert. The behavioral contract (touch-the-oldest survives, exact-total invariant, GetContent/
+        // GetLines share the LRU) is pinned so the O(1) rewrite must preserve it.
+        public static void Run_FileContentCache_Lru()
+        {
+            // RED: the O(1) LRU seam must exist (a LinkedList<string> _lru field).
+            var lruField = typeof(FileContentCache).GetField("_lru",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.True(lruField != null,
+                "FileContentCache must expose the O(1) LRU seam (_lru LinkedList) — BP-15 (m9)");
+
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var index = new Dictionary<string, int> { ["a"] = 0, ["b"] = 1, ["c"] = 2 };
+            int reads = 0;
+            var cache = new FileContentCache(
+                maxEntries: 2,
+                timestamp: p => fixedTime.AddSeconds(index[p]),
+                reader: _ => { reads++; return new[] { "line" }; },
+                contentReader: _ => "content");
+
+            // Touch the oldest, insert a new one -> the touched entry survives (LRU, not FIFO).
+            cache.GetLines("a"); // a:1
+            cache.GetLines("b"); // b:2
+            cache.GetLines("a"); // touch a -> a:3 (b is now the LRU)
+            cache.GetLines("c"); // insert c -> evict b (the LRU), a survives
+            int before = reads;
+            cache.GetLines("a"); // hit (a survived) -> no re-read
+            Assert.Equal(before, reads);
+            cache.GetLines("b"); // miss (b was evicted) -> re-read
+            Assert.Equal(before + 1, reads);
+
+            // The exact-total invariant: count never exceeds the cap.
+            Assert.True(ReadEntryCount(cache) <= 2, "the exact-total invariant holds (count <= cap)");
+
+            // GetContent and GetLines share the LRU: a GetContent hit refreshes the LRU position.
+            int contentReads = 0;
+            var cache2 = new FileContentCache(
+                maxEntries: 2,
+                timestamp: p => fixedTime.AddSeconds(index[p]),
+                reader: _ => { contentReads++; return new[] { "line" }; },
+                contentReader: _ => "content");
+            cache2.GetContent("a"); // a Content:1
+            cache2.GetLines("b");   // b Lines:2
+            cache2.GetContent("a"); // GetContent HIT -> refreshes a's LRU position (a:3)
+            cache2.GetLines("c");   // insert c -> evict b (the LRU), a survives
+            int before2 = contentReads;
+            cache2.GetContent("a"); // hit (a survived) -> no re-read
+            Assert.Equal(before2, contentReads);
+            cache2.GetLines("b");   // miss (b was evicted) -> re-read
+            Assert.Equal(before2 + 1, contentReads);
+        }
+
+        private static void AssertThrowsArgumentNull(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (ArgumentNullException)
+            {
+                return;
+            }
+            throw new Exception("expected ArgumentNullException for a null FileContentCache (BP-14)");
+        }
+
+        private static System.Collections.IDictionary ReadEntries(FileContentCache cache)
+        {
+            return (System.Collections.IDictionary)typeof(FileContentCache)
+                .GetField("_entries", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(cache)!;
+        }
+
+        private static int ReadEntryCount(FileContentCache cache) => ReadEntries(cache).Count;
 
         // ================================================================
         // IFinder query fold — GetCandidates(string) + IsQueryDriven (BP-8/L6)
@@ -4320,6 +4610,59 @@ namespace Telescope.Tests
             Assert.Equal(FocusTarget.List, model.Current);
         }
 
+        // BP-12 (m6): the mirrored geometric pipeline (SelectTarget) must be replaced by a ~10-line
+        // direction->target table for the fixed 3-pane layout. The table MUST reproduce the pinned
+        // moves byte-identically (the Ctrl+K Input->Preview tie-break + the no-op edges). RED: today
+        // SelectTarget (the mirrored pipeline) still exists -> the reflection check fails. The
+        // behavior assertions pin the pinned moves the table must preserve; the ~30 Run_FocusTarget_*
+        // tests stay GREEN. The standard layout (NewModelAt): Input full-width below, List/Preview
+        // on top.
+        public static void Run_FocusTargetModel_DirectionTable()
+        {
+            // RED: the mirrored geometric pipeline (SelectTarget) must be GONE — replaced by the
+            // direction->target table (BP-12). Today it still exists -> this assertion fails.
+            var selectTarget = typeof(FocusTargetModel).GetMethod("SelectTarget",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert.True(selectTarget == null,
+                "FocusTargetModel.SelectTarget (the mirrored geometric pipeline) must be replaced by a direction->target table (BP-12)");
+
+            // Ctrl+K Input -> Preview (the pinned tie-break: the equal-width last-in-list net).
+            var model = NewModelAt(FocusTarget.Input);
+            Assert.Equal(FocusTargetAction.Handled, model.Handle(PaneFocusKey.Up));
+            Assert.Equal(FocusTarget.Preview, model.Current);
+
+            // Ctrl+H Preview -> List.
+            model = NewModelAt(FocusTarget.Preview);
+            Assert.Equal(FocusTargetAction.Handled, model.Handle(PaneFocusKey.Left));
+            Assert.Equal(FocusTarget.List, model.Current);
+
+            // Ctrl+J List -> Input.
+            model = NewModelAt(FocusTarget.List);
+            Assert.Equal(FocusTargetAction.Handled, model.Handle(PaneFocusKey.Down));
+            Assert.Equal(FocusTarget.Input, model.Current);
+
+            // The no-op edges (a direction with no pane -> NoOp, NO wrap).
+            model = NewModelAt(FocusTarget.Input);
+            Assert.Equal(FocusTargetAction.NoOp, model.Handle(PaneFocusKey.Left));   // Left from Input
+            Assert.Equal(FocusTarget.Input, model.Current);
+
+            model = NewModelAt(FocusTarget.Preview);
+            Assert.Equal(FocusTargetAction.NoOp, model.Handle(PaneFocusKey.Right));  // Right from Preview
+            Assert.Equal(FocusTarget.Preview, model.Current);
+
+            model = NewModelAt(FocusTarget.List);
+            Assert.Equal(FocusTargetAction.NoOp, model.Handle(PaneFocusKey.Up));     // Up from List
+            Assert.Equal(FocusTarget.List, model.Current);
+
+            model = NewModelAt(FocusTarget.Preview);
+            Assert.Equal(FocusTargetAction.NoOp, model.Handle(PaneFocusKey.Up));     // Up from Preview
+            Assert.Equal(FocusTarget.Preview, model.Current);
+
+            model = NewModelAt(FocusTarget.Input);
+            Assert.Equal(FocusTargetAction.NoOp, model.Handle(PaneFocusKey.Down));   // Down from Input
+            Assert.Equal(FocusTarget.Input, model.Current);
+        }
+
         // ================================================================
         // ListKeyMap — the List pane's pinned consume-vs-fallthrough contract (Feature 7)
         // RED: `ListKeyMap` doesn't exist -> compile error (CS0246).
@@ -4362,11 +4705,16 @@ namespace Telescope.Tests
         // RED: `PaneSelectionSync` doesn't exist -> compile error (CS0246).
         // ================================================================
 
-        public static void Run_PaneSelectionSync_Steps()
+        // BP-18 (n6): the over-engineered PaneSelectionSync.Steps wrapper must be GONE — the call
+        // site inlines the one-line subtraction. RED: today Steps still exists -> the assertion
+        // fails. The old Run_PaneSelectionSync_Steps (which pinned the sign contract of the deleted
+        // method) is DELETED.
+        public static void Run_PaneSelectionSync_StepsRemoved()
         {
-            Assert.Equal(3, PaneSelectionSync.Steps(2, 5));    // 3 Downs
-            Assert.Equal(-3, PaneSelectionSync.Steps(5, 2));   // 3 Ups (the sign is the direction)
-            Assert.Equal(0, PaneSelectionSync.Steps(4, 4));    // no replay
+            var steps = typeof(PaneSelectionSync).GetMethod("Steps",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            Assert.True(steps == null,
+                "PaneSelectionSync.Steps must be deleted (BP-18) — the call site inlines the subtraction");
         }
 
         // ================================================================
@@ -4737,6 +5085,34 @@ namespace Telescope.Tests
         }
 
         // ================================================================
+        // n7 (BP-19): the IsAvailableAsync probe must be interlocked — two CONCURRENT callers run
+        // the bounded probe ONCE (a SemaphoreSlim/Task<bool> interlock), not twice. RED: today both
+        // concurrent callers pass the `_probed` check before either completes, so both run
+        // ProbeIsAvailable (the marker records 2 invocations).
+        // ================================================================
+
+        public static void Run_FzfFilter_ProbeInterlocked()
+        {
+            using (var dir = new TempDir())
+            {
+                string marker = Path.Combine(dir.Path, "probe-count.txt");
+                string stubPath = Path.Combine(dir.Path, "probe.cmd");
+                File.WriteAllText(stubPath, $"@echo off\r\necho x>> \"{marker}\"\r\nexit /b 0\r\n");
+
+                var fzf = new FzfFilter(stubPath);
+                var results = Task.WhenAll(fzf.IsAvailableAsync(), fzf.IsAvailableAsync()).GetAwaiter().GetResult();
+
+                Assert.True(results[0], "the first concurrent probe reports available");
+                Assert.True(results[1], "the second concurrent probe reports available");
+
+                string content = File.Exists(marker) ? File.ReadAllText(marker) : string.Empty;
+                int spawns = content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Length;
+                Assert.True(spawns == 1,
+                    $"two concurrent IsAvailableAsync calls must run the probe ONCE (n7/BP-19) — got {spawns}");
+            }
+        }
+
+        // ================================================================
         // BP-7: QuoteArg Windows argv-quoting edge cases. Guards (QuoteArg is already correct).
         // ================================================================
 
@@ -4936,6 +5312,29 @@ namespace Telescope.Tests
             // A prompt motion (h) consumed before Handle must clear the pending g (BP-12).
             h.CancelPendingG();
             // The next 'g' must NOT fire MoveToFirst (gg) — it re-arms.
+            Assert.Equal(OverlayAction.None, h.Handle(OverlayKey.G));
+            Assert.Equal(OverlayAction.MoveToFirst, h.Handle(OverlayKey.G));
+        }
+
+        // BP-16 (m12): a focus change clears the pending-g — `g` in one pane -> a focus change (the
+        // CancelPendingG call) -> `g` in another does NOT fire `gg` (the second `g` re-arms instead
+        // of MoveToFirst). The overlay's FocusPane (the single key/click/restore focus path) calls
+        // CancelPendingG() before applying any focus change; this pins the handler contract that
+        // fix relies on. The existing Run_OverlayKeyHandler_CancelPendingG stays GREEN.
+        public static void Run_OverlayKeyHandler_CancelPendingGOnFocusChange()
+        {
+            var h = new OverlayKeyHandler();
+            h.Reset();
+            h.SetResults(4);
+            Assert.Equal(OverlayAction.EnterNormal, h.Handle(OverlayKey.Escape));
+
+            // 'g' in the first pane arms the pending gg.
+            Assert.Equal(OverlayAction.None, h.Handle(OverlayKey.G));
+
+            // A focus change (the CancelPendingG call) clears the pending-g.
+            h.CancelPendingG();
+
+            // 'g' in another pane must NOT fire MoveToFirst (gg) — it re-arms.
             Assert.Equal(OverlayAction.None, h.Handle(OverlayKey.G));
             Assert.Equal(OverlayAction.MoveToFirst, h.Handle(OverlayKey.G));
         }

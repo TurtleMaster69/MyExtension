@@ -483,13 +483,13 @@ namespace Telescope.Overlay
         private void RefreshResults(string query)
         {
             CancelFilter();
-            if (_activeFinder.IsQueryDriven)
-            {
-                _ = RefreshQueryDrivenAsync(_activeFinder, query);
-                return;
-            }
             _filterCts = new CancellationTokenSource();
             var token = _filterCts.Token;
+            if (_activeFinder.IsQueryDriven)
+            {
+                _ = RefreshQueryDrivenAsync(_activeFinder, query, token);
+                return;
+            }
             var snapshot = _candidates;
 
             _ = FilterAndUpdateAsync(snapshot, query, token);
@@ -499,15 +499,17 @@ namespace Telescope.Overlay
         /// Query-driven gather (grep semantics — literal substring, no fzf): debounce the scan
         /// until typing settles, then re-gather candidates from the finder and render them
         /// directly. The await captures the WPF SynchronizationContext, so the synchronous scan
-        /// resumes on the UI thread.
+        /// resumes on the UI thread. The <paramref name="token"/> is the overlay's per-query
+        /// <c>_filterCts</c> token (M2/BP-3) — a cancelled gather stops spawning fzf subprocesses.
         /// </summary>
-        private async Task RefreshQueryDrivenAsync(IFinder finder, string query)
+        private async Task RefreshQueryDrivenAsync(IFinder finder, string query, CancellationToken token)
         {
             int gen = ++_queryGeneration;
             await Task.Delay(QueryDebounceMs); // resumes on the UI thread (SynchronizationContext)
             if (gen != _queryGeneration || !IsOpen) return;
             IReadOnlyList<FinderEntry> results;
-            try { results = await finder.GetCandidatesAsync(query) ?? Array.Empty<FinderEntry>(); }
+            try { results = await finder.GetCandidatesAsync(query, token) ?? Array.Empty<FinderEntry>(); }
+            catch (OperationCanceledException) { return; }
             catch (Exception ex) { TelescopeLog.Log($"query gather failed: {ex.Message}"); results = Array.Empty<FinderEntry>(); }
             if (gen != _queryGeneration || !IsOpen) return;
             _results = results;
@@ -783,7 +785,9 @@ namespace Telescope.Overlay
             {
                 return;   // an ItemsSource reset / cleared selection — nothing to adopt
             }
-            int steps = PaneSelectionSync.Steps(_selectedIndex, to);
+            // n6 (BP-18): the one-line step math is inlined here (the PaneSelectionSync.Steps
+            // wrapper is deleted).
+            int steps = to - _selectedIndex;
             if (steps == 0)
             {
                 return;
@@ -1134,9 +1138,12 @@ namespace Telescope.Overlay
 
         /// <summary>One focus change: the machine's decision + the M-M7 diagnostic + the UI apply.
         /// The SINGLE path for key-driven AND click-driven AND restore-driven focus changes. Logs
-        /// exactly one <c>focus target=&lt;token&gt;</c> line per change (never at open — plan §1.5).</summary>
+        /// exactly one <c>focus target=&lt;token&gt;</c> line per change (never at open — plan §1.5).
+        /// m12 (BP-16): clears the pending-g first so a <c>g</c> in one pane → a focus change →
+        /// <c>g</c> in another can never fire <c>gg</c> (MoveToFirst) from a stale pending-g.</summary>
         private void FocusPane(FocusTarget target)
         {
+            _keyHandler.CancelPendingG();
             _focusTargetModel.Focus(target);
             TelescopeLog.Log($"focus target={target}");
             ApplyFocusTarget(target);

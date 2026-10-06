@@ -73,5 +73,18 @@ namespace MyExtension.Input
             }
             return SimpleShortcutResult.PassThrough;
         }
+
+        /// <summary>
+        /// True when <paramref name="key"/> with ONLY Shift held is a bound simple shortcut
+        /// (M3/BP-5). The hook pre-filter uses this so a bound Shift+ chord reaches
+        /// <see cref="HandleKey"/> (where it executes and logs <c>shortcut-binding executed:
+        /// Shift+...</c>) while unbound uppercase letters stay cheap — one string build + O(1)
+        /// lookup per uppercase letter (the R11 hot-path rationale is preserved for unbound keys).
+        /// </summary>
+        public bool IsBoundShiftChord(Keys key)
+        {
+            string name = KeyNameBuilder.Build(key, ctrl: false, shift: true, alt: false);
+            return _bindings.ContainsKey(name);
+        }
     }
 }

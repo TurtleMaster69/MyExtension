@@ -23,6 +23,15 @@ namespace MyExtension.Navigation
         // the linked filter is stable (navigation keeps the active window within the same linked
         // group), so the O(n) COM LinkedWindowFrame/Type/Caption reads in LinkedTo run once per
         // window-set change instead of per keystroke.
+        // n1 (BP-20): the cache is DELIBERATELY static + reference-keyed, NOT instance-scoped — a
+        // new WindowNavigator is built per navigation (InputHandler.cs:554), so an instance cache
+        // would always be cold. The reference-keyed static cache self-invalidates on window-set
+        // change (keyed on the adapters list reference + the active window; WindowManager
+        // re-enumerates on focus change -> a new list -> the cache is invalidated exactly when the
+        // window set can change). Retention is bounded: the cache holds at most ONE linked-list per
+        // window-set (the previous list reference is dropped on the next BuildActiveWindows call,
+        // releasing its COM RCWs). The A6 copy guarantee is present (BuildActiveWindows returns a
+        // COPY — a navigator mutating the returned list can never corrupt the shared cache).
         private static List<WindowFrameAdapter>? _cachedLinked;
         private static IReadOnlyList<WindowFrameAdapter>? _cachedLinkedSource;
         // N11: the cache is also keyed on the active window — the adapters list reference alone is
@@ -50,15 +59,16 @@ namespace MyExtension.Navigation
             // becomes a no-op) and log.
             try
             {
-                DTE? dteService = MyExtension.Package.VsServices.Dte(package);
-
                 _settings = NavigationSettings.FromSystemDpi();
 
                 // The active window is sourced from WindowManager's cached frame instead of re-deriving
                 // it from DTE.ActiveWindow — WindowManager already tracks focus via selection events.
+                // n2 (BP-21): the DTE resolution is LAZY — only resolved when currentFrame == null
+                // (the fallback branch); when currentFrame != null the active window comes from the
+                // frame and DTE is never touched.
                 EnvDTE.Window? activeWindow = currentFrame != null
                     ? VsShellUtilities.GetWindowObject(currentFrame)
-                    : dteService?.ActiveWindow;
+                    : MyExtension.Package.VsServices.Dte(package)?.ActiveWindow;
 
                 // BuildActiveWindows null-checks the active window BEFORE linking (m44), so a null
                 // active window degrades to an empty list instead of dereferencing it in LinkedTo.

@@ -33,7 +33,8 @@ namespace MyExtension.Adornments
         private readonly Rectangle _white;
         private readonly TextBlock _glyph;
 
-        private bool _active;
+        private bool _desiredActive;
+        private bool _renderedActive;
 
         // Tag for OUR adornment only. The native VS caret lives on the same "Caret" layer, so we
         // must never RemoveAllAdornments() — that would delete the native caret too (leaving NO
@@ -62,30 +63,45 @@ namespace MyExtension.Adornments
             _view.Caret.PositionChanged += OnCaretChanged;
             _view.LayoutChanged += OnLayoutChanged;
             _view.LostAggregateFocus += OnLostFocus;
+            // m4 (BP-9): the mirror of LostAggregateFocus — a normal-mode editor view that loses
+            // and regains focus must re-render the block caret (the desired state survives focus
+            // loss; the rendered state is restored on regain).
+            _view.GotAggregateFocus += OnGotFocus;
             _view.Closed += OnClosed;
         }
 
-        /// <summary>True while a block caret should be drawn over this view.</summary>
+        /// <summary>True while a block caret SHOULD be drawn over this view (the DESIRED state —
+        /// what <see cref="TextMotionHelper.ApplyEditorViewCaret"/> asked for). The RENDERED state
+        /// (what the adornment actually draws) is tracked separately (m4/BP-9): a focus loss clears
+        /// only the rendered state; a focus regain restores it to the desired value.</summary>
         public bool Active
         {
-            get => _active;
+            get => _desiredActive;
             set
             {
-                if (_active == value)
-                {
-                    return;
-                }
-                _active = value;
-                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}block-caret active={_active}");
-                if (!_active)
-                {
-                    // N4: deactivation must remove OUR adornment. Update() early-returns when
-                    // inactive (the hot-path guard), so without this the block would persist and
-                    // the `block-caret active=False` diagnostic would lie.
-                    _layer.RemoveAdornmentsByTag(AdornmentTag);
-                }
-                Update();
+                _desiredActive = value;
+                ApplyRendered(value);
             }
+        }
+
+        /// <summary>Applies the RENDERED state: logs the <c>block-caret active=</c> diagnostic
+        /// (which reflects the rendered state — unchanged literal) and draws/removes the block.</summary>
+        private void ApplyRendered(bool value)
+        {
+            if (_renderedActive == value)
+            {
+                return;
+            }
+            _renderedActive = value;
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}block-caret active={_renderedActive}");
+            if (!_renderedActive)
+            {
+                // N4: deactivation must remove OUR adornment. Update() early-returns when
+                // inactive (the hot-path guard), so without this the block would persist and
+                // the `block-caret active=False` diagnostic would lie.
+                _layer.RemoveAdornmentsByTag(AdornmentTag);
+            }
+            Update();
         }
 
         /// <summary>Gets (or creates) the block-caret adornment for a view, keyed in its properties.</summary>
@@ -102,9 +118,18 @@ namespace MyExtension.Adornments
         private void OnLostFocus(object sender, EventArgs e)
         {
             // R21: a normal-mode block caret must not persist over an unfocused editor view —
-            // deactivate the adornment so the native line caret shows. ApplyEditorViewCaret
-            // re-activates it when the view regains focus in normal mode.
-            Active = false;
+            // deactivate the RENDERED state so the native line caret shows. The DESIRED state
+            // stays (ApplyEditorViewCaret asked for a block caret); GotAggregateFocus restores it.
+            ApplyRendered(false);
+        }
+
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            // m4 (BP-9): on focus regain, restore the rendered state to the desired value — a
+            // normal-mode editor view that lost and regained focus must show the block caret again
+            // (the `block-caret active=True` diagnostic is correct immediately, not after a mode
+            // toggle or a motion).
+            ApplyRendered(_desiredActive);
         }
 
         private void OnClosed(object sender, EventArgs e)
@@ -112,6 +137,7 @@ namespace MyExtension.Adornments
             _view.Caret.PositionChanged -= OnCaretChanged;
             _view.LayoutChanged -= OnLayoutChanged;
             _view.LostAggregateFocus -= OnLostFocus;
+            _view.GotAggregateFocus -= OnGotFocus;
             _view.Closed -= OnClosed;
         }
 
@@ -125,7 +151,7 @@ namespace MyExtension.Adornments
             // n2: when inactive (insert mode) there is no adornment of ours to remove — the
             // deactivation path already removed it — so skip the RemoveAdornmentsByTag call on
             // the caret/layout hot path entirely.
-            if (!_active)
+            if (!_renderedActive)
             {
                 return;
             }

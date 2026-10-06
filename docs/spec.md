@@ -339,7 +339,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **268 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **297 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -360,7 +360,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
   results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`).
-- `dotnet run --project tests/NeoVisual.Tests` — **191 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **212 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -570,8 +570,8 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (268) and
-  `dotnet run --project tests/NeoVisual.Tests` (191).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (297) and
+  `dotnet run --project tests/NeoVisual.Tests` (212).
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 44 executed GREEN;
   no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

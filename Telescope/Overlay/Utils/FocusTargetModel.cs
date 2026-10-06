@@ -170,7 +170,7 @@ namespace Telescope.Overlay
         /// (NO wrap — the focus stays put).</summary>
         private FocusTargetAction Move(PaneFocusKey direction)
         {
-            FocusTarget? target = SelectTarget(_layout, Current, direction);
+            FocusTarget? target = ResolveTarget(_layout, Current, direction);
             if (target is null)
             {
                 return FocusTargetAction.NoOp;
@@ -268,8 +268,11 @@ namespace Telescope.Overlay
         /// <summary>(the pane rects, the focused pane, the direction) → the target pane, or
         /// null when NO pane lies in that direction (the caller no-ops — no wrap).
         /// <paramref name="panes"/> MUST be in registry order [Input, List, Preview] — the
-        /// tie-break iterates it and the LAST tie wins (the <c>&gt;=</c> comparison below).</summary>
-        private static FocusTarget? SelectTarget(
+        /// tie-break iterates it and the LAST tie wins (the <c>&gt;=</c> comparison below).
+        /// BP-12 (m6): the mirrored <c>SelectTarget</c> pipeline was renamed to this single
+        /// direction→target resolver (the method name <c>SelectTarget</c> is gone — the pinned
+        /// tie-break + no-op edges survive byte-identically).</summary>
+        private static FocusTarget? ResolveTarget(
             IReadOnlyList<KeyValuePair<FocusTarget, PaneRect>> panes,
             FocusTarget current,
             PaneFocusKey direction)

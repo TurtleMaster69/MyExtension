@@ -23,8 +23,13 @@ namespace MyExtension.Package
     /// failure PROPAGATES so the caller logs <c>diagnostic-nav failed: {msg}</c>.
     /// <para/>
     /// <b>Threading:</b> UI thread only (DTE/COM).
+    /// <para/>
+    /// <b>m1 (BP-7):</b> the cache is INSTANCE-scoped (the static R40 state is gone) and
+    /// invalidated on build-done / document-saved via an UNHOOKED COM subscription (the m2
+    /// pattern — <see cref="HookEvents"/> subscribes, <see cref="Dispose"/> unhooks). The pure
+    /// <see cref="ErrorListCacheDecision"/> TTL seam stays.
     /// </summary>
-    internal static class ErrorListGatherer
+    internal sealed class ErrorListGatherer : IDisposable
     {
         // A3: DTE ErrorItems has NO version counter, so a count-keyed cache is weak (same count,
         // different items after a build). Use a short-TTL cache keyed on (file, severity) with the
@@ -32,11 +37,64 @@ namespace MyExtension.Package
         // presses reuse the scan instead of re-enumerating the whole Error List per press.
         private const long CacheTtlMs = 2000;
         private static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
-        private static string? _cacheKey;
-        private static long _cacheStampMs;
-        private static List<DiagnosticEntry>? _cache;
+        private string? _cacheKey;
+        private long _cacheStampMs;
+        private List<DiagnosticEntry>? _cache;
 
-        public static List<DiagnosticEntry> Gather(DTE dte, string filePath, bool severityError)
+        // m1 (BP-7): the build-done/document-saved invalidation subscription (the m2 COM-event
+        // lifecycle pattern — held references so the connection points are not GC'd, unhooked in
+        // Dispose). Build events live on BuildEvents (via dte.Events.BuildEvents), NOT
+        // SolutionEvents (plan correction, 2026-10-06).
+        private BuildEvents? _buildEvents;
+        private DocumentEvents? _documentEvents;
+        private bool _eventsHooked;
+
+        public ErrorListGatherer()
+        {
+        }
+
+        /// <summary>
+        /// Subscribes to <c>SolutionEvents.OnBuildDone</c> + <c>DocumentEvents.DocumentSaved</c>
+        /// and invalidates the cache on each (a build or a save can change the Error List). The m2
+        /// pattern: idempotent, best-effort (a failure leaves the TTL cache serving), and the
+        /// subscription is unhooked in <see cref="Dispose"/>. UI thread only.
+        /// </summary>
+        public void HookEvents(Func<DTE?> dteFactory)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_eventsHooked)
+            {
+                return;
+            }
+            try
+            {
+                DTE? dte = dteFactory();
+                if (dte == null)
+                {
+                    return;
+                }
+                _buildEvents = dte.Events.BuildEvents;
+                _buildEvents.OnBuildDone += OnBuildDone;
+                _documentEvents = dte.Events.DocumentEvents;
+                _documentEvents.DocumentSaved += OnDocumentSaved;
+                _eventsHooked = true;
+            }
+            catch
+            {
+                // best-effort — the TTL cache still serves
+            }
+        }
+
+        /// <summary>Clears the instance cache (a build-done/document-saved event forces a fresh
+        /// gather — m1/BP-7).</summary>
+        public void Invalidate()
+        {
+            _cache = null;
+            _cacheKey = null;
+            _cacheStampMs = 0;
+        }
+
+        public List<DiagnosticEntry> Gather(DTE dte, string filePath, bool severityError)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -98,5 +156,24 @@ namespace MyExtension.Package
             _cacheStampMs = Clock.ElapsedMilliseconds;
             return result;
         }
+
+        public void Dispose()
+        {
+            if (_buildEvents != null)
+            {
+                try { _buildEvents.OnBuildDone -= OnBuildDone; } catch { /* already unhooked */ }
+                _buildEvents = null;
+            }
+            if (_documentEvents != null)
+            {
+                try { _documentEvents.DocumentSaved -= OnDocumentSaved; } catch { /* already unhooked */ }
+                _documentEvents = null;
+            }
+            _eventsHooked = false;
+        }
+
+        private void OnBuildDone(vsBuildScope scope, vsBuildAction action) => Invalidate();
+
+        private void OnDocumentSaved(Document document) => Invalidate();
     }
 }

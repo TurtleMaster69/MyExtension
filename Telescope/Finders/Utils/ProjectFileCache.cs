@@ -48,6 +48,25 @@ namespace Telescope.Finders
             _dirty = true;
         }
 
+        /// <summary>
+        /// m7 (BP-13): the ONE shared solution-invalidation helper used by all three finders
+        /// (GrepFinder, FzfFinder, CodeIssuesFinder) — replaces the duplicated
+        /// <c>_cachedSolutionName</c> compare + <c>_fileCache.Invalidate()</c> blocks (and the
+        /// shared <c>WarmContentCache</c> duplication). Pure (no VS/UI dep) so it is unit-testable.
+        /// Returns true when the solution name changed (the cache was invalidated and
+        /// <paramref name="cachedSolutionName"/> updated); the compare is case-insensitive.
+        /// </summary>
+        internal static bool EnsureSolutionCache(ProjectFileCache fileCache, ref string? cachedSolutionName, string? solutionName)
+        {
+            if (string.Equals(cachedSolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            fileCache.Invalidate();
+            cachedSolutionName = solutionName;
+            return true;
+        }
+
         private bool IsExpired() => _clock() - _cachedAtUtc >= _ttl;
     }
 }

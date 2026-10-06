@@ -24,6 +24,11 @@
          for runtime resolution, mirroring the Telescope test project. -->
     <PackageReference Include="Microsoft.VisualStudio.Interop" Version="17.14.40260" ExcludeAssets="build;analyzers" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" ExcludeAssets="build;analyzers" />
+    <!-- BP-21 (n2): Run_WindowNavigator_LazyDte constructs a REAL WindowNavigator (to run the
+         ctor), whose ctor takes AsyncPackage and calls VsShellUtilities.GetWindowObject — both live
+         in Microsoft.VisualStudio.Shell.15.0.dll (ThreadHelper is in Shell.Framework, but these are
+         not). Pull the Shell.15.0 runtime asset in so the ctor can be JIT'd hermetically. -->
+    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.14.40264" ExcludeAssets="build;analyzers" />
     <!-- ITextView lives in Microsoft.VisualStudio.Text.UI.dll, which is NOT in Shell.Framework.
          The VimModeSource fake passes null! for ITextView, but the type must be resolvable at
          runtime for the MyExtension types to JIT. VimModeTracker also implements
@@ -43,6 +48,10 @@
     <Reference Include="System" />
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Windows.Forms" />
+    <!-- BP-10 (m5): Run_SolutionExplorer_TryMoveSingleWalk injects a fake System.Windows.Controls.TextBox
+         (the focused-box seam's return type). TextBox lives in PresentationFramework, which is not
+         pulled in by the VS SDK packages above. -->
+    <Reference Include="PresentationFramework" />
   </ItemGroup>
 
 </Project>

@@ -1,186 +1,243 @@
 # MyExtension — Code Review (code-review-hub)
 
-- **Date:** 2026-10-05
-- **Scope:** whole repo — `MyExtension/` (core + `Navigation/` + `ToolWindows/` + `Vim/`), `Telescope/`, `tests/`, `tools/`, and the workflow docs. **Primary focus: the new modular telescope architecture** (slice D — the `Telescope/` project: the pane host, the finder architecture, the fzf filter, the overlay wiring) — most resources were spent there.
-- **Method:** 1 whole-repo `trailmark-recon` digest (2508 nodes, 982 proxies = 39.2%, 0 entrypoints, 100 high-blast-radius, 28 complexity hotspots) shared with every worker + 6 parallel workers (2 deep on slice D — `arch-auditor` + `code-review-worker`; 1 `arch-auditor` + 1 `code-review-worker` on slices A–C; 1 `test-quality-reviewer` on slice E; 1 `docs-accuracy-reviewer` on the docs) + hub-conducted slice F (cross-cutting). Every structural claim was verified with Trailmark (`QueryEngine.from_directory(..., language="c_sharp")`, proxy-aware `callers_of`) or LSP `incomingCalls`/`outgoingCalls`. The hub independently verified the highest-impact claims by direct code reading (PaneNavigationEngine mirror, FzfFilter kill-on-cancel ordering, RefreshQueryDrivenAsync UI-thread gather, ApplyPreviewCaret clamp, OverlayKeyHandler `_gPending`, WindowManager dead lazy cache, PreviewEditorHost full-buffer GetText, ErrorListGatherer O(n), neovisual-window-nav outcome gate, vim-mode contract, pane untestedness, per-finder cache instances). No file under `MyExtension/`, `Telescope/`, `tests/`, `tools/` was modified.
-- **User context:** the `.md` docs are KNOWN-STALE (the previous session's changes were not pushed) — **the code is the source of truth**. Every claim was verified against the actual source, not the docs. Docs-accuracy findings are therefore reported as informational (they will be resolved when the docs are refreshed).
+- **Date:** 2026-10-05 (refresh)
+- **Scope:** whole repo — `MyExtension/` (core + `Navigation/` + `ToolWindows/` + `Vim/`), `Telescope/`, `tests/`, `tools/`, and the workflow docs. **Precision focus, no tool limitations.**
+- **Base commit:** `cea9798` ("Code review fixes (45 findings, incl. nits) GREEN"). The prior report (2026-10-05, 45 findings) was **fully fixed in `cea9798`** — this refresh verifies those fixes against the current code and reports the **net-new residuals + new issues**.
+- **Method:** 1 whole-repo `trailmark-recon` digest (2595 nodes, 1016 proxies = 39.2%, 0 entrypoints, 104 high-blast-radius, 29 complexity hotspots) shared with every worker + 6 parallel workers (2 `arch-auditor` — slices A–C and D; 2 `code-review-worker` — slices A–C and D; 1 `test-quality-reviewer` — slice E; 1 `docs-accuracy-reviewer` — the docs) + hub-conducted slice F (cross-cutting). Every structural claim was verified with Trailmark (`QueryEngine.from_directory(..., language="c_sharp")`, proxy-aware `callers_of`) or LSP `incomingCalls`/`outgoingCalls`. The hub independently verified every major finding and the key minor/nit claims by direct code reading + two offline suite runs (Telescope.Tests **288/288**, NeoVisual.Tests **200/200**). No file under `MyExtension/`, `Telescope/`, `tests/`, `tools/` was modified.
+- **Prior-fix verification:** all 45 prior findings confirmed fixed — the pane-host collapse (PaneNavigationEngine + TryDispatch deleted, the geometric pipeline collapsed into `FocusTargetModel`), the fzf hardening (kill-before-write, `_probed`/`_value` split, timeout CTS, QuoteArg), the overlay correctness fixes (ApplyPreviewCaret clamp, RenderedTextLength re-pin, CancelPendingG, ResultMapper Ordinal), the shared `FileContentCache`, the WindowManager/navigation cleanup, the vim-mode named tokens, the harness gates (T1/T3/T4/T5/T6), the shared `TestRunner`, and the doc refresh.
 
 ## Summary
 
-**45 findings: 0 critical, 9 major, 24 minor, 12 nit.** The modular telescope architecture is genuinely well-built at the seams the repo already invested in — the pure state machines (`OverlayKeyHandler`, `TextMotionNavigator`, `TextMotionDispatcher`, `FocusTargetModel`, `PaneNavigationEngine`) are dependency-free and unit-tested, vim-motion dispatch is single-sourced through `TextMotionDispatcher`, the retired `SyntaxHighlighter` is fully gone, logging is centralized, and net472 compliance is clean. The sharp edges are: (1) the **pane host is over-engineered for 3 fixed panes** — `PaneNavigationEngine` is a ~200-line mirrored re-implementation of `WindowNavigationEngine` with exactly one production caller, and `FocusTargetModel` + `PaneHost` duplicate the focused-pane state; (2) **three real UI-thread/perf hazards in the modular core** — the query-driven finders gather inline on the UI thread (overlay freeze on large solutions), `PreviewEditorHost.Show` materializes the whole preview buffer per selection move, and the fzf kill-on-cancel registration is ordered after the blocking stdin write (a hung fzf leaks a process and strands the filter task); (3) a **false-positive e2e gate** on the core navigation feature (`neovisual-window-nav` never asserts the navigation outcome); and (4) a **dead production path** in `WindowManager` (the R20 lazy default-controller cache is shadowed by an eager registration loop that was never removed).
+**34 findings: 0 critical, 4 major, 19 minor, 11 nit.** The post-fix code is in strong shape — the 45-fix plan landed cleanly, the pure-state-machine seams are single-sourced, logging is centralized, net472 compliance is clean, and both offline suites pass (288 + 200). The sharp edges are: (1) **two real UI-thread/resource hazards in the query-driven finders** — the Grep scan still runs inline on the UI thread (the D5 "off-thread" fix only made `ScanFile` pure; the caller loop was deliberately reverted to inline) and the Fzf gather passes `CancellationToken.None`, so a stale gather spawns uncancellable fzf subprocesses; (2) **a silent, asymmetric routing bug** — `Shift+` simple shortcuts (documented in the config contract) can never fire because the hook pre-filter blocks shift-only chords; (3) **stale test counts in three source-of-truth docs** (268/191 vs the verified 288/200); and (4) a cluster of small correctness/perf residuals (a static Error-List cache that goes stale on build, an unhooked COM event subscription, a block-caret focus-regain gap, a double visual-tree walk per tool-window key, and several harness assertions that cannot fail).
 
 ## Findings table
 
 | id | sev | file:line | problem |
 |----|-----|-----------|---------|
-| D1 | major | `Telescope/Overlay/Utils/Panes/PaneNavigationEngine.cs:78-204` | ~200-line mirrored re-implementation of `WindowNavigationEngine` + `WindowRect` (header admits "MIRRORED, not referenced"); one production caller |
-| D2 | major | `Telescope/Overlay/Utils/Panes/*.cs` + `FocusTargetModel.cs` | Modular pane host over-engineered for 3 fixed panes (8 files, two state machines, a mirrored engine) |
-| D3 | major | `Telescope/Filter/FzfFilter.cs:153-177` | Kill-on-cancel registration is AFTER the blocking stdin write — a hung fzf leaks a process and strands the filter task |
-| D4 | major | `Telescope/Overlay/TelescopeOverlay.cs:1119-1122` | `ApplyPreviewCaret` passes the raw caret with no clamp (ShowPreview clamps via `PreviewCaretMap.Offset`) → out-of-range SnapshotPoint on a stale buffer |
-| D5 | major | `Telescope/Overlay/TelescopeOverlay.cs:504-516` + `GrepFinder.cs:107-110` | Query-driven gather runs inline on the UI thread → overlay freeze on large solutions |
-| A1 | major | `MyExtension/ToolWindows/WindowManager.cs:31` + `MyExtensionPackage.cs:143-150` | R20 lazy `_defaultControllers` cache is dead in production — the eager registration loop was never removed |
-| A2 | major | `MyExtension/Package/Utils/PreviewEditorHost.cs:100` | `Show` materializes the whole preview buffer via `CurrentSnapshot.GetText()` on every call, even on mtime-cache hit |
-| A3 | major | `MyExtension/Package/Utils/ErrorListGatherer.cs:45-46` | `],e`/`[,e`/`],w`/`[,w` re-enumerate the ENTIRE Error List (O(n) COM reads) on every invocation |
-| T1 | major | `tools/harness/test-e2e.ps1:698-709` | `neovisual-window-nav` asserts only "fired" diagnostics, never the navigation OUTCOME (`navigate activated index=` / absence of `navigate no-op:`) |
-| D6 | minor | `FocusTargetModel.cs:71` + `PaneHost.cs:19` | Duplicated focused-pane state (`FocusTargetModel.Current` vs `PaneHost._active`) kept in sync only by overlay call sites |
-| D7 | minor | `CodeIssuesFinder.cs:40`, `GrepFinder.cs:28,49`, `FzfFinder.cs:33,57` | `ProjectFileCache`/`FileContentCache` instantiated per-finder → DTE tree walked up to 2× per TTL, file contents cached up to 3× independently |
-| D8 | minor | `Telescope/Filter/FzfFilter.cs:118-226` | Per-keystroke subprocess spawn (class doc admits it); hand-rolled `QuoteArg` reinvents Windows argv quoting |
-| D9 | minor | `Telescope/Overlay/Utils/ResultsFormatter.cs:24-39` | `RenderedTextLength` exists solely to keep a legacy diagnostic byte-identical to the RETIRED TextBox render |
-| D10 | minor | `Telescope/Overlay/Utils/OverlayKeyHandler.cs:156-164` + `TelescopeOverlay.cs:1031` | Lone `g` sets `_gPending`; prompt motions consumed before `_keyHandler.Handle` never clear it → `g h g` triggers `gg` |
-| D11 | minor | `Telescope/Filter/FzfFilter.cs:77-85` | `_availability` written from a thread-pool continuation, read on the UI thread, no `volatile` |
-| D12 | minor | `Telescope/Overlay/Utils/ResultMapper.cs:34` | byDisplay map groups with `OrdinalIgnoreCase` → case-colliding duplicates map to the wrong payload |
-| A4 | minor | `MyExtension/ToolWindows/SolutionExplorerController.cs:193` | `TryMove` re-implements the text-input routing block `ToolWindowControllerBase.TextMotion` already provides |
-| A5 | minor | `MyExtension/ToolWindows/Utils/TextMotionHelper.cs:107` | WPF path reads `focusedBox.Text` (full-buffer copy) before slicing — the R18 "avoids the O(n) copy" claim is only half-realized |
-| A6 | minor | `MyExtension/Navigation/WindowNavigator.cs:26` + `BuildActiveWindows:107` | Static `_cachedLinked` keyed on object refs, returns the SAME list instance to every navigator (R40 class) |
-| A7 | minor | `MyExtension/ToolWindows/GeneralToolWindowController.cs:81` | `IsTextInputType` hardcoded switch must be manually kept in sync with the enum + GUID map |
-| A8 | minor | `MyExtension/Input/InputHandler.cs:267` | `HandleKey` ~20-branch hot path with a 6-arg `ShouldRouteToolWindowKey` call |
-| A9 | minor | `MyExtension/Package/Utils/RecentFilesGatherer.cs:158` | `_sessionMru` `List.Remove`+`Insert(0,…)` per open — O(n) each, unbounded |
-| C1 | minor | `MyExtension/Vim/VimModeTracker.cs:138` + `VimModeClassifier.cs:27` | `vim-mode=Unknown` + numeric `vim-mode=<n>` (Visual/Command) outside the documented `Insert|Normal|Replace` contract |
-| C2 | minor | `MyExtension/ToolWindows/Utils/FocusKeeper.cs:17` | `_current` static `DispatcherTimer` shared across controllers; `Run` stops any prior keeper regardless of owner |
-| C3 | minor | `MyExtension/Input/InputHandler.cs:338` | `IsFocusedTextBoxInCurrentToolWindow()` (COM + visual-tree walk) runs on every shift+key routed to a tool window |
-| C4 | minor | `MyExtension/Hooks/Utils/InjectedKeyGuard.cs:83` | `TryConsume` keyed by VK+TTL only — cannot distinguish injected from physical; a dropped injected event consumes the next physical same-VK |
-| C5 | minor | `MyExtension/Vim/VimModeTracker.cs:39` | `IsEditorFocused` tracks `[ContentType("text")]` editable views only — a non-text editor fails `FocusGuard` OPEN |
-| T2 | minor | `tests/Telescope.Tests/Program.cs` | The three concrete panes (`PromptPane`/`ListPane`/`PreviewPane`) are completely untested (0 references) |
-| T3 | minor | `tools/harness/harness-common.ps1:555-562` | `Assert-NoSeedLeak` "skips gracefully" when the expected tree is absent — a cannot-fail path in the write-leak guard |
-| DOC1 | minor | `AGENTS.md:145-146` + `SKILL.md` + `spec.md` | "44 registered — 43 executed GREEN; telescope-recent pending" stale vs progress.md's 44/44 GREEN (informational — known-stale docs) |
-| DOC2 | minor | `docs/spec.md:390` | Claims 44 scenarios but the list has 43 — `neovisual-git-bindings` missing (informational) |
-| DOC3 | minor | `docs/progress.md:381-388` | Pending-queue run-order block still shows gap 11/feature 7/gap 4 pending though all GREEN (informational) |
-| DOC4 | minor | `docs/reviews/code-review.md:70-71` + `architecture-review.md:46` | Prior-review findings N54/N55/W12 presented as open but resolved (informational) |
-| D13 | nit | `Telescope/Overlay/Utils/TryDispatch.cs:1` | Comment-only stub file retained as a "seam marker" after the merge into `TextMotionDispatcher` |
-| D14 | nit | `FocusTargetModel.cs:29-37,129-140` | `PaneFocusKey` + `MapKey` duplicate the Ctrl+H/J/K/L chord mapping |
-| D15 | nit | `Telescope/Filter/FzfFilter.cs:180` | Timeout `Task.Delay` never cancelled/disposed on the fast path — per-keystroke pending timer |
-| A10 | nit | `MyExtension/ToolWindows/WindowManager.cs:127` | "Walk up to DocView content" loop duplicated in `ComputeTextInputSurfaceFocused` + `IsFocusedTextBoxInCurrentToolWindow` |
-| A11 | nit | `MyExtension/Input/InputHandler.cs:453` | `IsKeyOfInterest` resolves `_windowManager.CurrentController` twice per key-down |
-| C6 | nit | `MyExtension/ToolWindows/SolutionExplorerController.cs:31` | `_focusKeeper` retains a disposed handle, never reset to null |
-| C7 | nit | `MyExtension/ToolWindows/WindowManager.cs:341` | `GetGuidProperty` HRESULT discarded → silent `_type = Unknown` on COM failure |
-| T4 | nit | `tools/harness/harness-common.ps1:168-190` | `Wait-LogLine`'s `$searchedTo` is a local cursor re-initialized per call → O(calls × window) scans |
-| T5 | nit | `tools/harness/test-e2e.ps1:624` | `telescope-navigate` reads the whole log with `Get-Content`, bypassing the LogCache tail-read machinery |
-| T6 | nit | `tools/harness/test-e2e.ps1:53-66` | Suite order-dependency invariants (seed-leak last, editor-insert before it) not enforced by the runner |
-| DOC5 | nit | `docs/reviews/code-review.md:191` | Test counts 153/163 stale vs current 268/191 (informational) |
-| DOC6 | nit | `docs/spec.md:470-555` | §7 done-feature list omits the git leader bindings (informational) |
+| M1 | major | `Telescope/Finders/GrepFinder.cs:120-131,148-182` | D5 "off-thread" fix incomplete: the per-file scan + the open-time warm-up still run inline on the UI thread (the comment admits the Task.Run hop was dropped) |
+| M2 | major | `Telescope/Finders/FzfFinder.cs:145` | Query-driven gather passes `CancellationToken.None` — a stale/closed gather keeps spawning fzf subprocesses that are never killed |
+| M3 | major | `MyExtension/Input/InputHandler.cs:473` vs `KeybindingConfig.cs:156,166` / `KeyNameBuilder.cs:7,28` | `IsKeyOfInterest` returns false for shift-only chords, so a user-configured `Shift+...` simple shortcut can never fire (silent, asymmetric vs Ctrl+/Alt+) |
+| M4 | major | `AGENTS.md:107,124`; `docs/spec.md:342,363,573-574`; `SKILL.md:299-300` | Stale test counts 268/191 vs the verified 288/200 in three source-of-truth docs |
+| m1 | minor | `MyExtension/Package/Utils/ErrorListGatherer.cs:33-37` | Static mutable cache (2s TTL) keyed on (severity, file) never invalidated on build/edit — a `],e` press within 2s of a build returns stale entries |
+| m2 | minor | `MyExtension/Package/Utils/RecentFilesGatherer.cs:146-147` + `MyExtensionPackage.cs:544-557` | `_documentEvents` COM connection point never unhooked; the gatherer is not disposed on package unload |
+| m3 | minor | `MyExtension/Input/InputHandler.cs:453` | `IsKeyOfInterest` does not short-circuit on `_telescope.IsOpen` — the overlay-open hot path still runs the sentinel re-stat + controller resolution per key |
+| m4 | minor | `MyExtension/Adornments/BlockCaretAdornment.cs:102-108` | `OnLostFocus` deactivates the block caret but nothing re-activates it on focus regain (the comment claims a path that does not exist) |
+| m5 | minor | `MyExtension/ToolWindows/SolutionExplorerController.cs:207` + `TextMotionHelper.cs:77` | `TryMove` runs `FindFocusedTextBox()` twice per routed key (two visual-tree walks) |
+| m6 | minor | `Telescope/Overlay/Utils/FocusTargetModel.cs:272` | The collapsed `SelectTarget` still mirrors `WindowNavigationEngine.SelectTarget` (D1 residual — the two pipelines can drift) |
+| m7 | minor | `Telescope/Finders/GrepFinder.cs:114-119,166-171` | The solution-name invalidation block is duplicated verbatim in `GetCandidates` and `WarmContentCache` |
+| m8 | minor | `Telescope/Controller/TelescopeController.cs:35` + `GrepFinder.cs:46`, `FzfFinder.cs:54`, `CodeIssuesFinder.cs:52` | The D7 shared-cache collapse is convention-dependent — every finder ctor defaults to `new FileContentCache(500)`, so a finder registered without injection silently reverts |
+| m9 | minor | `Telescope/Finders/Utils/FileContentCache.cs:82-106` | `EvictIfNeeded` is O(n) per insert → O(n²) at the Grep open-time warm-up |
+| m10 | minor | `Telescope/Finders/Utils/FileContentCache.cs:19-24,42-73` | The shared cache is not thread-safe, yet `GrepFinder.ScanFile`'s doc claims it can run on a background task — a latent race the moment M1 is fixed |
+| m11 | minor | `Telescope/Filter/FzfFilter.cs:209-238` | Timeout-vs-completion race: `Task.WhenAny` can return `timeout` in the same instant `all` completes → spurious timeout + unfiltered list |
+| m12 | minor | `Telescope/Overlay/TelescopeOverlay.cs:1206-1212` | `OnPaneClicked` → `FocusPane` never clears `_gPending` — a `g` in one pane then a click then `g` in another fires `gg` |
+| m13 | minor | `tools/harness/test-e2e.ps1:1411,1699,1706,1763,1944,2381` | Five scenarios still read the whole log with `Get-Content`, bypassing the T5 LogCache tail-read |
+| m14 | minor | `tools/harness/test-e2e.ps1:887,895,903,911` | The four severity-nav outcome assertions accept the no-op form — a navigator that always no-ops passes |
+| m15 | minor | `tools/harness/test-e2e.ps1:1440` | `preview tokens=\d+` is presence-only — accepts `tokens=0`, cannot fail |
+| m16 | minor | `tools/harness/test-e2e.ps1:833` | `neovisual-window-management` step 4 (tool-window `w,d`) asserts only the binding, never the close outcome |
+| m17 | minor | `tests/NeoVisual.Tests/Program.cs:606-645` | `Run_WindowManager_DefaultControllerCache_ReturnsCachedInstance` reaches into private implementation via reflection |
+| m18 | minor | `docs/progress.md:257-258` | Baseline section still says 268/191 while the same file's Done entry records 288/200 |
+| m19 | minor | `docs/reviews/code-review.md:16,49` + `tools/lint/check-doc-refs.ps1:48-56` | The report references deleted files (PaneNavigationEngine.cs, TryDispatch.cs) and is not in the lint doc set |
+| n1 | nit | `MyExtension/Navigation/WindowNavigator.cs:26-30` | Static mutable linked-cache fields retain COM RCWs across navigations (the A6 copy fix is present; the static state remains) |
+| n2 | nit | `MyExtension/Navigation/WindowNavigator.cs:53` | Ctor resolves `VsServices.Dte(package)` unconditionally but only uses it in the `currentFrame == null` fallback |
+| n3 | nit | `MyExtension/Input/InputHandler.cs:379,403` | `TryRouteToolWindowKey` computes the tool-window routing decision twice per key (two formulations of the same decision) |
+| n4 | nit | `MyExtension/Package/Utils/PreviewEditorHost.cs:99` | `File.GetLastWriteTimeUtc` is a filesystem stat on every `Show` (every preview selection move), even on the cache-hit path |
+| n5 | nit | `Telescope/Logging/Utils/FilterFailureLog.cs:14` | Two `[Telescope]`-prefix helpers with different API shapes (`FilterFailureLog.Format` vs `TelescopeLog.Log`) |
+| n6 | nit | `Telescope/Overlay/Utils/Panes/PaneSelectionSync.cs:18` | `Steps(from, to) => to - from` — a one-line subtraction wrapped in a dedicated class + pinned test |
+| n7 | nit | `Telescope/Filter/FzfFilter.cs:95-102` | `IsAvailableAsync` has no interlock — two concurrent callers both run the bounded probe |
+| n8 | nit | `tests/NeoVisual.Tests/Program.cs:276` | `Assert.False(cfg.Bindings["g,b"] == ...)` workaround for the missing `Assert.NotEqual` |
+| n9 | nit | `tests/TestRunner.cs:57-76` | No per-test timeout — a deadlocking test hangs the whole suite |
+| n10 | nit | `tools/harness/test-e2e.ps1:1845-1866` | `telescope-goto` Part 1's bounded re-walk retry silently masks the first-attempt 0-gather race |
+| n11 | nit | `tools/harness/test-e2e.ps1:1352-1353` | `explorer-open-searchbox` uses a fixed 500ms sleep (sleepy-test smell) |
 
 ## Detailed findings
 
-### D1 (major) — `PaneNavigationEngine` is a mirrored re-implementation of the window engine
+### M1 (major) — the Grep scan still runs inline on the UI thread (D5 residual)
 
-- **Where:** `Telescope/Overlay/Utils/Panes/PaneNavigationEngine.cs:78-204` (plus `PaneRect`/`PaneDirection`/`PaneAxis`/`GapTo`/`Adjacency`/`IsInDirection`/`IsAligned` at :7-75).
-- **What's wrong:** The file's own header (:78-89) admits it: "The pane analogue of `MyExtension.Navigation.WindowNavigationEngine` (the SAME pipeline over pane rects)… MIRRORED, not referenced: Telescope.csproj does not reference MyExtension." It re-implements the whole geometric selection pipeline (in-direction → aligned → closest gap → largest adjacency → last-in-list tie-break) plus a `WindowRect` analogue, with two documented "pinned deviations" (the `gap >= 0` filter and the dropped DPI divide). Trailmark `callers_of('proxy.unresolved:PaneNavigationEngine.SelectTarget')` returns exactly ONE production caller (`FocusTargetModel.Move`) + 7 unit tests.
-- **Why it bites:** Any future change to the window engine's algorithm (divide tolerance, tie-break rule, a new filter predicate, DPI handling) silently diverges from the pane engine — the two "pinned deviations" are documented but the core is duplicated, so a fix applied to one surface will not propagate to the other. This is the exact drift class that produces "works in window nav, broken in overlay focus" bugs.
-- **Fix:** Extract the geometric selection into a shared dependency-free library both `MyExtension` and `Telescope` reference, parameterized by the rect/direction types; or, for the fixed 3-pane layout, replace the engine with a ~10-line direction→target table and delete the mirrored pipeline.
+- **Where:** `Telescope/Finders/GrepFinder.cs:120-131` (the per-file scan loop in `GetCandidates`), `:148-182` (`WarmContentCache`), with the UI-thread assert at `:107`.
+- **What's wrong:** The 45-fix made `ScanFile` `internal static` (pure, off-thread-capable — the seam exists), but the caller loop was deliberately reverted to inline: the comment at `:120-122` says "the synchronous blocking is unchanged — drop the wasted Task.Run thread hop and scan inline on the UI thread." `GetCandidates` runs the full-solution `LiteralLineScanner` scan on the UI thread per debounced keystroke, and `WarmContentCache` (`:148-182`) reads **every** project file synchronously on the UI thread at overlay open. Two independent workers (arch-auditor D + code-review-worker D) reported this independently.
+- **Why it bites:** On a real (large) solution the Grep finder freezes the overlay on every debounced keystroke and for the whole open-time warm-up — hundreds of ms of unresponsive UI, keystrokes queueing behind the blocked thread. The e2e scratch solution is too small to catch it, so this ships green.
+- **Fix:** Run the scan loop in `Task.Run` (the pure `ScanFile` seam already exists) and marshal the hit list back with the existing `_queryGeneration` check; keep only the DTE enumeration on the UI thread. **Precondition:** make `FileContentCache` thread-safe first (m10).
 
-### D2 (major) — the modular pane host is over-engineered for 3 fixed panes
+### M2 (major) — the Fzf query-driven gather has no cancellation
 
-- **Where:** `Telescope/Overlay/Utils/Panes/*.cs` (8 files: `IPane`, `PaneHost`, `PaneNavigationEngine`, `PromptPane`, `ListPane`, `PreviewPane`, `PaneSelectionSync`) + `FocusTargetModel.cs`.
-- **What's wrong:** The geometric engine has exactly one production caller (D1), and the layout is fixed at design time (Input bottom, List left, Preview right — `PaneHost.cs:13`). The "reusable core for the deferred lazygit overlay" claim is only half-justified: `IPane` + `PaneHost` (registry, activation, click normalization) are genuinely reusable, but `PaneNavigationEngine` + `FocusTargetModel` are Telescope-specific geometric machinery that a lazygit overlay with a different pane layout would have to re-derive anyway.
-- **Why it bites:** The abstraction cost is paid now (8 files, two state machines, a mirrored navigation engine) for a deferred feature that may never arrive or may need a different shape; every future pane change must thread through the model/host/engine split, and the geometric engine's existence invites "fix the engine" work instead of the trivial table the fixed layout needs.
-- **Fix:** Keep `IPane`/`PaneHost` as the reusable contract; collapse `FocusTargetModel` + `PaneNavigationEngine` into a single small pure focus resolver (or a direction table) and delete the mirrored engine; defer further generalization until the lazygit overlay is actually planned.
+- **Where:** `Telescope/Finders/FzfFinder.cs:145` — `await _fzf.FilterAsync(lines, query, CancellationToken.None)`.
+- **What's wrong:** The overlay's query-driven path (`RefreshQueryDrivenAsync`) has no cancellation token, and `FzfFinder.GetCandidatesAsync` passes `CancellationToken.None` to the fzf engine. The `_queryGeneration` check discards stale results but cannot abort the in-flight gather.
+- **Why it bites:** When the user types a new query or closes the overlay mid-gather, the previous gather keeps spawning one fzf subprocess per file (up to HitCap=200) that is never killed — the cea9798 fzf hardening (kill-before-write, cancellation CTS) is bypassed on this path. Fast typing on a large solution produces overlapping, uncancellable subprocess storms and wasted work.
+- **Fix:** Thread a per-generation CTS (or the overlay's filter CTS) into `GetCandidatesAsync`/`FilterAsync` so a stale or closed gather cancels the running fzf processes.
 
-### D3 (major) — fzf kill-on-cancel is registered after the blocking stdin write
+### M3 (major) — `Shift+` simple shortcuts can never fire
 
-- **Where:** `Telescope/Filter/FzfFilter.cs:153-177`.
-- **What's wrong:** The cancellation registration (`cancellationToken.Register(() => TryKill(p))` at :177) is only active *after* `await Task.Run(...)` finishes writing the candidate list to stdin (:153-169). If fzf hangs while reading stdin, the `BaseStream.Write` blocks once the ~64KB pipe buffer fills (large candidate lists), the token cancellation cannot kill the process, the `Task.Run` never completes, and the `using var p` (:140) never disposes — a leaked hung fzf process per keystroke that neither the timeout (`Task.WhenAny` is only reached after the write) nor overlay close can reclaim.
-- **Why it bites:** A hung fzf on a large solution leaves orphaned processes and a permanently-pending `FilterAndUpdateAsync` task — the overlay's filter path silently wedges.
-- **Fix:** Register the kill callback on the token *before* the spawn/write (or move the write into the same `using` scope as the registration) so cancellation can kill the process during the write phase.
+- **Where:** `MyExtension/Input/InputHandler.cs:473` (`if (IsLeaderActive || ctrl || alt) return true;`) vs the config contract at `MyExtension/Input/Utils/KeybindingConfig.cs:156,166` (`IsSimpleShortcut` classifies `Shift+` prefixes) and `MyExtension/Input/Utils/KeyNameBuilder.cs:7,28` (documents `Shift+F4`).
+- **What's wrong:** `IsKeyOfInterest` (the hook pre-filter's only gate — LSP-verified) returns false for any shift-only chord (no ctrl/alt, no leader, no tool-window action key). The comment at `:468-472` documents this as an intentional hot-path choice ("every uppercase letter typed in the editor would otherwise run the full HandleKey path"), but it makes the documented `Shift+` simple-shortcut contract silently dead: the key passes through to VS and the action never executes. Ctrl+ and Alt+ shortcuts work — a silent, asymmetric break.
+- **Why it bites:** A user who adds e.g. `"Shift+F4": "command:..."` to `%APPDATA%\MyExtension\keybindings.json` gets a binding that never fires, with no diagnostic and no e2e coverage. The config contract and `KeyNameBuilder` docs promise it works.
+- **Fix:** In `IsKeyOfInterest`, also return true when `shift` is held and the built `KeyNameBuilder.Build(key, ctrl, shift, alt)` name exists in the simple bindings (or pass the simple-binding key set into the pre-filter), so bound Shift+ chords reach `HandleKey` while unbound uppercase letters stay cheap.
 
-### D4 (major) — `ApplyPreviewCaret` passes the raw caret with no clamp
+### M4 (major) — stale test counts in three source-of-truth docs
 
-- **Where:** `Telescope/Overlay/TelescopeOverlay.cs:1119-1122`.
-- **What's wrong:** `ApplyPreviewCaret` passes the raw `_previewNavigator.Caret` to `_previewEditor.ApplyCaret` with no clamp, while `ShowPreview` (line 880) clamps via `PreviewCaretMap.Offset(result.Text, ...)` as the mtime-drift guard.
-- **Why it bites:** If the previewed file changes on disk while the overlay is open (the preview uses the LIVE workspace buffer for open files, so the buffer can shrink under the stale navigator text), a preview motion key (h/l/j/k/w/b/e/0/$/gg/G) hands an out-of-range index to the editor's `SnapshotPoint` → exception thrown from `OnPreviewKeyDown` (uncaught).
-- **Fix:** Clamp in `ApplyPreviewCaret` the same way `ShowPreview` does (`PreviewCaretMap.Offset` against the current editor text).
+- **Where:** `AGENTS.md:107,124` ("268 tests"/"191 tests"), `docs/spec.md:342,363,573-574`, `.opencode/skills/vs-extension-dev/SKILL.md:299-300`.
+- **What's wrong:** All three docs claim Telescope.Tests **268** / NeoVisual.Tests **191**. The hub verified the actual counts by running both suites: **288 passed, 0 failed** and **200 passed, 0 failed**. `docs/progress.md:392-393` already records the 45-findings plan as 268→288 / 191→200.
+- **Why it bites:** A verifier trusting AGENTS.md expects 268/191 and can misjudge a regression as a pass (or vice versa); the docs are the source of truth the loop reads before ordering work.
+- **Fix:** Update all sites to 288/200.
 
-### D5 (major) — query-driven gather runs inline on the UI thread
+### m1 (minor) — ErrorListGatherer static cache goes stale on build
 
-- **Where:** `Telescope/Overlay/TelescopeOverlay.cs:504-516` + `GrepFinder.cs:107-110` (and `FzfFinder`).
-- **What's wrong:** `RefreshQueryDrivenAsync` awaits `finder.GetCandidatesAsync(query)` on the UI thread (the WPF SynchronizationContext is captured after the debounce — the comment at :501-502 confirms it), and `GrepFinder`/`FzfFinder` run the full-solution scan inline on the UI thread (confirmed `GrepFinder.cs:107-110`; `GrepFinder.GetCandidates` is a complexity-8 hotspot).
-- **Why it bites:** On a large solution the overlay freezes for the duration of each post-debounce scan (hundreds of ms of unresponsive UI; keystrokes queue behind the blocked thread), and the `_queryGeneration` check can't help because the scan itself blocks.
-- **Fix:** Run the gather on a background task (`Task.Run`) and marshal the result back to the UI thread with the existing generation check.
+- **Where:** `MyExtension/Package/Utils/ErrorListGatherer.cs:33-37` (static `Clock`, `_cacheKey`, `_cacheStampMs`, `_cache`), `:44-49` (2s TTL check).
+- **What's wrong:** The A3 fix introduced a static mutable cache with a 2s TTL keyed only on (severity, filePath), never invalidated on a build or edit event. The class doc at `:29-32` acknowledges ErrorItems has no version counter and chose a TTL instead.
+- **Why it bites:** A build completing within 2s of a `],e`/`],w` press returns the stale entry list — the user navigates to a line whose error/warning is already gone (or misses a new one). The static state is the R40 class the repo explicitly avoids and makes hermetic tests order-dependent if they exercise `Gather`.
+- **Fix:** Invalidate on `SolutionEvents` build-done / `DocumentEvents` text change, or key the cache on the document's edit version; at minimum make it instance-scoped.
 
-### A1 (major) — the R20 lazy default-controller cache is dead in production
+### m2 (minor) — RecentFilesGatherer event-subscription leak
 
-- **Where:** `MyExtension/ToolWindows/WindowManager.cs:31` + `MyExtension/Package/MyExtensionPackage.cs:143-150`.
-- **What's wrong:** The package's "controllers" init step eagerly registers `WindowManager.DefaultControllerFor(type)` for every non-null `ToolWindowType` (:143-150), so `GetController`'s registered-lookup always hits and the R20 lazy `_defaultControllers` cache (:31) never fires. Two mechanisms for the same per-type controller; the R20 comment claims the lazy cache removes the need for eager registration, but the eager loop was never removed.
-- **Why it bites:** A future change to one path (e.g. adding a type to `DefaultControllerFor`) silently diverges from the other; the dead cache is untested production code that misleads readers into thinking per-type defaults are lazy.
-- **Fix:** Delete the eager registration loop and rely on the lazy `_defaultControllers` cache (or delete the cache and keep eager); keep exactly one mechanism.
+- **Where:** `MyExtension/Package/Utils/RecentFilesGatherer.cs:146-147` (`_documentEvents = dte.Events.DocumentEvents; _documentEvents.DocumentOpened += OnDocumentOpened;`) + `MyExtension/Package/MyExtensionPackage.cs:544-557` (`Dispose` disposes `_keyboardHook`/`_windowManager`/`_telescope` but not `_recentFilesGatherer`).
+- **What's wrong:** The COM connection point is held (correctly, to keep the subscription alive) but never unhooked, and the gatherer has no `Dispose`/`Unhook`.
+- **Why it bites:** On package unload/reload (VSIX update, disable/enable) the `DocumentOpened` subscription leaks and keeps firing into a torn-down gatherer — the event-subscription-leak class the seed checklist flags.
+- **Fix:** Make `RecentFilesGatherer` `IDisposable`, unhook `DocumentOpened` + null `_documentEvents`, and dispose it in the package `Dispose`.
 
-### A2 (major) — `PreviewEditorHost.Show` materializes the whole preview buffer per selection move
+### m3 (minor) — `IsKeyOfInterest` does not short-circuit while the overlay is open
 
-- **Where:** `MyExtension/Package/Utils/PreviewEditorHost.cs:100`.
-- **What's wrong:** `Show` returns `_view!.TextBuffer.CurrentSnapshot.GetText()` on every call, even when the mtime cache skips a rebuild (:94-97) — so every preview selection change copies the whole file into a new string on the UI thread.
-- **Why it bites:** Previewing a large file (10k+ lines) allocates a full-buffer string per selection move in the overlay, causing UI-thread GC pressure and jank while navigating results.
-- **Fix:** Return the snapshot (or a lazy text accessor) instead of the materialized string, or cache the text keyed by snapshot version and only re-read on rebuild.
+- **Where:** `MyExtension/Input/InputHandler.cs:453` (the pre-filter), with `_telescope.IsOpen` already checked at `:290` inside `HandleKey`.
+- **What's wrong:** While the modal overlay is open, every interesting key (Ctrl chords, leader Space, Escape, tool-window action keys) still runs the sentinel re-stat (every 250ms), the `CurrentController` resolution, and marshals to `HandleKey`, which immediately returns false at `:290` (the overlay owns all keys).
+- **Why it bites:** This is exactly the per-key hot path the pre-filter exists to keep cheap; the wasted marshal + dictionary lookups add up over a long overlay session.
+- **Fix:** Return false at the top of `IsKeyOfInterest` when `_telescope.IsOpen`.
 
-### A3 (major) — diagnostic-nav re-enumerates the entire Error List per press
+### m4 (minor) — block caret never re-activates on focus regain
 
-- **Where:** `MyExtension/Package/Utils/ErrorListGatherer.cs:45-46`.
-- **What's wrong:** `],e`/`[,e`/`],w`/`[,w` re-enumerate the ENTIRE Error List on every invocation (O(n) COM `ErrorItems.Item(i)` reads on the UI thread), then filter to one file + one severity (`InputHandler.cs:601`).
-- **Why it bites:** With a solution holding thousands of errors, each diagnostic-nav press is a full Error List scan on the UI thread — the dominant cost of a frequently-used navigation action, and it grows with solution size.
-- **Fix:** Cache the gather per (file, severity) keyed on the Error List's version/count, or use the Error List's own filtering; at minimum bound the scan and reuse across consecutive presses.
+- **Where:** `MyExtension/Adornments/BlockCaretAdornment.cs:102-108` (`OnLostFocus` sets `Active = false`; the comment at `:105-106` claims "ApplyEditorViewCaret re-activates it when the view regains focus in normal mode").
+- **What's wrong:** There is no `GotAggregateFocus` handler, and `ApplyEditorViewCaret` (grep-verified) is only called from `TextMotionHelper.StyleFocusedSurface` (mode change) and `ApplyMotionToBox` (motion) — never on focus regain.
+- **Why it bites:** After a Command Window / Immediate Window editor view loses and regains focus in normal mode, the block caret stays off (native line caret) until the user toggles mode or moves — the `block-caret active=True` diagnostic and the vim-style caret are both wrong until then.
+- **Fix:** Subscribe `GotAggregateFocus` in the adornment (or have `TextInputToolWindowController`/`TextMotionHelper` re-apply `ApplyEditorViewCaret(view, !isInputMode)` on focus gain), mirroring the `LostAggregateFocus` handler.
 
-### T1 (major) — `neovisual-window-nav` never asserts the navigation outcome
+### m5 (minor) — double visual-tree walk per tool-window key
 
-- **Where:** `tools/harness/test-e2e.ps1:698-709`.
-- **What's wrong:** The scenario asserts only the "fired" diagnostics (`shortcut-binding executed: Ctrl+H` + `navigate direction=L`) and never the navigation OUTCOME — it never asserts `navigate activated index=` nor the ABSENCE of `navigate no-op: <reason>` (the m47 outcome diagnostic exists precisely to distinguish fired-vs-noop).
-- **Why it bites:** This is the primary e2e coverage for the core Cardinal-navigation feature, yet a regression that makes every navigation a no-op (e.g. all candidate windows filtered out by the `!IsEmpty`/`IsInDirection` pipeline) or that navigates to the wrong window still passes: `navigate direction=L` is logged when the action runs, before the outcome is known.
-- **Fix:** Assert the outcome contract per direction: `Assert-NewLogLine ... 'navigate activated index=\d+'` AND assert `navigate no-op:` does NOT appear (mirroring how `telescope-focus-panes` pins the no-op edges).
+- **Where:** `MyExtension/ToolWindows/SolutionExplorerController.cs:207` (`if (TextMotionHelper.FindFocusedTextBox() != null)`) + `MyExtension/ToolWindows/Utils/TextMotionHelper.cs:77` (`TryMoveFocusedSurface(key, out enteredInputMode, FindFocusedTextBox())`).
+- **What's wrong:** `TryMove` calls `FindFocusedTextBox()` as its gate, then `TextMotion(key)()` → `TryMoveFocusedSurface` calls it again — two visual-tree walks per routed key, on every hjkl/action key even when the tree (not the search box) is focused.
+- **Why it bites:** This is the per-key cost the M1/C3 fix (cached `_focusedTextBoxInCurrentToolWindow` in `WindowManager`) was meant to eliminate, and it bypasses the R17 "resolve the box once" optimization that the `focusedBox` overload exists for.
+- **Fix:** Resolve the box once (or use `_windowManager.IsFocusedTextBoxInCurrentToolWindow()`), pass it into `TextMotion(key, box)`/`TryMoveFocusedSurface(key, out _, box)`, and skip the gate walk when the cached fact says no box is focused.
 
-### D6–D15, A4–A9, C1–C7, T2–T3, DOC1–DOC4 (minor) — see the findings table; highlights:
+### m6 (minor) — `FocusTargetModel.SelectTarget` still mirrors the window engine (D1 residual)
 
-- **D6** — `FocusTargetModel.Current` (decision state) and `PaneHost._active` (WPF activation state) both track the focused pane, kept in sync only by the overlay's call sites — a desync would log `focus target=X` while pane Y holds focus, breaking the `[Telescope] focus target=` contract and `telescope-focus-panes`. Make `PaneHost` the single owner.
-- **D7** — `ProjectFileCache`/`FileContentCache` are instantiated per-finder (Grep + Fzf + Issues each own one), so the same DTE tree is walked up to 2× per TTL and the same file contents cached up to 3× independently — the caches are the intended mitigation but fragmented across instances. Share one of each across all finders.
-- **D8** — per-keystroke fzf subprocess spawn (the class doc admits "we spawn a short-lived process per query"); the hand-rolled `QuoteArg` (N45/BP-59) is a reinvented Windows argv quoter. Switch to fzf `--listen` or an in-process matcher.
-- **D9** — `RenderedTextLength` exists solely to keep a legacy diagnostic byte-identical to the RETIRED TextBox render ("the legacy 2-char selection-marker allowance", "the legacy '\n' separator") — the `results count=... boxText=L` contract is pinned to dead layout math. Re-pin to a meaningful value.
-- **D10** — a lone `g` sets `_gPending`; prompt motions (h/l/w/b/e/0/$) are consumed by `TryPromptMotion` before `_keyHandler.Handle`, so they never clear it — `g h g` triggers `gg` (MoveToFirst). Clear `_gPending` in `TryPromptMotion`.
-- **D11** — `_availability` is written from a thread-pool continuation (`ConfigureAwait(false)`) and read on the UI thread with no `volatile` — a latent cross-thread race (a stale `null` spawns fzf once even after the probe cached false).
-- **D12** — `ResultMapper` groups byDisplay with `OrdinalIgnoreCase`, so "Foo.cs"/"foo.cs" share a bucket and a case-colliding duplicate can map to the wrong payload (wrong file opened on Enter). Use `Ordinal`.
-- **A4** — `SolutionExplorerController.TryMove` re-implements the text-input routing block `ToolWindowControllerBase.TextMotion` already provides — the search-box motion path is the same logic written twice.
-- **A5** — the WPF path reads `focusedBox.Text` (a full-buffer string copy) before slicing; the R18 comment claims the slice avoids "the O(n) GetText() copy", but `.Text` IS that copy — only the `LineIndex` build is bounded by `MotionSliceRadius`. Correct the comment or read a bounded window.
-- **A6** — `_cachedLinked`/`_cachedLinkedSource`/`_cachedLinkedActive` are static mutable fields keyed on object references (the R40 class); `BuildActiveWindows:107` returns `_cachedLinked` directly — the SAME list instance to every navigator. Move to the `WindowManager` instance or return a copy.
-- **A7** — `GeneralToolWindowController.IsTextInputType` is a hardcoded switch that must be manually kept in sync with the `ToolWindowType` enum + `ToolWindowTypeResolver` GUID map — a new text-input type silently starts in normal mode (hjkl inject arrows).
-- **A8** — `HandleKey` is the recon-flagged ~20-branch hot path with a 6-arg `ShouldRouteToolWindowKey` call — extract the tool-window routing block.
-- **A9** — `_sessionMru` uses `List.Remove` + `Insert(0, ...)` per `DocumentOpened` — O(n) each, unbounded. Use a `LinkedList` or cap it.
-- **C1** — `vim-mode=Unknown` (on every editor→tool-window focus loss) and numeric `vim-mode=<n>` (Visual=4, Command=3 via `VimModeClassifier.cs:27`) are outside the documented `vim-mode=Insert|Normal|Replace` contract — a strict/negative harness assertion over the mode line would break.
-- **C2** — `FocusKeeper._current` is a static `DispatcherTimer` shared across controllers; `Run` stops any prior keeper regardless of owner (latent — only SolutionExplorerController uses it today).
-- **C3** — `IsFocusedTextBoxInCurrentToolWindow()` (COM `GetProperty(VSFPROPID_DocView)` + visual-tree walk) runs on every shift+key routed to a tool window — cache the fact on focus-change events (the M1 pattern).
-- **C4** — `InjectedKeyGuard.TryConsume` is keyed by VK+TTL only and cannot distinguish our injected event from a physical one — a dropped injected event would consume the next physical same-VK key-down within 1s (theoretical; `keybd_event` queues synchronously).
-- **C5** — `IsEditorFocused` tracks `[ContentType("text")]` editable views only; a non-text editor (designer, .resx, binary) never sets it, so with a stale `IsToolWindow` the `FocusGuard` fails OPEN and action keys leak into the editor — the exact leak the guard was built to prevent (narrow, but fail-open).
-- **T2** — the three concrete panes (`PromptPane`/`ListPane`/`PreviewPane`) are completely untested (0 references in `tests/Telescope.Tests`), while `IPane`/`PaneHost`/`PaneNavigationEngine`/`FocusTargetModel`/`PaneSelectionSync` are all covered — a regression in any pane's `Activate`/`Deactivate` or content wiring is invisible to the suite.
-- **T3** — `Assert-NoSeedLeak` "skips gracefully" when the expected-result tree or scratch dir is absent — a cannot-fail path in the suite's only write-leak guard. Throw in a full (non-reuse) run when the expected tree is missing.
-- **DOC1–DOC4** — known-stale docs (user: not pushed): the "43 executed GREEN / telescope-recent pending" claim, the 43-vs-44 scenario list, the pending-queue run-order block, and the prior-review "still open" annotations. Informational — resolved when the docs are refreshed.
+- **Where:** `Telescope/Overlay/Utils/FocusTargetModel.cs:272` (the collapsed geometric pipeline), with the two pinned deviations documented at `:243-252`.
+- **What's wrong:** The 45-fix collapsed `PaneNavigationEngine` into `FocusTargetModel`, but the pipeline itself still re-implements `WindowNavigationEngine.SelectTarget` (in-direction → aligned → closest gap → largest adjacency → last-tie) over `PaneRect` analogues.
+- **Why it bites:** A future bug fix to the window engine's geometric selection (divide tolerance, tie-break rule, a new filter predicate) silently leaves the pane-focus pipeline divergent — the exact drift class that produces "works in window nav, broken in overlay focus" bugs.
+- **Fix:** Extract the geometric selection (rect + direction → target) into one shared pure class both assemblies reference, or replace it with a ~10-line direction→target table for the fixed 3-pane layout.
 
-### D13–D15, A10–A11, C6–C7, T4–T6, DOC5–DOC6 (nit) — see the findings table. Highlights: the comment-only `TryDispatch.cs` stub (D13); the duplicated Ctrl-chord mapping in `PaneFocusKey`/`MapKey` (D14); the never-cancelled timeout `Task.Delay` on the fzf fast path (D15); the duplicated DocView walk-up loop (A10); the double `CurrentController` resolution per key-down (A11); the retained disposed `_focusKeeper` handle (C6); the discarded `GetGuidProperty` HRESULT (C7); the per-call `$searchedTo` cursor making wait helpers O(calls × window) (T4); the `Get-Content` whole-log read in `telescope-navigate` (T5); the unenforced suite order-dependency invariants (T6); stale test counts + missing git-bindings bullet in the docs (DOC5/DOC6).
+### m7 (minor) — duplicated solution-invalidation block in GrepFinder
+
+- **Where:** `Telescope/Finders/GrepFinder.cs:114-119` (`GetCandidates`) and `:166-171` (`WarmContentCache`) — the `_cachedSolutionName` compare + `_fileCache.Invalidate()` block is verbatim in both.
+- **Why it bites:** A fix to one copy (e.g. a null-solution edge) is easily missed in the other, and the two paths can disagree on cache validity.
+- **Fix:** Extract a private `EnsureSolutionCache(dte)` helper.
+
+### m8 (minor) — the D7 shared-cache collapse is convention-dependent
+
+- **Where:** `Telescope/Controller/TelescopeController.cs:35` + `GrepFinder.cs:46`, `FzfFinder.cs:54`, `CodeIssuesFinder.cs:52` — every finder ctor defaults `contentCache ?? new FileContentCache(500)`.
+- **What's wrong:** The shared-cache injection works only because the controller happens to pass the shared instance; a finder registered without it silently reverts to its own 500-entry cache with no compile error.
+- **Why it bites:** A future finder added without the shared-cache injection quietly regresses the D7 collapse (per-finder caches, duplicated disk reads) with no signal.
+- **Fix:** Make the cache a required ctor param (drop the default) or have the controller construct/register finders so the shared instance is guaranteed.
+
+### m9 (minor) — `FileContentCache.EvictIfNeeded` is O(n) per insert
+
+- **Where:** `Telescope/Finders/Utils/FileContentCache.cs:82-106` (linear scan for the oldest entry on every insert past the cap).
+- **Why it bites:** The Grep open-time warm-up inserts up to N entries → O(n²) at overlay open (500 entries × full solution), compounding M1's UI-thread stall.
+- **Fix:** Use a LinkedList+Dictionary LRU or a coarse clock-based eviction.
+
+### m10 (minor) — `FileContentCache` is not thread-safe (latent)
+
+- **Where:** `Telescope/Finders/Utils/FileContentCache.cs:19-24,42-73` (plain `Dictionary` + `_accessCounter`, no lock), while `GrepFinder.ScanFile`'s doc (`:221-224`) claims it "can run on a background task".
+- **Why it bites:** Currently UI-thread-only so no active race — but the moment M1's off-thread fix is re-applied, a background thread mutating `_entries`/`_accessCounter` concurrently with the UI thread corrupts the Dictionary (lost entries / infinite loop in `EvictIfNeeded`).
+- **Fix:** Add a lock around `GetLines`/`GetContent`/`EvictIfNeeded` (or make the cache thread-safe) before wiring any off-thread caller.
+
+### m11 (minor) — fzf timeout-vs-completion race
+
+- **Where:** `Telescope/Filter/FzfFilter.cs:209-238` (`Task.WhenAny(all, timeout)`).
+- **What's wrong:** `WhenAny` can return `timeout` in the same instant `all` completes; the code then kills the process and returns the unfiltered `lines` even though the filter actually produced output.
+- **Why it bites:** A filter that completes exactly at the 3s boundary returns the full unfiltered list and logs a spurious `fzf filter failed: timeout after 3000ms` — a wrong result + a misleading contract line.
+- **Fix:** After the `winner == timeout` branch, re-check `all.IsCompleted` (or `outputTask.IsCompleted`) before returning `lines`; if completed, fall through to the fast path.
+
+### m12 (minor) — `_gPending` leaks across a left-click focus change
+
+- **Where:** `Telescope/Overlay/TelescopeOverlay.cs:1206-1212` (`OnPaneClicked` → `FocusPane`), vs `CancelPendingG` only called at `:1093` (prompt-motion path) and inside `OverlayKeyHandler.HandleNormal`.
+- **What's wrong:** A lone `g` sets `_gPending`; a left-click focus change never clears it, so `g` in the List pane → click the prompt → `g` in the prompt fires `gg` (MoveToFirst) from a stale pending-g.
+- **Why it bites:** A cross-pane state leak — a focus change should reset the pending-gg chord, else a stray `g` from another pane triggers an unexpected jump.
+- **Fix:** Clear `_gPending` (call `_keyHandler.CancelPendingG()`) in `FocusPane`/`ApplyFocusTarget` on any focus change.
+
+### m13 (minor) — five scenarios bypass the LogCache tail-read
+
+- **Where:** `tools/harness/test-e2e.ps1:1411,1699,1706,1763,1944,2381` (telescope-wrap/references/implementation/goto/recent).
+- **What's wrong:** These scenarios still read the whole log with `Get-Content` to extract candidate counts, bypassing the T5 LogCache tail-read that `telescope-navigate:630-631` was fixed to use.
+- **Why it bites:** The T5 fix is applied inconsistently — O(n) whole-file reads per scenario, and the stated discipline ("never a whole-log Get-Content") is violated.
+- **Fix:** Replace each `Get-Content` + last-match loop with `Update-LogCache` + a `$script:LogCache` scan.
+
+### m14 (minor) — severity-nav outcome assertions accept the no-op form
+
+- **Where:** `tools/harness/test-e2e.ps1:887,895,903,911`.
+- **What's wrong:** The four `],e`/`[,e`/`],w`/`[,w` assertions accept `diagnostic-nav (direction=... severity=... |no-op: )` — a navigator that ALWAYS no-ops (e.g. a broken severity filter that never matches) passes.
+- **Why it bites:** The T1 outcome gate is weakened for these four: only the `leader-binding executed:` line proves the binding fired; the navigator's actual behavior is unasserted.
+- **Fix:** Seed a file with a deterministic warning/error and assert the target form (`direction=… severity=… target=…`), or assert the no-op only when the Error List is provably empty.
+
+### m15 (minor) — `preview tokens=\d+` is presence-only
+
+- **Where:** `tools/harness/test-e2e.ps1:1440`.
+- **What's wrong:** The assertion accepts `tokens=0`, so it cannot fail and cannot discriminate whether the classifier engaged. AGENTS.md itself documents the count reads 0 for both buffer sources.
+- **Why it bites:** The scenario gives false confidence that syntax highlighting works — a cannot-fail assertion.
+- **Fix:** Drop the assertion or gate it on a non-zero count once the workspace-attach fix lands; until then mark it explicitly as a known-limitation smoke check, not a highlighting proof.
+
+### m16 (minor) — tool-window `w,d` close outcome unasserted
+
+- **Where:** `tools/harness/test-e2e.ps1:833`.
+- **What's wrong:** `neovisual-window-management` step 4 (tool-window `w,d`) asserts only `leader-binding executed: w,d` — the close outcome is not asserted (the editor-focused `w,d` at `:810-817` does poll the active document).
+- **Why it bites:** A regression where close-window fires the binding but fails to close the tool window passes.
+- **Fix:** Assert the outcome via DTE (poll that the Solution Explorer tool window is no longer visible) or add a window-state diagnostic.
+
+### m17 (minor) — reflection-coupled test
+
+- **Where:** `tests/NeoVisual.Tests/Program.cs:606-645` (`Run_WindowManager_DefaultControllerCache_ReturnsCachedInstance`).
+- **What's wrong:** The test reaches into private implementation — reflection into the `ThreadHelper.uiThreadDispatcher` static field plus invoking private `GetController`.
+- **Why it bites:** Renaming the field/method breaks the test even when behavior is preserved; mutating a static field is a shared-state risk (mitigated by the N50 save/restore, but the coupling remains).
+- **Fix:** Prefer a hermetic seam (internal `GetController` visible via `InternalsVisibleTo`, or a constructor-injected cache) over reflection.
+
+### m18 (minor) — progress.md Baseline contradicts its own Done entry
+
+- **Where:** `docs/progress.md:257-258` (Baseline: 268/191 "after Gap 4") vs `:392-393` (45-findings entry: 268→288 / 191→200 GREEN).
+- **Why it bites:** The hub reads progress.md as the single source of truth; an internally contradictory Baseline misdirects the next item's verification.
+- **Fix:** Refresh the Baseline unit counts to 288/200.
+
+### m19 (minor) — the live report references deleted files and is unguarded
+
+- **Where:** `docs/reviews/code-review.md:16,49` (D1 → `PaneNavigationEngine.cs:78-204`, D13 → `TryDispatch.cs:1` — both deleted by the pane-host collapse) + `tools/lint/check-doc-refs.ps1:48-56` (code-review.md is not in the default doc set).
+- **Why it bites:** A reader of the "live" report sees file:line refs to files that no longer exist, and the mechanical gate cannot catch future drift in this report (the W21 gap was closed for architecture-review.md but not for code-review.md).
+- **Fix:** Add code-review.md to the lint doc set (or annotate the D1/D13 refs as pre-collapse).
+
+### n1–n11 (nit) — see the findings table. Highlights: the static linked-cache COM retention in `WindowNavigator` (n1, the A6 copy fix is present — the residual is the static-mutable state); the unconditional ctor DTE resolution (n2); the double tool-window routing decision in `TryRouteToolWindowKey` (n3); the per-`Show` filesystem stat in `PreviewEditorHost` (n4); the two `[Telescope]`-prefix helpers (n5); the over-engineered `PaneSelectionSync.Steps` (n6); the un-interlocked `IsAvailableAsync` probe (n7); the `Assert.NotEqual` workaround (n8); the missing per-test timeout in the shared runner (n9); the silent first-attempt mask in `telescope-goto`'s retry (n10); and the fixed 500ms sleep in `explorer-open-searchbox` (n11).
 
 ## Cross-cutting (slice F — hub-conducted)
 
-- **Duplication between slices:** the big clusters are resolved (`TextMotionDispatcher` single dispatch, `BlockCaretStyle` single caret renderer, `KeyToArrowVk` single-sourced, `GetAsyncKeyState` declared once, the retired `SyntaxHighlighter` fully gone). Remaining: the mirrored `PaneNavigationEngine` vs `WindowNavigationEngine` (D1), the duplicated focused-pane state (D6), the per-finder cache instances (D7), the `SolutionExplorerController.TryMove` vs `ToolWindowControllerBase.TextMotion` routing block (A4), the `WindowManager` DocView walk-up loop (A10), and the `WindowNavigator` static cache (A6).
+- **Duplication between slices:** the big clusters stay resolved (`TextMotionDispatcher` single dispatch, `BlockCaretStyle` single caret renderer, `KeyToArrowVk` single-sourced, `GetAsyncKeyState` declared once, the retired `SyntaxHighlighter` fully gone, the shared `TestRunner`). Remaining: the mirrored `FocusTargetModel.SelectTarget` vs `WindowNavigationEngine.SelectTarget` (m6), the duplicated GrepFinder invalidation block (m7), the convention-dependent shared cache (m8), the `SolutionExplorerController` double walk (m5), and the static `WindowNavigator` cache (n1).
 - **net472/BCL consistency:** clean — no `IReadOnlySet<T>`/modern-BCL usage anywhere (all workers verified).
 - **Namespace/folder hygiene:** clean post-restructure.
-- **Log-format drift across the two projects:** the remaining drift points are `vim-mode=Unknown`/numeric (C1), the legacy `boxText=L` length math (D9), and the `_availability` race's redundant `fzf filter failed` log (D11); the `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` prefix contract is otherwise centralized in `DiagnosticLog`.
-- **Hook-path cost:** `InputHandler.HandleKey` (complexity 20) + the double `CurrentController` resolution (A11) + the per-shift-key COM walk (C3) are the remaining hot-path concerns; the per-key `[Hook]` log stays fixed.
+- **Log-format drift across the two projects:** the remaining drift points are the two `[Telescope]`-prefix helpers (n5) and the spurious `fzf filter failed: timeout` line on the M11 race; the `[Telescope]`/`[NeoVisual]`/`[Hook]`/`[MyExtension]` prefix contract is otherwise centralized in `DiagnosticLog`.
+- **Hook-path cost:** `InputHandler.HandleKey` (complexity 13) + the overlay-open non-short-circuit (m3) + the double tool-window routing decision (n3) + the double `FindFocusedTextBox` walk (m5) are the remaining hot-path concerns; the per-key `[Hook]` log stays fixed.
 
 ## Verified-clean (checked this run, no action)
 
-- **Vim-motion dispatch is single-sourced:** LSP `incomingCalls` on `TextMotionDispatcher.Handle` shows `TelescopeOverlay.TryPromptMotion` + `HandlePreviewKey`, and Trailmark shows ToolWindows' `TextMotionHelper.MapMotion` delegates to it — the motion math lives in the shared `TextMotionNavigator`.
-- **The retired `SyntaxHighlighter` is gone** (Trailmark node scan: 0 matches).
-- **Logging is centralized** — the only `Debug.WriteLine` in Telescope is the opt-in path inside `NeoVisualLog`; no bypasses.
-- **`FileContentCache` vs `ProjectFileCache` are NOT near-duplicates** (mtime+LRU vs TTL+single-list) — the prior "three caches" premise is really one cache class with two accessors plus one TTL cache (the residual is the per-finder *instances*, D7).
-- **Doc-reference lint PASS** (0 unresolved backticked refs across 28 docs) and **doc-content lint PASS** (12/12) — the mechanical gates are green.
+- **The 45 prior findings are all fixed** — verified by direct code reading (pane-host collapse, fzf kill-before-write, `_probed`/`_value` split, timeout CTS, QuoteArg, ApplyPreviewCaret clamp, RenderedTextLength, CancelPendingG, ResultMapper Ordinal, shared FileContentCache, eager-loop deletion, per-controller FocusKeeper, VimBufferSubscriptions, named vim-mode tokens, harness gates T1/T3/T4/T5/T6, shared TestRunner).
+- **Vim-motion dispatch is single-sourced** through `TextMotionDispatcher` (LSP-verified: `TextMotionHelper.MapMotion` → `TextMotionDispatcher.MapKey`).
+- **Logging is centralized** — the only `Debug.WriteLine` in Telescope is the opt-in path inside `NeoVisualLog`.
+- **Both offline suites pass** — Telescope.Tests **288/288**, NeoVisual.Tests **200/200** (hub-verified by running them).
+- **Doc-reference lint PASS** (0 unresolved backticked refs) and **doc-content lint PASS** (12/12) — the mechanical gates are green; the drift is content-level (M4, m18, m19).
 - **net472 compliance:** no modern-BCL APIs anywhere in `MyExtension/` or `Telescope/`.
 
 ## Recommendations (ordered by effort/impact)
 
-1. **Fix the fzf kill-on-cancel ordering (D3)** — register the kill callback before the spawn/write. Small, closes a real resource-leak + wedged-filter bug in the modular core.
-2. **Fix the query-driven UI freeze (D5)** — run the gather on a background task. Small, removes the overlay freeze on large solutions.
-3. **Fix the `neovisual-window-nav` outcome gate (T1)** — assert `navigate activated index=` + absence of `navigate no-op:`. Small harness change, closes a false-positive gate on the core feature.
-4. **Fix the `ApplyPreviewCaret` clamp (D4)** — clamp like `ShowPreview`. Small, closes an uncaught-exception edge case.
-5. **Resolve the pane-host over-engineering (D1/D2/D6)** — collapse `FocusTargetModel` + `PaneNavigationEngine` into one small pure focus resolver (or a direction table), make `PaneHost` the single owner of the active pane, and delete the mirrored engine. Medium, the biggest architecture win in the modular core.
-6. **Fix the dead `WindowManager` lazy cache (A1)** — delete the eager registration loop or the cache; keep one mechanism. Small.
-7. **Fix the preview-buffer materialization (A2)** and the Error List O(n) scan (A3). Small-to-medium perf wins on frequently-used paths.
-8. **Share the per-finder caches (D7)** — construct one `ProjectFileCache` + one `FileContentCache` in `TelescopeController` and inject. Small.
-9. **Fix the `_gPending` vim-state deviation (D10)** and the `ResultMapper` case-collision (D12). Small correctness fixes.
-10. **Harden the seed-leak guard (T3)** and add pane tests (T2). Small-to-medium test-quality wins.
-11. **Reconcile the docs (DOC1–DOC6)** when the previous session's changes are pushed — the mechanical lints are green; the drift is content-level.
+1. **Fix the query-driven UI freeze + subprocess storm (M1 + M2 + m10)** — run the Grep scan off-thread (make `FileContentCache` thread-safe first), and thread a per-generation CTS into the Fzf gather. Small-to-medium; removes the two biggest hazards in the modular core.
+2. **Fix the `Shift+` shortcut dead-binding (M3)** — return true in `IsKeyOfInterest` for bound Shift+ chords. Small; closes a silent, asymmetric contract break.
+3. **Refresh the stale test counts (M4, m18)** — update AGENTS.md/spec.md/SKILL.md/progress.md to 288/200. Trivial doc edit.
+4. **Fix the Error-List cache staleness (m1)** and the RecentFilesGatherer leak (m2). Small correctness fixes.
+5. **Close the harness cannot-fail assertions (m13–m16)** — LogCache tail-reads, severity-nav outcome assertions, the tokens presence-only line, the w,d close outcome. Small harness changes.
+6. **Fix the block-caret focus-regain gap (m4)** and the double visual-tree walk (m5). Small.
+7. **Resolve the mirrored pane pipeline (m6)** — extract the shared geometric selection or replace with a direction table. Medium, the biggest architecture win remaining.
+8. **Harden the shared cache (m8, m9)** and the fzf timeout race (m11). Small.
+9. **Clean up the nits (n1–n11)** opportunistically.
 
 ## Filed into progress.md
 
-**Nothing filed yet** — pending the user's Step-4 selection (via the `question` tool). Cross-references to `docs/reviews/architecture-review.md` and the prior `docs/reviews/code-review.md`: D8/D11 are the residual of the prior N38/N39 fzf findings (the `_availability == false` check is now present; the residual is the cross-thread race + the per-keystroke spawn); D7 is a new angle on the prior N33 cache finding (the cache classes are fine; the per-finder instances are the issue); A5 is the residual of the prior R18/N19 slice finding (the WPF path still copies the whole buffer); A6 is the residual of the prior N11 `_cachedLinked` finding (still static, still keyed on object refs).
+**Nothing filed** — the user declined the Step-4 filing (2026-10-05, via the `question` tool). The report lives in `docs/reviews/code-review.md` only. Cross-references to `docs/reviews/architecture-review.md` and the prior `docs/reviews/code-review.md`: M1 is the residual of the prior D5 (the seam was made pure but the caller loop was reverted to inline); M2 is a new angle on the fzf hardening (the kill-before-write fix is present but the query-driven path bypasses it with `CancellationToken.None`); m6 is the residual of the prior D1 (the mirrored pipeline survives inside `FocusTargetModel`); m8 is the residual of the prior D7 (the shared cache is convention-dependent); m10 is a precondition for M1's fix.

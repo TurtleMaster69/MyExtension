@@ -57,6 +57,7 @@ namespace MyExtension.Package
         // workspace / text-manager / editor-adapter factories.
         private RoslynGatherers? _roslynGatherers;
         private RecentFilesGatherer? _recentFilesGatherer;
+        private ErrorListGatherer? _errorListGatherer;
 
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
@@ -101,9 +102,9 @@ namespace MyExtension.Package
                                 as Microsoft.VisualStudio.TextManager.Interop.IVsTextManager,
                             () => VsServices.Mef<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>(this));
                         _telescope.RegisterFinder(new FileFinder(() => VsServices.Dte(this)!, fileCache));
-                        _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this)!, fileCache));
-                        _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this)!, fileCache));
-                        _telescope.RegisterFinder(new FzfFinder(() => VsServices.Dte(this)!, fileCache, new FzfFilter()));
+                        _telescope.RegisterFinder(new CodeIssuesFinder(() => VsServices.Dte(this)!, fileCache, _telescope.ContentCache));
+                        _telescope.RegisterFinder(new GrepFinder(() => VsServices.Dte(this)!, fileCache, _telescope.ContentCache));
+                        _telescope.RegisterFinder(new FzfFinder(() => VsServices.Dte(this)!, fileCache, new FzfFilter(), _telescope.ContentCache));
                         _telescope.RegisterFinder(new ReferencesFinder(
                             () => _roslynGatherers!.GatherReferences(),
                             hit => OpenHitAtLine(hit)));
@@ -117,6 +118,11 @@ namespace MyExtension.Package
                         _telescope.RegisterFinder(new RecentFilesFinder(
                             () => _recentFilesGatherer!.Gather(),
                             OpenRecentFile));
+                        // m1 (BP-7): the instance-scoped Error List gatherer + the build-done/
+                        // document-saved invalidation subscription (the m2 COM-event lifecycle
+                        // pattern — unhooked in Dispose).
+                        _errorListGatherer = new ErrorListGatherer();
+                        _errorListGatherer.HookEvents(() => VsServices.Dte(this));
                         return Task.CompletedTask;
                     }),
                     ("monitor-selection", async () =>
@@ -164,7 +170,7 @@ namespace MyExtension.Package
                         {
                             throw new InvalidOperationException("Telescope launcher was not initialized.");
                         }
-                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager, _launcher);
+                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager, _launcher, _errorListGatherer!);
                         return Task.CompletedTask;
                     }),
                     ("command", () => RegisterTelescopeCommandAsync(cancellationToken)),
@@ -551,6 +557,12 @@ namespace MyExtension.Package
                 _windowManager = null;
                 _telescope?.Dispose();
                 _telescope = null;
+                // m2 (BP-8) + m1 (BP-7): the COM-event gatherers are disposed so their
+                // subscriptions (DocumentOpened / OnBuildDone / DocumentSaved) are unhooked.
+                _recentFilesGatherer?.Dispose();
+                _recentFilesGatherer = null;
+                _errorListGatherer?.Dispose();
+                _errorListGatherer = null;
                 Telescope.Logging.NeoVisualLog.Close();
             }
 

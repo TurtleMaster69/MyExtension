@@ -26,7 +26,7 @@ namespace MyExtension.Package
     /// (best-effort — the session MRU floor serves); a gather that throws anyway is caught by
     /// FinderBase and logged as <c>[Telescope] recent files gather failed: {msg}</c>.
     /// </summary>
-    internal sealed class RecentFilesGatherer
+    internal sealed class RecentFilesGatherer : IDisposable
     {
         private readonly Func<DTE?> _dteFactory;
         // A9: the session MRU is a bounded, O(1) move-to-front structure (RecentFilesMru) — no
@@ -41,6 +41,21 @@ namespace MyExtension.Package
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             HookSessionEvents();   // REV 2: EAGER — the session MRU is maintained from construction time
+        }
+
+        /// <summary>
+        /// m2 (BP-8): unhooks the <c>DocumentOpened</c> COM subscription (the connection point is
+        /// released) and nulls <c>_documentEvents</c>. Called from the package's <c>Dispose</c> so
+        /// the subscription never leaks on package unload/reload.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_documentEvents != null)
+            {
+                try { _documentEvents.DocumentOpened -= OnDocumentOpened; } catch { /* already unhooked */ }
+                _documentEvents = null;
+            }
+            _eventsHooked = false;
         }
 
         /// <summary>The seam method: the MRU paths, most-recent-first (unfiltered — the finder owns the policy).</summary>

@@ -40,6 +40,12 @@ namespace MyExtension.ToolWindows
             _actions[Keys.H] = TextMotion(Keys.H);
             _actions[Keys.L] = TextMotion(Keys.L);
             _actions[Keys.I] = TextMotion(Keys.I);
+            // n7 (BP-24): the Command Window gains j/k/0/$ like the search box (the shared TextMotion
+            // wiring; the motions themselves are already mapped by TextMotionDispatcher.MapKey).
+            _actions[Keys.J] = TextMotion(Keys.J);
+            _actions[Keys.K] = TextMotion(Keys.K);
+            _actions[Keys.D0] = TextMotion(Keys.D0);
+            _actions[Keys.D4] = TextMotion(Keys.D4);
             AddTextMotionKeys(_actions);
         }
 

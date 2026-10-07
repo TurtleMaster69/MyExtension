@@ -172,21 +172,5 @@ namespace Telescope.Overlay
             }
         }
 
-        /// <summary>
-        /// Dispatches a WPF <see cref="Key"/> (plus shift state) to the navigator: maps the key to
-        /// a motion and applies it (n11 — the merged <c>TryDispatch.Handle</c> surface). Returns
-        /// true when the key was a motion; the insert placements (a/A/I) report the
-        /// <see cref="CaretPlacement"/> the caller should use.
-        /// </summary>
-        public static bool Handle(Key key, bool shift, TextMotionNavigator nav, out CaretPlacement? insertPlacement)
-        {
-            TextMotion? motion = MapKey(key, shift);
-            if (motion == null)
-            {
-                insertPlacement = null;
-                return false;
-            }
-            return Apply(motion.Value, nav, out insertPlacement);
-        }
     }
 }

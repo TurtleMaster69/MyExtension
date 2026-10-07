@@ -131,6 +131,26 @@ namespace Telescope.Logging
         /// <summary>Appends a timestamped line to the debug-output log. Never throws.</summary>
         public static void WriteDebug(string message) => WriteTo(ref _debugWriter, DebugLogPath, message);
 
+        /// <summary>Appends a RAW (unstamped, no newline) fragment to the debug-output log — the
+        /// <see cref="NeoVisualTraceListener.Write"/> path (n17/BP-10). Never throws.</summary>
+        public static void WriteDebugRaw(string message) => WriteRawTo(ref _debugWriter, DebugLogPath, message);
+
+        private static void WriteRawTo(ref StreamWriter? writer, string path, string message)
+        {
+            lock (Sync)
+            {
+                try
+                {
+                    GetWriter(ref writer, path).Write(message);
+                }
+                catch
+                {
+                    WriteFailureCount++;
+                    WriteFailureMarker();
+                }
+            }
+        }
+
         private static void WriteTo(ref StreamWriter? writer, string path, string message)
         {
             string line = FormatLine(message);

@@ -76,6 +76,13 @@ namespace MyExtension.Hooks
         }
 
         /// <summary>
+        /// m63 (BP-D16): test-only reset seam — clears all pending records so a test sharing the
+        /// static <see cref="Instance"/> is order-independent (a prior test's injected state cannot
+        /// leak into it). No production behavior change.
+        /// </summary>
+        internal void Reset() => _pending.Clear();
+
+        /// <summary>
         /// Consumes ONE pending record of the VK and returns true; returns false if no record
         /// for that VK is pending. A record older than the TTL is treated as absent (removed
         /// without consuming), so a stale record never swallows the next physical key-down.

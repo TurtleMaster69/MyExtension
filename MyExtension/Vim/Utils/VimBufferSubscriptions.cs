@@ -35,6 +35,11 @@ namespace MyExtension.Vim
         // R3: buffers whose Closed event is currently subscribed (the IVimBuffer objects).
         private readonly HashSet<object> _closedSubscribed = new HashSet<object>();
 
+        // m1: buffers whose refcount was already decremented by OnBufferClosed — Detach must not
+        // decrement them again (the OnBufferClosed-then-Detach double-decrement drops the refcount
+        // to 0 while a sibling split view is still attached).
+        private readonly HashSet<object> _closedDecremented = new HashSet<object>();
+
         // R3: reference count of attached views per shared text buffer (m40). Two views can share
         // one ITextBuffer (split views), so the SwitchedMode subscription is dropped only at 0.
         private readonly Dictionary<object, int> _textBufferRefCounts = new Dictionary<object, int>();
@@ -69,6 +74,14 @@ namespace MyExtension.Vim
             object? buffer = _map.TryGetValue(view, out var b) ? b : null;
             _map.Remove(view);
             if (buffer == null)
+            {
+                return false;
+            }
+            // m1: a buffer whose refcount was already decremented by OnBufferClosed must not be
+            // decremented again (the OnBufferClosed-then-Detach double-decrement). The N3
+            // shared-text-buffer second view (never Closed-subscribed) is not in
+            // _closedDecremented and still decrements.
+            if (_closedDecremented.Remove(buffer))
             {
                 return false;
             }
@@ -111,6 +124,9 @@ namespace MyExtension.Vim
         {
             if (_closedSubscribed.Remove(buffer))
             {
+                // m1: record that this buffer's refcount was already decremented here, so a later
+                // Detach (the OnBufferClosed-then-Detach path) does not decrement it again.
+                _closedDecremented.Add(buffer);
                 return DecrementRefCount(buffer);
             }
             return false;

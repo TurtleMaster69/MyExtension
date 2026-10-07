@@ -47,6 +47,11 @@ namespace Telescope.Overlay
         public const int Left = 2;
         public const int Right = 3;
 
+        /// <summary>n9 (BP-32): the capability seam — SelectTarget is a two-pass scan with NO
+        /// per-move <c>List&lt;Candidate&gt;</c> allocation. Pinned by
+        /// <c>Run_GeometricSelectionEngine_NoAlloc</c>.</summary>
+        internal static bool UsesNoAllocSelection => true;
+
         public static int? SelectTarget<T>(T active, IReadOnlyList<T> candidates, int direction, bool allowNegativeGap, int divide, bool strictEdge)
             where T : IGeometricRect
         {
@@ -55,7 +60,9 @@ namespace Telescope.Overlay
                 return null;   // no layout yet — a safe no-op
             }
 
-            List<Candidate> passing = new List<Candidate>();
+            // n9 (BP-32): TWO passes, no per-move List<Candidate> allocation. Pass 1 finds the
+            // minimum gap among the candidates passing the pipeline; pass 2 picks the best within
+            // the closest-gap band [minGap, minGap + divide] (largest adjacency, ">=" last-tie-wins).
             int minGap = int.MaxValue;
             for (int i = 0; i < candidates.Count; i++)
             {
@@ -69,31 +76,41 @@ namespace Telescope.Overlay
                 {
                     continue;   // overlapping/behind — not "in direction"
                 }
-                passing.Add(new Candidate(i, gap, Adjacency(c, active, direction)));
                 if (gap < minGap)
                 {
                     minGap = gap;
                 }
             }
 
-            if (passing.Count == 0)
+            if (minGap == int.MaxValue)
             {
-                return null;
+                return null;   // no candidate passed the pipeline
             }
 
             int upperBound = minGap + divide;
             int? bestIndex = null;
             int bestAdjacency = int.MinValue;
-            foreach (Candidate candidate in passing)
+            for (int i = 0; i < candidates.Count; i++)
             {
-                if (candidate.Gap > upperBound)
+                T c = candidates[i];
+                if (c.IsEmpty || !IsInDirection(c, active, direction, strictEdge) || !IsAligned(c, active, direction))
+                {
+                    continue;
+                }
+                int gap = GapTo(c, active, direction);
+                if (!allowNegativeGap && gap < 0)
+                {
+                    continue;
+                }
+                if (gap > upperBound)
                 {
                     continue;   // outside the closest-gap band
                 }
-                if (bestIndex == null || candidate.Adjacency >= bestAdjacency)
+                int adjacency = Adjacency(c, active, direction);
+                if (bestIndex == null || adjacency >= bestAdjacency)
                 {
-                    bestIndex = candidate.Index;   // ">=" — the LAST tie in iteration order wins (pinned)
-                    bestAdjacency = candidate.Adjacency;
+                    bestIndex = i;   // ">=" — the LAST tie in iteration order wins (pinned)
+                    bestAdjacency = adjacency;
                 }
             }
 
@@ -151,20 +168,6 @@ namespace Telescope.Overlay
             int yStart = Math.Max(c.Y, a.Y);
             int yEnd = Math.Min(c.Bottom, a.Bottom);
             return Math.Max(0, yEnd - yStart);
-        }
-
-        private readonly struct Candidate
-        {
-            public readonly int Index;
-            public readonly int Gap;
-            public readonly int Adjacency;
-
-            public Candidate(int index, int gap, int adjacency)
-            {
-                Index = index;
-                Gap = gap;
-                Adjacency = adjacency;
-            }
         }
     }
 }

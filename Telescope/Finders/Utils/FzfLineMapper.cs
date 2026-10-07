@@ -19,37 +19,6 @@ namespace Telescope.Finders
         /// </summary>
         private const char BoundaryMarker = '\u0001';
 
-        public static IReadOnlyList<int> Map(string[] fileLines, IReadOnlyList<string> matchedLines)
-        {
-            var result = new List<int>();
-            if (fileLines == null || matchedLines == null)
-            {
-                return result;
-            }
-
-            // m6 (BP-7): O(n+m) single pass — build a line-text -> unconsumed 1-based line-number
-            // queue, then pop the next unconsumed line per matched string (ordinal consumption).
-            var byText = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
-            for (int i = 0; i < fileLines.Length; i++)
-            {
-                if (!byText.TryGetValue(fileLines[i], out Queue<int>? q))
-                {
-                    q = new Queue<int>();
-                    byText[fileLines[i]] = q;
-                }
-                q.Enqueue(i + 1);
-            }
-
-            foreach (string matched in matchedLines)
-            {
-                if (byText.TryGetValue(matched, out Queue<int>? q) && q.Count > 0)
-                {
-                    result.Add(q.Dequeue());
-                }
-            }
-            return result;
-        }
-
         /// <summary>
         /// Flattens ALL files' lines into ONE batched candidate list (BP-2/M2): each line becomes
         /// <c>"{fileIndex}\u0001{lineText}"</c> so fzf ranks across every file in a single

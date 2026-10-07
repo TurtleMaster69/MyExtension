@@ -90,6 +90,12 @@ namespace MyExtension.Vim
         public bool IsEditorFocused => _editorFocused;
 
         /// <summary>
+        /// m60 (BP-D13): test-only seam — sets the event-driven editor-focus flag directly (the
+        /// Got/LostAggregateFocus events normally drive it). No production behavior change.
+        /// </summary>
+        internal void SetEditorFocusedForTest(bool focused) => _editorFocused = focused;
+
+        /// <summary>
         /// Called by the editor for every new code text view (UI thread). We attach focus and
         /// closed handlers and hand the view to the mode source so it can resolve/subscribe its
         /// Vim buffer.

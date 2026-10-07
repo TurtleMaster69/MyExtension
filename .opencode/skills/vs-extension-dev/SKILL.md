@@ -146,7 +146,8 @@ results list (List), and the preview (Preview) are panes behind one composable
 contract (`IPane` + `PaneHost`), each focusable with REAL WPF focus — **left-click
 focuses a pane**, and **Ctrl+H/J/K/L move focus GEOMETRICALLY — LEFT/DOWN/UP/RIGHT**
 (the Cardinal spatial mapping; the collapsed `FocusTargetModel` runs the
-`WindowNavigationEngine` pipeline over the pane rects; Ctrl+K from the Input
+shared `GeometricSelectionEngine` — the same engine `WindowNavigationEngine`
+delegates to — over the pane rects; Ctrl+K from the Input
 focuses the Preview — the larger adjacency, the last-in-list tie-break as the
 equal-width net; a direction with no pane is a logged no-op — no wrap). The
 initial pane on open is Input (the prompt focused in insert mode). Keys route by

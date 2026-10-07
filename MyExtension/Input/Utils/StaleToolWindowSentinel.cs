@@ -8,6 +8,14 @@ namespace MyExtension.Input
     /// </summary>
     internal sealed class StaleToolWindowSentinel
     {
+        /// <summary>
+        /// M1 (BP-3): whether the stale-toolwindow fault is configured for this session — the
+        /// harness sets <c>NEOVISUAL_LOG_DIR</c> (the sentinel file lives under it). Read FRESH
+        /// (not cached at static-init) so tests can set/unset the env var around construction.
+        /// </summary>
+        internal static bool IsConfigured =>
+            !string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR"));
+
         private readonly string? _path;
         private bool _isStale;
 

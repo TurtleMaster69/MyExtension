@@ -71,7 +71,7 @@ namespace MyExtension.Navigation
             {
                 IEnumWindowFrames toolFramesEnum;
                 ErrorHandler.ThrowOnFailure(uiShell.GetToolWindowEnum(out toolFramesEnum));
-                adapters.AddRange(ExtractFrames(toolFramesEnum));
+                adapters.AddRange(ExtractFramesCore(toolFramesEnum));
             }
             catch (Exception ex)
             {
@@ -82,7 +82,7 @@ namespace MyExtension.Navigation
             {
                 IEnumWindowFrames documentFramesEnum;
                 ErrorHandler.ThrowOnFailure(uiShell.GetDocumentWindowEnum(out documentFramesEnum));
-                adapters.AddRange(ExtractFrames(documentFramesEnum));
+                adapters.AddRange(ExtractFramesCore(documentFramesEnum));
             }
             catch (Exception ex)
             {
@@ -102,7 +102,23 @@ namespace MyExtension.Navigation
             {
                 return null;
             }
-            return windows?.FirstOrDefault(a => WindowFrameUtils.CompareWindows(activeWindow, a.DteWindow));
+            // M2 (BP-12): each CompareWindows call is isolated — a stale/disconnected RCW adapter
+            // is SKIPPED (returns false), the rest survive (the F7 residual: one stale frame must
+            // not kill all navigation).
+            return windows?.FirstOrDefault(a => MatchesActive(activeWindow, a));
+        }
+
+        private static bool MatchesActive(EnvDTE.Window activeWindow, WindowFrameAdapter a)
+        {
+            try
+            {
+                return WindowFrameUtils.CompareWindows(activeWindow, a.DteWindow);
+            }
+            catch
+            {
+                // stale/disconnected window — skip it
+                return false;
+            }
         }
 
         /// <summary>
@@ -117,14 +133,28 @@ namespace MyExtension.Navigation
             // N7/N14: single-source the window comparison (including the Properties-window quirk)
             // in WindowFrameUtils.CompareWindows — no separate key-set strategy that can diverge.
             // This runs once per window-set change (BuildActiveWindows caches the result), not per
-            // keystroke.
-            return windows.Where(a => parentWindows.Any(p => WindowFrameUtils.CompareWindows(p, a.DteWindow)));
+            // keystroke. M2 (BP-12): each CompareWindows call in the Where clause is isolated — a
+            // throwing adapter is skipped, the rest survive.
+            return windows.Where(a => IsLinkedToAny(a, parentWindows));
         }
 
-        private static IEnumerable<WindowFrameAdapter> ExtractFrames(IEnumWindowFrames frames)
+        private static bool IsLinkedToAny(WindowFrameAdapter a, List<EnvDTE.Window> parentWindows)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            return ExtractFramesCore(frames);
+            foreach (EnvDTE.Window p in parentWindows)
+            {
+                try
+                {
+                    if (WindowFrameUtils.CompareWindows(p, a.DteWindow))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // stale/disconnected window — skip it
+                }
+            }
+            return false;
         }
 
         private static IEnumerable<WindowFrameAdapter> ExtractFramesCore(IEnumWindowFrames frames)

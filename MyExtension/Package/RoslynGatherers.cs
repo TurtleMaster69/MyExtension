@@ -139,9 +139,8 @@ namespace MyExtension.Package
                     continue;
                 }
 
-                string kind = impl is Microsoft.CodeAnalysis.INamedTypeSymbol nts
-                    ? nts.TypeKind.ToString()
-                    : impl.Kind.ToString();
+                var nts = impl as Microsoft.CodeAnalysis.INamedTypeSymbol;
+                string kind = KindName(nts?.TypeKind.ToString() ?? string.Empty, impl.Kind.ToString(), nts != null);
                 hits.Add(new ImplementationHit(path, line, impl.Name, kind));
             }
 
@@ -201,11 +200,18 @@ namespace MyExtension.Package
 
             // The display kind — the GatherImplementations precedent (RoslynGatherers.cs:141-143):
             // named types report their TypeKind (Class/Interface/...), other symbols their Kind.
-            string kind = symbol is Microsoft.CodeAnalysis.INamedTypeSymbol nts
-                ? nts.TypeKind.ToString()
-                : symbol.Kind.ToString();
+            var nts = symbol as Microsoft.CodeAnalysis.INamedTypeSymbol;
+            string kind = KindName(nts?.TypeKind.ToString() ?? string.Empty, symbol.Kind.ToString(), nts != null);
             return MapDefinitionHits(locations, symbol.Name, kind);
         }
+
+        /// <summary>
+        /// n2 (BP-11): the single source for the display kind — named types report their TypeKind
+        /// (Class/Interface/...), other symbols their Kind. Shared by the implementations +
+        /// definitions gatherers (the expression was duplicated verbatim).
+        /// </summary>
+        internal static string KindName(string typeKind, string kind, bool isNamedType)
+            => isNamedType ? typeKind : kind;
 
         /// <summary>
         /// The PURE definition-hit mapping (hermetic-shape, no Roslyn types in the signature):

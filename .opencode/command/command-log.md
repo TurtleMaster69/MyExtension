@@ -453,3 +453,39 @@
 - NEEDS-PERMISSION: no
 - AGENT: e2e-test-builder
 - DATE: 2026-10-06
+
+### 2026-10-07 — code-review-worker (slice B)
+- OPERATION: `lsp incomingCalls file=MyExtension/Navigation/WindowNavigator.cs line=133 char=31` (NavigateInDirection)
+- RESULT: "No results found" — but the symbol HAS a caller: `InputHandler.Navigate` calls `wm.NavigateInDirection(direction)` at InputHandler.cs:640 (confirmed by reading the call site; Trailmark `proxy.unresolved:WindowNavigator.NavigateInDirection` also returned []). Same class as the 2026-10-06 D1 entry — Roslyn call-hierarchy incomingCalls does not resolve a call on a local variable (`var wm = new WindowNavigator(...)`).
+- REASON: server — Roslyn call-hierarchy limitation for calls on local variables
+- ALTERNATIVE: grep/read the call site (verified working); do not treat incomingCalls "No results found" as dead code
+- NEEDS-PERMISSION: no
+- AGENT: code-review-worker
+- DATE: 2026-10-07
+
+### 2026-10-07 — e2e-test-builder (Section B compile-RED)
+- OPERATION: `lsp documentSymbol file=MyExtension/ToolWindows/FocusKeeperSchedule.cs` and `lsp documentSymbol file=MyExtension/Vim/TextMotionHelper.cs`
+- RESULT: "File not found" ×2 — both paths were guessed wrong; the real files are `MyExtension/ToolWindows/Utils/FocusKeeper.cs` (FocusKeeperSchedule is a nested class at line 95) and `MyExtension/ToolWindows/Utils/TextMotionHelper.cs`
+- REASON: misuse — guessed paths (same class as the 2026-10-04 docs-reviewer entry)
+- ALTERNATIVE: `glob`/`grep` for the file path first (verified working); the correct documentSymbol calls then succeeded
+- NEEDS-PERMISSION: no
+- AGENT: e2e-test-builder
+- DATE: 2026-10-07
+
+### 2026-10-07 — e2e-test-builder (Section C BP-1..12 RED)
+- CMD: two `dotnet run --project tests/Telescope.Tests` runs issued IN PARALLEL (a full-suite run + a substring-filtered run)
+- RESULT: both completed successfully (no CS2012), but the run VIOLATED the repo's sequential-build rule (W11 — the two test projects compile the shared Telescope.csproj into the same obj/ path; Defender AV can lock Telescope.dll on a simultaneous launch)
+- REASON: misuse — parallel `dotnet run` over the same repo's obj/bin
+- ALTERNATIVE: run `dotnet run --project tests/...` one at a time (sequential); never two runs of the same project in parallel
+- NEEDS-PERMISSION: no
+- AGENT: e2e-test-builder
+- DATE: 2026-10-07
+
+### 2026-10-07 — verification-agent (CR107 final gate)
+- CMD: `git diff -U3 tests/Telescope.Tests/Program.cs | rg -n '...|imp\"'` (DOUBLE-quoted pwsh arg containing `\"`)
+- RESULT: `imp\: The term 'imp\' is not recognized...` — the `\"` terminated the double-quoted string early; the trailing `imp\` became a bareword command. RECURRENCE of the indexed 2026-10-04 verification-agent Gap 11 class (double-quoted pwsh arg with `\"` → silent/truncated rg pattern)
+- REASON: misuse — same outer-shell quoting class as the known-bad row
+- ALTERNATIVE: single-quote the whole rg pattern (`rg -n '...'`) — verified working (the diff analysis then succeeded)
+- NEEDS-PERMISSION: no
+- AGENT: verification-agent
+- DATE: 2026-10-07

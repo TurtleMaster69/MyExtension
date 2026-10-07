@@ -2,6 +2,7 @@ using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -90,11 +91,11 @@ namespace Telescope.Overlay
         // re-logs).
         private readonly ResultsLogGate _resultsLogGate = new();
 
-        // Column-visibility state, per finder, for the PROCESS lifetime: TelescopeController builds
-        // a fresh overlay per open (a WPF Window cannot re-show), so per-instance state would
-        // silently reset the user's column choices on every open. UI-thread-only access (the
-        // overlay's whole lifecycle is on the UI thread).
-        private static readonly Dictionary<string, ColumnVisibilityModel> VisibilityByFinder = new();
+        // Column-visibility state, per finder, for THIS overlay instance (m26/BP-23): the static
+        // process-lifetime dictionary leaked across overlay instances (a WPF Window cannot re-show,
+        // so a fresh overlay per open kept the old instance's models alive forever). UI-thread-only
+        // access (the overlay's whole lifecycle is on the UI thread).
+        private readonly Dictionary<string, ColumnVisibilityModel> VisibilityByFinder = new();
 
         private static readonly string[] FallbackDisplayIds = { "display" };
 
@@ -128,9 +129,11 @@ namespace Telescope.Overlay
 
         // Feature 7: the three panes (the contract + host under Overlay/Utils/Panes/). The machine
         // (_focusTargetModel) stays the SINGLE focus decision source; the panes only apply it.
-        private readonly PromptPane _promptPane;
+        // n10 (BP-21): PromptPane/PreviewPane are merged into DelegatePane (the Input pane keeps
+        // Id=Input + no chrome; the Preview pane keeps Id=Preview + the chrome Border).
+        private readonly DelegatePane _promptPane;
         private readonly ListPane _listPane;
-        private readonly PreviewPane _previewPane;
+        private readonly DelegatePane _previewPane;
         private readonly PaneHost _paneHost;
         private bool _applyingSelection;   // the SelectionChanged re-entrancy guard (the native-arrow sync)
 
@@ -204,7 +207,7 @@ namespace Telescope.Overlay
             };
             _promptBox.TextChanged += OnPromptTextChanged;
             promptHost.Child = _promptBox;
-            _promptPane = new PromptPane(promptHost, FocusPrompt);   // Feature 7: the Input pane (FocusPrompt = its focus-entry)
+            _promptPane = new DelegatePane(FocusTarget.Input, new PaneAdapter(promptHost, FocusPrompt));   // Feature 7: the Input pane (FocusPrompt = its focus-entry)
             DockPanel.SetDock(_promptPane.Content, Dock.Bottom);
             _layout.Children.Add(_promptPane.Content);
 
@@ -305,7 +308,7 @@ namespace Telescope.Overlay
                 BorderThickness = new Thickness(1, 0, 0, 0),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x38, 0x41)),
             };
-            _previewPane = new PreviewPane(_previewHost, ActivatePreviewEditor);   // Feature 7: the pane wraps the host (Focusable=false stays on the slot)
+            _previewPane = new DelegatePane(FocusTarget.Preview, new PaneAdapter(_previewHost, ActivatePreviewEditor), chrome: true);   // Feature 7: the pane wraps the host (Focusable=false stays on the slot)
             Grid.SetColumn(_previewPane.Content, 1);
             bottom.Children.Add(_previewPane.Content);
 
@@ -385,7 +388,9 @@ namespace Telescope.Overlay
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             _activeFinder = finder;
-            _candidates = finder.GetCandidates();
+            // m27 (BP-24): the initial gather runs off the UI thread via GetCandidatesAsync (the
+            // IFinder seam); the UI-thread state below is applied after the await.
+            _candidates = await finder.GetCandidatesAsync();
             _results = _candidates;
             _selectedIndex = 0;
             _keyHandler.Reset();
@@ -434,10 +439,11 @@ namespace Telescope.Overlay
             if (centerRect.HasValue)
             {
                 var r = centerRect.Value;
-                var dpi = VisualTreeHelper.GetDpi(this);
-                double scale = dpi.PixelsPerDip;
-                Left = (r.Left + (r.Width - Width) / 2.0) / scale;
-                Top = (r.Top + (r.Height - Height) / 3.0) / scale;
+                // m31 (BP-28): the TARGET monitor's DPI scale (the monitor containing the rect),
+                // not the system DPI; the pure helper converts the pixel rect to DIPs BEFORE
+                // subtracting the DIP Width/Height (the old r.Width - Width mixed pixels and DIPs).
+                double scale = TargetMonitorScale(r);
+                (Left, Top) = OverlayCentering.Center(r, Width, Height, scale);
             }
             else
             {
@@ -476,6 +482,37 @@ namespace Telescope.Overlay
                 // window may already be closed
             }
             TelescopeLog.Log($"overlay closed");
+        }
+
+        // ---- m31 (BP-28): the target monitor's DPI scale (the monitor containing the rect) ----
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromRect(ref System.Drawing.Rectangle rect, uint dwFlags);
+
+        [DllImport("shcore.dll")]
+        private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+        private const uint MonitorDefaultToNearest = 2;
+        private const int EffectiveDpiType = 0;
+
+        /// <summary>The DPI scale of the monitor containing <paramref name="rect"/> (the target
+        /// monitor — the VS main window's monitor), NOT the system DPI. Falls back to the window's
+        /// own DPI when the monitor DPI cannot be read.</summary>
+        private double TargetMonitorScale(System.Drawing.Rectangle rect)
+        {
+            try
+            {
+                IntPtr monitor = MonitorFromRect(ref rect, MonitorDefaultToNearest);
+                if (monitor != IntPtr.Zero && GetDpiForMonitor(monitor, EffectiveDpiType, out uint dpiX, out _) == 0 && dpiX > 0)
+                {
+                    return dpiX / 96.0;
+                }
+            }
+            catch
+            {
+                // fall through to the window's DPI
+            }
+            return VisualTreeHelper.GetDpi(this).PixelsPerDip;
         }
 
         // ================================================================
@@ -534,7 +571,11 @@ namespace Telescope.Overlay
         {
             try
             {
-                var matched = await _fzf.FilterAsync(snapshot.Select(x => x.Display), query, token);
+                // M3 (BP-1): the FileFinder path keeps the graceful-degradation contract — a null
+                // failure signal (timeout/crash) coalesces back to the full snapshot so MapBack
+                // maps everything.
+                var matched = await _fzf.FilterAsync(snapshot.Select(x => x.Display), query, token)
+                    ?? snapshot.Select(x => x.Display).ToList();
                 if (token.IsCancellationRequested)
                 {
                     return;
@@ -843,7 +884,7 @@ namespace Telescope.Overlay
             //   [Telescope] results columns=<comma-separated visible ids, catalog order, no spaces>
             // m5 (BP-9): gated on ResultsLogGate — fire on change only (columns/count/selected/boxText;
             // a selection-only render that changes none of the four no longer re-logs).
-            string columnsIdList = ResultsFormatter.ColumnsIdList(VisibleIds());
+            string columnsIdList = string.Join(",", VisibleIds());
             int boxTextLen = ResultsFormatter.RenderedTextLength(_lastRowCells);
             if (_resultsLogGate.ShouldLog(columnsIdList, _results.Count, _selectedIndex, boxTextLen))
             {
@@ -880,34 +921,45 @@ namespace Telescope.Overlay
 
         private void ShowPreview(IFileLocation location)
         {
-            // Detach the old view BEFORE Show may close it (a rebuild disposes the previous
-            // view+document; a closed element must not stay in the visual tree).
-            _previewHost.Content = null;
+            try
+            {
+                // Detach the old view BEFORE Show may close it (a rebuild disposes the previous
+                // view+document; a closed element must not stay in the visual tree).
+                _previewHost.Content = null;
 
-            PreviewEditorResult result = _previewEditor?.Show(location) ?? PreviewEditorResult.Empty;
-            _previewHost.Content = result.Element;
-            // m1 (BP-8): SetTextIfChanged skips the full-file LineIndex rebuild when the file is
-            // unchanged (the caret is repositioned below regardless).
-            _previewNavigator.SetTextIfChanged(result.Text);   // ONE source of truth: the buffer's snapshot text
+                PreviewEditorResult result = _previewEditor?.Show(location) ?? PreviewEditorResult.Empty;
+                _previewHost.Content = result.Element;
+                // m1 (BP-8): SetTextIfChanged skips the full-file LineIndex rebuild when the file is
+                // unchanged (the caret is repositioned below regardless).
+                _previewNavigator.SetTextIfChanged(result.Text);   // ONE source of truth: the buffer's snapshot text
 
-            // Position the caret: the hit line, else the top (the old SetText reset-to-top semantics).
-            if (location.LineNumber > 0)
-            {
-                _previewNavigator.MoveToLine(location.LineNumber);
+                // Position the caret: the hit line, else the top (the old SetText reset-to-top semantics).
+                if (location.LineNumber > 0)
+                {
+                    _previewNavigator.MoveToLine(location.LineNumber);
+                }
+                else
+                {
+                    _previewNavigator.MoveTo(0);
+                }
+                // The navigator's target, CLAMPED to the editor text before it crosses the seam (the
+                // mtime-drift guard — an unclamped offset makes SnapshotPoint throw); the 1-based line
+                // of the CLAMPED offset is the scroll/diagnostic value (LineIndex.LineOf — the
+                // navigator's own convention; equal to LineNumber in every non-drift case).
+                int caret = PreviewCaretMap.Offset(result.Text, _previewNavigator.Caret);
+                _previewEditor?.ApplyCaret(caret);
+                if (location.LineNumber > 0)
+                {
+                    // m23 (BP-22): reuse the navigator's cached LineIndex (built by SetTextIfChanged
+                    // above) — no full LineIndex rebuild per preview load.
+                    TelescopeLog.Log(PreviewDiagnostics.Caret(caret, PreviewCaretMap.Line(_previewNavigator.LineIndex!, caret)));
+                }
             }
-            else
+            catch (Exception ex)
             {
-                _previewNavigator.MoveTo(0);
-            }
-            // The navigator's target, CLAMPED to the editor text before it crosses the seam (the
-            // mtime-drift guard — an unclamped offset makes SnapshotPoint throw); the 1-based line
-            // of the CLAMPED offset is the scroll/diagnostic value (LineIndex.LineOf — the
-            // navigator's own convention; equal to LineNumber in every non-drift case).
-            int caret = PreviewCaretMap.Offset(result.Text, _previewNavigator.Caret);
-            _previewEditor?.ApplyCaret(caret);
-            if (location.LineNumber > 0)
-            {
-                TelescopeLog.Log(PreviewDiagnostics.Caret(caret, PreviewCaretMap.Line(result.Text, caret)));
+                // m32 (BP-29): a faulting preview editor (Show/ApplyCaret) is caught and logged —
+                // never crashes the overlay.
+                TelescopeLog.Log($"preview failed: {DiagnosticLog.SanitizeText(ex.Message)}");
             }
         }
 
@@ -982,6 +1034,10 @@ namespace Telescope.Overlay
             {
                 FocusPane(FocusTarget.Input);   // Feature 7: the machine moves to Input + the pane focuses the prompt
             }
+            // m29 (BP-26): refresh the prompt caret style (block -> line) even when already on the
+            // Input pane — the ShouldFocus guard above skips FocusPane (the only place the style
+            // refreshed), so without this the block caret would persist after EnterInsert on Input.
+            ApplyPromptCaretStyle();
             ApplyInsertCaret(placement);
         }
 
@@ -1010,7 +1066,7 @@ namespace Telescope.Overlay
             //    left/down/up/right (the PaneNavigationEngine over the pane rects, plan §1.2);
             //    Escape in the preview returns to the list. Delegated to the pure focus-target
             //    state machine.
-            PaneFocusKey gesture = FocusTargetModel.MapKey(e.Key, hasCtrl);
+            PaneFocusKey gesture = FocusTargetModel.ChordDirection(e.Key, hasCtrl);
             var focusAction = _focusTargetModel.Handle(gesture);
             if (focusAction != FocusTargetAction.None)
             {
@@ -1097,7 +1153,8 @@ namespace Telescope.Overlay
         private bool TryPromptMotion(Key key)
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-            if (!PromptMotionRouter.ShouldConsume(key, shift, out TextMotion? motion, out CaretPlacement? insertPlacement))
+            bool hasCtrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out TextMotion? motion, out CaretPlacement? insertPlacement, hasCtrl: hasCtrl))
             {
                 if (insertPlacement != null)
                 {
@@ -1143,8 +1200,9 @@ namespace Telescope.Overlay
         private bool HandlePreviewKey(Key key)
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            bool hasCtrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
             // R1: the preview surface keeps the FULL motion set (j/k/g/G navigate the code).
-            if (!PromptMotionRouter.ShouldConsume(key, shift, out TextMotion? motion, out _, previewSurface: true))
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out TextMotion? motion, out _, previewSurface: true, hasCtrl: hasCtrl))
             {
                 return false;
             }
@@ -1250,21 +1308,10 @@ namespace Telescope.Overlay
 
         private static OverlayKey MapKey(Key key)
         {
-            switch (key)
-            {
-                case Key.Escape: return OverlayKey.Escape;
-                case Key.Q: return OverlayKey.Q;
-                case Key.Enter: return OverlayKey.Enter;
-                case Key.Up: return OverlayKey.Up;
-                case Key.Down: return OverlayKey.Down;
-                case Key.J: return OverlayKey.J;
-                case Key.K: return OverlayKey.K;
-                case Key.G:
-                    return (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? OverlayKey.ShiftG : OverlayKey.G;
-                case Key.I: return OverlayKey.I;
-                case Key.A: return OverlayKey.A;
-                default: return OverlayKey.Other;
-            }
+            // m24 (BP-13): the shared WPF Key -> OverlayKey table; the Input pane maps Up/Down to
+            // selection gestures (mapArrows:true — the List pane's native-arrows pin is the default).
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            return OverlayKeyMapper.Map(key, shift, mapArrows: true);
         }
 
         private void ApplyAction(OverlayAction action, string mode, KeyEventArgs e)
@@ -1415,6 +1462,28 @@ namespace Telescope.Overlay
             ApplyWindowWidth();      // D3: the width recomputed for the NEW visible set (before the rebuild)
             _columnsDirty = true;
             RenderResults();
+        }
+
+        /// <summary>
+        /// The inner pane adapter for the DelegatePane merge (n10/BP-21): wraps a content element +
+        /// a focus-entry delegate as an <see cref="IPane"/> so the Input/Preview panes can be
+        /// constructed as <see cref="DelegatePane"/>s. The Id is unused (DelegatePane overrides it).
+        /// </summary>
+        private sealed class PaneAdapter : IPane
+        {
+            private readonly FrameworkElement _content;
+            private readonly Action _activate;
+
+            public PaneAdapter(FrameworkElement content, Action activate)
+            {
+                _content = content ?? throw new ArgumentNullException(nameof(content));
+                _activate = activate ?? throw new ArgumentNullException(nameof(activate));
+            }
+
+            public FocusTarget Id => FocusTarget.Input;   // unused — DelegatePane overrides it
+            public FrameworkElement Content => _content;
+            public void Activate() => _activate();
+            public void Deactivate() { }
         }
     }
 }

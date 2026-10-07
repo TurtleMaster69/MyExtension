@@ -29,6 +29,11 @@ namespace MyExtension.ToolWindows
         // the SAME instance ("mode remembered per type" no longer depends on package init eagerly
         // registering every enum value).
         private readonly Dictionary<ToolWindowType, IToolWindowController> _defaultControllers = new();
+
+        // m14 (BP-13): fired at the end of OnWindowFocusChanged so subscribers (the package's
+        // SolutionExplorerController invalidation) can react to ANY focus change — the CLICK case
+        // the mode-change-only invalidation missed.
+        public event Action? FocusChanged;
     
         public IVsWindowFrame? CurrentWindow { get; private set; }
     
@@ -48,6 +53,11 @@ namespace MyExtension.ToolWindows
         // M1 pattern) — the COM GetProperty(VSFPROPID_DocView) + visual-tree walk runs only in
         // OnWindowFocusChanged, not per shift+key routed to a tool window.
         private bool _focusedTextBoxInCurrentToolWindow;
+
+        // n6 (BP-23): the single seam through which the merged focus walk resolves the focused WPF
+        // text box (the SolutionExplorerController m5 pattern) — a test replaces it with a fake box
+        // so the merged walk is testable without a real visual tree.
+        private Func<System.Windows.Controls.TextBox?> _findFocusedTextBox = TextMotionHelper.FindFocusedTextBox;
     
         // Test-only fault injection: when the harness creates a 'stale-toolwindow' sentinel file under
         // NEOVISUAL_LOG_DIR, report the Solution Explorer frame as current even when it is not — the
@@ -99,6 +109,19 @@ namespace MyExtension.ToolWindows
         public bool TextInputSurfaceFocused => IsTestStaleInjected() ? false : _textInputSurfaceFocused;
 
         /// <summary>
+        /// m60 (BP-D13): test-only seam — forces the frame-derived tool-window state (the fields
+        /// the SEID_WindowFrame selection event normally sets) so the InputHandler routing tests
+        /// are hermetic. No production behavior change.
+        /// </summary>
+        internal void SetToolWindowStateForTest(bool isToolWindow, ToolWindowType type, bool isTextInputType = false, bool textInputSurfaceFocused = false)
+        {
+            _isToolWindow = isToolWindow;
+            _type = type;
+            _isTextInputType = isTextInputType;
+            _textInputSurfaceFocused = textInputSurfaceFocused;
+        }
+
+        /// <summary>
         /// M5 (BP-2): invalidates the cached text-input-surface flag when the main editor gains
         /// focus. The flag is cached on focus-change events only (M1), so a stale Command Window
         /// frame could otherwise claim keyboard ownership over a focused editor; the
@@ -112,49 +135,71 @@ namespace MyExtension.ToolWindows
         }
     
         /// <summary>
-        /// The COM/visual-tree walk that computes whether the current tool window's WPF content holds
-        /// keyboard focus. Runs only on focus-change events (M1), not per key-down. UI thread only.
+        /// n6 (BP-23): the merged COM/visual-tree walk that computes BOTH the text-input-surface
+        /// fact and the focused-text-box-in-current-tool-window fact in ONE pass — reads
+        /// <c>GetProperty(VSFPROPID_DocView)</c> ONCE and does one visual-tree walk (previously two
+        /// separate walks per focus change). Runs only on focus-change events (M1/C3), not per
+        /// key-down. UI thread only. The focused box is resolved through the
+        /// <see cref="_findFocusedTextBox"/> seam (testable without a real visual tree).
         /// </summary>
-        private bool ComputeTextInputSurfaceFocused()
+        private void ComputeFocusedSurfaceState(out bool textInputSurfaceFocused, out bool focusedTextBoxInCurrentToolWindow)
         {
+            textInputSurfaceFocused = false;
+            focusedTextBoxInCurrentToolWindow = false;
             if (!IsToolWindow || CurrentWindow == null)
             {
-                return false;
+                return;
             }
-    
             try
             {
                 CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out object docViewObj);
-                if (!(docViewObj is System.Windows.FrameworkElement frameContent))
+                if (docViewObj is System.Windows.FrameworkElement frameContent)
                 {
-                    // The Command Window's DocView is a COM object (not a WPF FrameworkElement), so
-                    // the visual-tree walk below can never match it — yet its focused surface is an
-                    // IWpfTextView. For a text-input tool window a focused editor view IS that
-                    // window's own surface, so it owns the keyboard. Navigation tool windows
-                    // (Solution Explorer) are not text-input, so the editor-veto is unaffected.
-                    return IsTextInputType
+                    // Primary: the focused element / box is a descendant of the current tool
+                    // window's DocView content (the same walk the two old methods used).
+                    var focused = System.Windows.Input.Keyboard.FocusedElement as System.Windows.DependencyObject;
+                    if (focused != null)
+                    {
+                        textInputSurfaceFocused = IsDescendantOf(focused, frameContent);
+                    }
+                    var box = _findFocusedTextBox();
+                    if (box != null)
+                    {
+                        focusedTextBoxInCurrentToolWindow = IsDescendantOf(box, frameContent);
+                    }
+                }
+                else
+                {
+                    // The DocView is a COM object (not a WPF FrameworkElement), so the visual-tree
+                    // walk can never match it — yet its focused surface is an IWpfTextView. For a
+                    // text-input tool window a focused editor view IS that window's own surface, so
+                    // it owns the keyboard. Navigation tool windows (Solution Explorer) are not
+                    // text-input, so the editor-veto is unaffected.
+                    textInputSurfaceFocused = IsTextInputType
                         && System.Windows.Input.Keyboard.FocusedElement is Microsoft.VisualStudio.Text.Editor.IWpfTextView;
-                }
-    
-                var focused = System.Windows.Input.Keyboard.FocusedElement as System.Windows.DependencyObject;
-                if (focused == null)
-                {
-                    return false;
-                }
 
-                return IsDescendantOf(focused, frameContent);
+                    // Fallback for the box: scope by the focused box's own top-level window — the VS
+                    // main window has Owner == null; a modal dialog's Window has an Owner (the main
+                    // window), so a modal rename/move dialog's TextBox is NOT exempted (R10 preserved).
+                    var box = _findFocusedTextBox();
+                    if (box != null)
+                    {
+                        var top = FindTopLevelWindow(box);
+                        focusedTextBoxInCurrentToolWindow = top != null && top.Owner == null;
+                    }
+                }
             }
             catch
             {
-                return false;
+                // both flags stay false
             }
         }
 
         /// <summary>
         /// A10: the shared "walk up to the DocView content" loop — true when
         /// <paramref name="start"/> is <paramref name="frameContent"/> or a descendant of it in
-        /// the WPF logical/visual tree. Used by <see cref="ComputeTextInputSurfaceFocused"/> and
-        /// <see cref="IsFocusedTextBoxInCurrentToolWindow"/> (previously duplicated inline).
+        /// the WPF logical/visual tree. Used by <see cref="ComputeFocusedSurfaceState"/>
+        /// (previously duplicated inline).
         /// </summary>
         private static bool IsDescendantOf(System.Windows.DependencyObject start, System.Windows.FrameworkElement frameContent)
         {
@@ -182,49 +227,12 @@ namespace MyExtension.ToolWindows
         }
 
         /// <summary>
-        /// The COM/visual-tree walk that computes whether the focused WPF TextBox belongs to the
-        /// current tool window. Runs only on focus-change events (C3/M1), not per key-down. UI
-        /// thread only. Primary path: the box is a descendant of the current tool window's
-        /// VSFPROPID_DocView content (the same walk ComputeTextInputSurfaceFocused uses). Fallback
-        /// when the DocView is a COM object (not a WPF FrameworkElement — see
-        /// ComputeTextInputSurfaceFocused): scope by the focused box's own top-level window — the
-        /// box must be hosted in the VS main window (Owner == null), NOT a separate modal dialog
-        /// (whose Window has an Owner). Scopes the D4 shift-gate exemption to the current tool
-        /// window's own search box, preserving R10.
+        /// The top-level WPF <see cref="System.Windows.Window"/> hosting <paramref name="child"/>,
+        /// or null. Used by <see cref="ComputeFocusedSurfaceState"/>'s COM-object fallback: the box
+        /// must be hosted in the VS main window (Owner == null), NOT a separate modal dialog (whose
+        /// Window has an Owner) — scopes the D4 shift-gate exemption to the current tool window's
+        /// own search box, preserving R10.
         /// </summary>
-        private bool ComputeFocusedTextBoxInCurrentToolWindow()
-        {
-            if (!IsToolWindow || CurrentWindow == null)
-            {
-                return false;
-            }
-            var box = TextMotionHelper.FindFocusedTextBox();
-            if (box == null)
-            {
-                return false;
-            }
-            try
-            {
-                CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out object docViewObj);
-                if (docViewObj is System.Windows.FrameworkElement frameContent)
-                {
-                    // Primary: the focused box is a descendant of the current tool window's DocView content.
-                    return IsDescendantOf(box, frameContent);
-                }
-
-                // Fallback: the DocView is a COM object (not a WPF FrameworkElement), so the descendant
-                // walk can never match. Scope by the focused box's own top-level window: the VS main
-                // window has Owner == null; a modal dialog's Window has an Owner (the main window), so a
-                // modal rename/move dialog's TextBox is NOT exempted (R10 preserved).
-                var top = FindTopLevelWindow(box);
-                return top != null && top.Owner == null;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
         private static System.Windows.Window? FindTopLevelWindow(System.Windows.DependencyObject child)
         {
             for (var current = child; current != null; current = TextMotionHelper.GetParent(current))
@@ -248,9 +256,18 @@ namespace MyExtension.ToolWindows
         {
             _monitorSelection = monitorSelection;
     
-            _monitorSelection.AdviseSelectionEvents(
+            // m17 (BP-16): check the AdviseSelectionEvents HRESULT — a failure leaves
+            // _selectionEventsCookie = 0 and no focus-change events ever fire (stale
+            // _isToolWindow/_type/_textInputSurfaceFocused). Log the failure (the C7 `window type
+            // probe failed` precedent) instead of silently discarding it; Dispose already guards != 0.
+            int hr = _monitorSelection.AdviseSelectionEvents(
                 new SelectionEvents(this),
                 out _selectionEventsCookie);
+            if (hr < 0)
+            {
+                Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}selection events advise failed: 0x{hr:X8}");
+                _selectionEventsCookie = 0;
+            }
     
             // Initialize the current window (and its classification) once so InputHandler has
             // correct state immediately, not only after the first focus-change event.
@@ -286,28 +303,19 @@ namespace MyExtension.ToolWindows
         }
 
         internal IToolWindowController? GetController(ToolWindowType type)
-            => GetController(_controllers, _defaultControllers, type);
-
-        private static IToolWindowController? GetController(
-            IReadOnlyDictionary<ToolWindowType, IToolWindowController> registered,
-            Dictionary<ToolWindowType, IToolWindowController> defaults,
-            ToolWindowType type)
         {
-            // Return a stable per-type controller so mode is remembered per window type. R20: the
-            // per-type DEFAULT instances are cached in an INSTANCE-scoped dictionary (populated on
-            // miss) so two GetController calls for the same type return the SAME instance.
-            if (registered.TryGetValue(type, out var registeredController))
-            {
-                return registeredController;
-            }
-            if (defaults.TryGetValue(type, out var cached))
+            // m21 (BP-20): GetController delegates to ResolveController for the decision (registered
+            // wins, else the per-type default), then applies the instance cache so two calls for the
+            // same type return the SAME instance ("mode remembered per type" — R20: the per-type
+            // DEFAULT instances are cached in an INSTANCE-scoped dictionary, populated on miss).
+            if (_defaultControllers.TryGetValue(type, out var cached))
             {
                 return cached;
             }
-            var created = DefaultControllerFor(type);
+            var created = ResolveController(_controllers, type);
             if (created != null)
             {
-                defaults[type] = created;
+                _defaultControllers[type] = created;
             }
             return created;
         }
@@ -369,49 +377,70 @@ namespace MyExtension.ToolWindows
                 _isTextInputType = false;
                 _textInputSurfaceFocused = false;
                 _focusedTextBoxInCurrentToolWindow = false;
+                // m14 (BP-13): a focus change still fires the event (the click case).
+                FocusChanged?.Invoke();
                 return;
             }
-            int hr = CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
-            // N25: guard the cast — a non-int VSFPROPID_Type value must not throw
-            // InvalidCastException out of the IVsSelectionEvents callback.
-            if (hr == VSConstants.S_OK && value is int typeValue && (__WindowFrameTypeFlags)typeValue == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
+            // m22 (BP-21): the frame-derived state computation runs inside the IVsSelectionEvents
+            // COM callback — a disposed frame's GetProperty/GetGuidProperty throws out of the
+            // callback. Wrap it and reset the frame-derived state on failure.
+            try
             {
-                _isToolWindow = true;
-                int guidHr = CurrentWindow.GetGuidProperty(
-                        (int)__VSFPROPID.VSFPROPID_GuidPersistenceSlot,
-                        out Guid guid);
-                // C7: the GetGuidProperty HRESULT was discarded -> silent _type = Unknown on COM
-                // failure. Check it and log the failure (the n19 `window rect unavailable`
-                // precedent) instead of silently defaulting. n14: the one-line ShouldLogFailure
-                // wrapper is inlined — any negative HRESULT is a failure (the Win32 FAILED macro).
-                if (guidHr < 0)
+                int hr = CurrentWindow.GetProperty((int)__VSFPROPID.VSFPROPID_Type, out object value);
+                // N25: guard the cast — a non-int VSFPROPID_Type value must not throw
+                // InvalidCastException out of the IVsSelectionEvents callback.
+                if (hr == VSConstants.S_OK && value is int typeValue && (__WindowFrameTypeFlags)typeValue == __WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool)
                 {
-                    Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window type probe failed: 0x{guidHr:X8}");
-                    _type = ToolWindowType.Unknown;
-                }
-                else if (guid != Guid.Empty)
-                {
-                    _type = ToolWindowTypeResolver.FromGuid(guid);
+                    _isToolWindow = true;
+                    int guidHr = CurrentWindow.GetGuidProperty(
+                            (int)__VSFPROPID.VSFPROPID_GuidPersistenceSlot,
+                            out Guid guid);
+                    // C7: the GetGuidProperty HRESULT was discarded -> silent _type = Unknown on COM
+                    // failure. Check it and log the failure (the n19 `window rect unavailable`
+                    // precedent) instead of silently defaulting. n14: the one-line ShouldLogFailure
+                    // wrapper is inlined — any negative HRESULT is a failure (the Win32 FAILED macro).
+                    if (guidHr < 0)
+                    {
+                        Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window type probe failed: 0x{guidHr:X8}");
+                        _type = ToolWindowType.Unknown;
+                    }
+                    else if (guid != Guid.Empty)
+                    {
+                        _type = ToolWindowTypeResolver.FromGuid(guid);
+                    }
+                    else
+                    {
+                        _type = ToolWindowType.Unknown;
+                    }
+                    _isTextInputType = ToolWindowTypeResolver.IsTextInputType(_type);
+                    // n6 (BP-23): the merged single walk computes both surface facts (one DocView read).
+                    ComputeFocusedSurfaceState(out bool textInputSurfaceFocused, out bool focusedTextBoxInCurrentToolWindow);
+                    _textInputSurfaceFocused = textInputSurfaceFocused;
+                    _focusedTextBoxInCurrentToolWindow = focusedTextBoxInCurrentToolWindow;
                 }
                 else
                 {
+                    _isToolWindow = false;
                     _type = ToolWindowType.Unknown;
+                    _isTextInputType = ToolWindowTypeResolver.IsTextInputType(_type);
+                    // n9: not a tool window — the merged walk would return false immediately (its
+                    // first guard is !IsToolWindow), so skip the COM/visual-tree walk.
+                    _textInputSurfaceFocused = false;
+                    _focusedTextBoxInCurrentToolWindow = false;
                 }
-                _isTextInputType = ToolWindowTypeResolver.IsTextInputType(_type);
-                _textInputSurfaceFocused = ComputeTextInputSurfaceFocused();
-                _focusedTextBoxInCurrentToolWindow = ComputeFocusedTextBoxInCurrentToolWindow();
-
             }
-            else
+            catch
             {
+                // m22 (BP-21): a disposed frame threw out of the COM callback — reset the
+                // frame-derived state so a stale frame never drives routing.
                 _isToolWindow = false;
                 _type = ToolWindowType.Unknown;
-                _isTextInputType = ToolWindowTypeResolver.IsTextInputType(_type);
-                // n9: not a tool window — ComputeTextInputSurfaceFocused() would return false
-                // immediately (its first guard is !IsToolWindow), so skip the COM/visual-tree walk.
+                _isTextInputType = false;
                 _textInputSurfaceFocused = false;
                 _focusedTextBoxInCurrentToolWindow = false;
             }
+            // m14 (BP-13): fired at the end of every focus change (the click case).
+            FocusChanged?.Invoke();
         }
         public void Dispose()
         {

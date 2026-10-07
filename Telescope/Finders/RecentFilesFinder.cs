@@ -21,8 +21,9 @@ namespace Telescope.Finders
     /// <para/>
     /// <b>Threading:</b> <see cref="FinderBase{THit}.GetCandidates"/> and
     /// <see cref="FinderBase{THit}.OnSelected"/> run on the UI thread (asserted by the base).
+    /// m37 (BP-15): produces <see cref="FileHit"/> payloads (RecentFileHit is merged into FileHit).
     /// </summary>
-    public sealed class RecentFilesFinder : FinderBase<RecentFileHit>
+    public sealed class RecentFilesFinder : FinderBase<FileHit>
     {
         private readonly Func<IReadOnlyList<string>> _gatherer;
         private readonly Action<string> _opener;
@@ -37,29 +38,29 @@ namespace Telescope.Finders
             _opener = opener ?? throw new ArgumentNullException(nameof(opener));
         }
 
-        protected override IReadOnlyList<RecentFileHit> GatherHits()
+        protected override IReadOnlyList<FileHit> GatherHits()
         {
             IReadOnlyList<string> paths = _gatherer() ?? Array.Empty<string>();
-            IReadOnlyList<RecentFileHit> hits = paths
+            IReadOnlyList<FileHit> hits = paths
                 .Where(p => !string.IsNullOrEmpty(p))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Where(File.Exists)
                 .Take(FinderConstants.HitCap)
-                .Select(p => new RecentFileHit(p))
+                .Select(p => new FileHit(p, 0))
                 .ToList();
 
             TelescopeLog.Log($"recent files gathered count={hits.Count}");
             return hits;
         }
 
-        protected override FinderEntry ToEntry(RecentFileHit hit)
+        protected override FinderEntry ToEntry(FileHit hit)
         {
             // The Files finder's display: the bare file name; the directory is the Dir
             // column's cell (the Recent column set).
             return new FinderEntry(Path.GetFileName(hit.FilePath), hit);
         }
 
-        protected override void OpenHit(RecentFileHit hit)
+        protected override void OpenHit(FileHit hit)
         {
             _opener(hit.FilePath);
             // Finder-owned open log — REUSES the Files finder's literal byte-exactly (M-M7).

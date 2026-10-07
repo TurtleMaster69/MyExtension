@@ -13,7 +13,10 @@ namespace MyExtension.Navigation
 
         private List<WindowFrameAdapter> _activeWindows;
 
-        private WindowFrameAdapter _activeWindow;
+        // m13 (BP-16): the active window can be legitimately null (no active window, or the active
+        // window cannot be paired to an adapter) — the nullable field makes the compiler enforce
+        // the runtime guard at NavigateInDirection.
+        private WindowFrameAdapter? _activeWindow;
 
         private NavigationSettings _settings;
 
@@ -37,6 +40,13 @@ namespace MyExtension.Navigation
         // N11: the cache is also keyed on the active window — the adapters list reference alone is
         // not enough (the active window can change while the list reference is unchanged).
         private static EnvDTE.Window? _cachedLinkedActive;
+
+        // m60 (BP-D13): test-only seams — the reference-keyed static cache (the n1 copy-guarantee
+        // tests read/write/reset it without reflecting into the private fields). No production
+        // behavior change.
+        internal static List<WindowFrameAdapter>? CachedLinkedForTest { get => _cachedLinked; set => _cachedLinked = value; }
+        internal static IReadOnlyList<WindowFrameAdapter>? CachedLinkedSourceForTest { get => _cachedLinkedSource; set => _cachedLinkedSource = value; }
+        internal static EnvDTE.Window? CachedLinkedActiveForTest { get => _cachedLinkedActive; set => _cachedLinkedActive = value; }
 
         // N15: the active window's index in _activeWindows, resolved once at construction instead
         // of an O(n) IndexOf per navigation.
@@ -79,13 +89,13 @@ namespace MyExtension.Navigation
                     // No active window to anchor navigation around; degrade to a no-op rather than
                     // throwing (navigation should never crash the hook). _activeWindow stays null;
                     // NavigateInDirection guards against it.
-                    _activeWindow = null!;
+                    _activeWindow = null;
                     return;
                 }
 
                 // If the active window can't be paired to an adapter (possible when the window list
                 // is mid-change), degrade to a no-op rather than throwing.
-                _activeWindow = WindowFrameAdapter.FindActive(activeWindow, _activeWindows) ?? null!;
+                _activeWindow = WindowFrameAdapter.FindActive(activeWindow, _activeWindows);
                 // N15: resolve the active index once here (O(n)) instead of per navigation.
                 _activeIndex = _activeWindow == null ? -1 : _activeWindows.IndexOf(_activeWindow);
             }
@@ -94,7 +104,7 @@ namespace MyExtension.Navigation
                 Telescope.Logging.NeoVisualLog.Log(
                     $"{Telescope.Logging.DiagnosticLog.NeoVisual}Window navigator initialization failed: {ex.Message}\n{ex.StackTrace}");
                 _activeWindows = new List<WindowFrameAdapter>();
-                _activeWindow = null!;
+                _activeWindow = null;
                 _activeIndex = -1;
             }
         }

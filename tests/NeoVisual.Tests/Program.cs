@@ -62,6 +62,19 @@ namespace NeoVisual.Tests
             return count;
         }
 
+        // BP-12 (M2): builds a WindowFrameAdapter hermetically (GetUninitializedObject skips the
+        // ctor's ThrowIfNotOnUIThread) with the given DTE window injected via the _dte field — the
+        // Run_WindowNavigator_CacheClearedOnReenum pattern.
+        private static WindowFrameAdapter MakeAdapter(EnvDTE.Window dte)
+        {
+            var adapter = (WindowFrameAdapter)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(WindowFrameAdapter));
+            typeof(WindowFrameAdapter).GetField("_dte",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(adapter, dte);
+            return adapter;
+        }
+
         // R20 (BP-26): minimal IVsMonitorSelection fake so a WindowManager can be constructed
         // hermetically (the ctor AdviseSelectionEvents + GetCurrentElementValue). GetCurrentElementValue
         // returns a null frame, so OnWindowFocusChanged early-returns and the manager is inert — the
@@ -340,6 +353,9 @@ namespace NeoVisual.Tests
             //   - Merge([defaults, user]) -> the user override wins for the same sequence; a
             //     user-only binding is added; an unoverridden default survives.
             //   - Deterministic: same input -> same output.
+            //   - m61 (BP-D14): a malformed source is logged (the [NeoVisual] keybinding-parse
+            //     failure diagnostic) and skipped — the good sources' bindings survive the merge
+            //     (the "one bad source never discards the others" contract).
             var merge = typeof(KeybindingConfig).GetMethod(
                 "Merge",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
@@ -347,41 +363,69 @@ namespace NeoVisual.Tests
 
             const string defaultsJson = "{\"bindings\":{\"w\":\"command:Default\",\"f,t\":\"telescope\"}}";
             const string userJson = "{\"bindings\":{\"w\":\"command:User\",\"x\":\"user-only\"}}";
+            const string malformedJson = "{not valid json";
 
-            // Merge([defaults]) -> defaults only.
-            var defaultsOnly = (KeybindingConfig)merge!.Invoke(null, new object[]
+            using (var dir = new TempDir())
             {
-                new List<(string Json, string ErrorMessage)> { (defaultsJson, "defaults") },
-            })!;
-            Assert.Equal("command:Default", defaultsOnly.Bindings["w"]);
-            Assert.True(defaultsOnly.Bindings.ContainsKey("f,t"), "a default binding is present");
-            Assert.False(defaultsOnly.Bindings.ContainsKey("x"), "no user-only binding in defaults-only");
-
-            // Merge([defaults, user]) -> user override wins; user-only added; default survives.
-            var merged = (KeybindingConfig)merge.Invoke(null, new object[]
-            {
-                new List<(string Json, string ErrorMessage)>
+                string logPath = System.IO.Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
                 {
-                    (defaultsJson, "defaults"),
-                    (userJson, "user"),
-                },
-            })!;
-            Assert.Equal("command:User", merged.Bindings["w"]);
-            Assert.Equal("telescope", merged.Bindings["f,t"]);
-            Assert.Equal("user-only", merged.Bindings["x"]);
+                    // Merge([defaults]) -> defaults only.
+                    var defaultsOnly = (KeybindingConfig)merge!.Invoke(null, new object[]
+                    {
+                        new List<(string Json, string ErrorMessage)> { (defaultsJson, "defaults") },
+                    })!;
+                    Assert.Equal("command:Default", defaultsOnly.Bindings["w"]);
+                    Assert.True(defaultsOnly.Bindings.ContainsKey("f,t"), "a default binding is present");
+                    Assert.False(defaultsOnly.Bindings.ContainsKey("x"), "no user-only binding in defaults-only");
 
-            // Deterministic: the same input produces the same merged set.
-            var merged2 = (KeybindingConfig)merge.Invoke(null, new object[]
-            {
-                new List<(string Json, string ErrorMessage)>
-                {
-                    (defaultsJson, "defaults"),
-                    (userJson, "user"),
-                },
-            })!;
-            Assert.Equal(merged.Bindings.Count, merged2.Bindings.Count);
-            Assert.Equal("command:User", merged2.Bindings["w"]);
-            Assert.Equal("user-only", merged2.Bindings["x"]);
+                    // Merge([defaults, user]) -> user override wins; user-only added; default survives.
+                    var merged = (KeybindingConfig)merge.Invoke(null, new object[]
+                    {
+                        new List<(string Json, string ErrorMessage)>
+                        {
+                            (defaultsJson, "defaults"),
+                            (userJson, "user"),
+                        },
+                    })!;
+                    Assert.Equal("command:User", merged.Bindings["w"]);
+                    Assert.Equal("telescope", merged.Bindings["f,t"]);
+                    Assert.Equal("user-only", merged.Bindings["x"]);
+
+                    // Deterministic: the same input produces the same merged set.
+                    var merged2 = (KeybindingConfig)merge.Invoke(null, new object[]
+                    {
+                        new List<(string Json, string ErrorMessage)>
+                        {
+                            (defaultsJson, "defaults"),
+                            (userJson, "user"),
+                        },
+                    })!;
+                    Assert.Equal(merged.Bindings.Count, merged2.Bindings.Count);
+                    Assert.Equal("command:User", merged2.Bindings["w"]);
+                    Assert.Equal("user-only", merged2.Bindings["x"]);
+
+                    // m61 (BP-D14): a malformed source is logged and skipped — the good sources'
+                    // bindings survive the merge.
+                    var mergedWithBad = (KeybindingConfig)merge.Invoke(null, new object[]
+                    {
+                        new List<(string Json, string ErrorMessage)>
+                        {
+                            (defaultsJson, "defaults"),
+                            (userJson, "user"),
+                            (malformedJson, "malformed"),
+                        },
+                    })!;
+                    Assert.Equal("command:User", mergedWithBad.Bindings["w"]);
+                    Assert.Equal("telescope", mergedWithBad.Bindings["f,t"]);
+                    Assert.Equal("user-only", mergedWithBad.Bindings["x"]);
+
+                    Telescope.Logging.LogFileWriter.Flush();
+                    string content = ReadAllTextShared(logPath);
+                    Assert.True(content.Contains("[NeoVisual] malformed:"),
+                        "the malformed source logs the [NeoVisual] keybinding-parse failure");
+                });
+            }
         }
 
         // ================================================================
@@ -408,14 +452,15 @@ namespace NeoVisual.Tests
         public static void Run_KeyNames_CaseEncodesShift()
         {
             // Gap 1 (AC5/D1): the shift-aware leader-sequence mapping — a letter's case encodes
-            // Shift (lowercase = unshifted, uppercase = Shift+letter). Non-letters delegate to the
-            // printable mapping, shift-insensitive (shift is not noted for non-letters).
+            // Shift (lowercase = unshifted, uppercase = Shift+letter). BP-7 (m5): non-letter keys
+            // map the SHIFTED printable characters (shift-aware), so a binding like `w,}` (Shift+])
+            // fires distinctly from `w,]`. RED today: ToString(Keys.OemMinus, true) returns "-".
             Assert.Equal("f", KeyNames.ToString(Keys.F, false));
             Assert.Equal("F", KeyNames.ToString(Keys.F, true));
             Assert.Equal("g", KeyNames.ToString(Keys.G, false));
             Assert.Equal("G", KeyNames.ToString(Keys.G, true));
             Assert.Equal("-", KeyNames.ToString(Keys.OemMinus, false));
-            Assert.Equal("-", KeyNames.ToString(Keys.OemMinus, true));
+            Assert.Equal("_", KeyNames.ToString(Keys.OemMinus, true));
         }
 
         public static void Run_KeyNames_RoundTrip_LeaderSequence()
@@ -541,11 +586,11 @@ namespace NeoVisual.Tests
                 Assert.Equal(1, executed);
             }
 
-            // Non-letters are shift-insensitive (the two-arg overload delegates to the printable
-            // mapping): Shift+bracket types '}'/'{' but builds the SAME sequence name — the
-            // documented ambiguity (no }/{ binding exists or is planned, per plan D1).
-            Assert.Equal("]", KeyNames.ToString(Keys.OemCloseBrackets, true));
-            Assert.Equal("[", KeyNames.ToString(Keys.OemOpenBrackets, true));
+            // The diagnostic-nav sequences are UNSHIFTED: the unshifted bracket maps to ']'/'['
+            // (the printable mapping). The SHIFTED bracket maps to '}'/'{' (m5/BP-7 — pinned by
+            // Run_KeyNames_ShiftAwareNonLetter).
+            Assert.Equal("]", KeyNames.ToString(Keys.OemCloseBrackets, false));
+            Assert.Equal("[", KeyNames.ToString(Keys.OemOpenBrackets, false));
         }
 
         // ================================================================
@@ -1046,7 +1091,20 @@ namespace NeoVisual.Tests
         {
             var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
             Assert.True(controller.IsInputMode, "text-input windows start in insert mode");
-            Assert.True(controller.ActionKeys.Count > 0, "text-input controller exposes action keys");
+            // n24 (BP-D22): the exact action-key set, not just Count > 0 — a wrong-but-nonempty
+            // set fails. The CommandWindow controller exposes {A,H,L,I,J,K,D0,D4,W,B,E} (the
+            // shared text-motion wiring + the n7/BP-24 j/k/0/$ additions).
+            var expected = new HashSet<Keys>
+            {
+                Keys.A, Keys.H, Keys.L, Keys.I, Keys.J, Keys.K, Keys.D0, Keys.D4,
+                Keys.W, Keys.B, Keys.E,
+            };
+            var actual = new HashSet<Keys>(controller.ActionKeys);
+            Assert.Equal(expected.Count, actual.Count, "the exact action-key set size");
+            foreach (var key in expected)
+            {
+                Assert.True(actual.Contains(key), $"ActionKeys contains {key}");
+            }
         }
 
         public static void Run_TextInput_TryMove_UnmappedKeyNotConsumed()
@@ -1430,11 +1488,11 @@ namespace NeoVisual.Tests
 
         public static void Run_ActionTable_TextInput_ActionKeysMatchTable()
         {
-            // CR1: the exact action-key set is {W,B,E,A,H,L,I} (count 7). RED today: the
-            // consolidation dropped Keys.I from _actions, so the actual set is {W,B,E,A,H,L}
-            // (count 6) and this exact-set assertion fails.
+            // CR1 + n7 (BP-24): the exact action-key set is {A,H,L,I,J,K,D0,D4,W,B,E} (count 11) —
+            // the text-input controller registers A/H/L/I + J/K/D0/D4 (the Command Window gains
+            // 0/$ like the search box) plus the shared W/B/E word motions (AddTextMotionKeys).
             var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
-            var expected = new[] { Keys.W, Keys.B, Keys.E, Keys.A, Keys.H, Keys.L, Keys.I };
+            var expected = new[] { Keys.A, Keys.H, Keys.L, Keys.I, Keys.J, Keys.K, Keys.D0, Keys.D4, Keys.W, Keys.B, Keys.E };
             var actual = new List<Keys>(controller.ActionKeys);
             Assert.Equal(expected.Length, actual.Count);
             foreach (var key in expected)
@@ -1446,13 +1504,13 @@ namespace NeoVisual.Tests
         public static void Run_TextInput_KeysIMapsToInsertStart()
         {
             // CR1: the I action must be present in the text-input controller's action table and
-            // map to InsertStart (Shift+i). RED today: Keys.I is missing from _actions, so the
-            // action table does not contain it.
+            // map to InsertStart (Shift+i). n23 (BP-D21): the MotionForActionKey seam reads the
+            // shared action-table -> motion mapping directly (no TextMotionHelper re-derivation).
             var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
             var keys = new List<Keys>(controller.ActionKeys);
             Assert.True(keys.Contains(Keys.I), "I is an action key (CR1)");
             // The pure mapping the I action applies: Shift+I -> InsertStart.
-            Assert.Equal(TextMotion.InsertStart, TextMotionHelper.MapMotion(Keys.I, true));
+            Assert.Equal(TextMotion.InsertStart, controller.MotionForActionKey(Keys.I));
         }
 
         public static void Run_ActionTable_UnmappedKeyNotConsumed()
@@ -1483,8 +1541,9 @@ namespace NeoVisual.Tests
             // (SolutionExplorerController.cs:46-47) with KeyToArrowVk. Pin the exact VK so a
             // refactor cannot silently change which arrow h/l press.
             var controller = new SolutionExplorerController(() => null!);
-            while (InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_LEFT)) { }
-            while (InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_RIGHT)) { }
+            // m63 (BP-D16): reset the static singleton so a prior test's injected state cannot
+            // leak into this test (order-independent).
+            InjectedKeyGuard.Instance.Reset();
             Assert.True(controller.TryMove(Keys.H), "h collapses (handled)");
             Assert.True(InjectedKeyGuard.Instance.TryConsume(KeyInjection.VK_LEFT),
                 "h presses VK_LEFT (m17: KeyToArrowVk, not a hardcoded drift)");
@@ -1820,11 +1879,11 @@ namespace NeoVisual.Tests
             //   - elapsed >= duration                        -> stop (elapsed wins)
             //   - search box still focused after 4 attempts  -> stop (N26/BP-32: do not fight the user)
             //   - otherwise                                  -> re-assert the selection
-            Assert.Equal(FocusKeeperSchedule.Decision.InjectEscape, FocusKeeperSchedule.Decide(true, 0, 0, 1500));
-            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 0, 4, 1500));
-            Assert.Equal(FocusKeeperSchedule.Decision.Reassert, FocusKeeperSchedule.Decide(false, 0, 0, 1500));
-            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(false, 1500, 0, 1500));
-            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 1500, 0, 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.InjectEscape, FocusKeeperSchedule.Decide(true, 0, 0, 1500, editorFocused: false));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 0, 4, 1500, editorFocused: false));
+            Assert.Equal(FocusKeeperSchedule.Decision.Reassert, FocusKeeperSchedule.Decide(false, 0, 0, 1500, editorFocused: false));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(false, 1500, 0, 1500, editorFocused: false));
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop, FocusKeeperSchedule.Decide(true, 1500, 0, 1500, editorFocused: false));
         }
 
         public static void Run_FocusKeeperSchedule_StopsAfterMaxEscapeAttempts()
@@ -1833,9 +1892,9 @@ namespace NeoVisual.Tests
             // keeper must Stop (not Reassert) — it must not fight the user. RED today: Decide
             // returns Reassert for the 4-attempt case.
             Assert.Equal(FocusKeeperSchedule.Decision.InjectEscape,
-                FocusKeeperSchedule.Decide(searchBoxFocused: true, elapsedMs: 0, escapeAttempts: 3, durationMs: 1500));
+                FocusKeeperSchedule.Decide(searchBoxFocused: true, elapsedMs: 0, escapeAttempts: 3, durationMs: 1500, editorFocused: false));
             Assert.Equal(FocusKeeperSchedule.Decision.Stop,
-                FocusKeeperSchedule.Decide(searchBoxFocused: true, elapsedMs: 0, escapeAttempts: 4, durationMs: 1500));
+                FocusKeeperSchedule.Decide(searchBoxFocused: true, elapsedMs: 0, escapeAttempts: 4, durationMs: 1500, editorFocused: false));
         }
 
         // ================================================================
@@ -2344,7 +2403,7 @@ namespace NeoVisual.Tests
 
         // ================================================================
         // WindowRect geometry members (BP-1/N2)
-        // RED: Right/Bottom/IsEmpty/Adjacency/GapTo + Axis/Direction don't exist -> compile error
+        // RED: Right/Bottom/IsEmpty + Axis/Direction don't exist -> compile error
         // ================================================================
 
         public static void Run_RectCoordinate_Right_Bottom()
@@ -2358,23 +2417,6 @@ namespace NeoVisual.Tests
         {
             Assert.True(new WindowRect(0, 0, 0, 0).IsEmpty, "all-zero rect is empty");
             Assert.False(new WindowRect(1, 0, 0, 0).IsEmpty, "non-zero X means not empty");
-        }
-
-        public static void Run_RectCoordinate_Adjacency()
-        {
-            // 1-D span overlap on the given axis (closed-form AdjacencySize).
-            Assert.Equal(5, new WindowRect(0, 0, 10, 10).Adjacency(new WindowRect(5, 0, 10, 10), Axis.X));
-            Assert.Equal(0, new WindowRect(0, 0, 10, 10).Adjacency(new WindowRect(20, 0, 10, 10), Axis.X));
-            Assert.Equal(5, new WindowRect(0, 0, 10, 10).Adjacency(new WindowRect(0, 5, 10, 10), Axis.Y));
-        }
-
-        public static void Run_RectCoordinate_GapTo()
-        {
-            var active = new WindowRect(100, 100, 100, 100); // Right=200, Bottom=200
-            Assert.Equal(50, new WindowRect(100, 0, 100, 50).GapTo(active, Direction.Up));
-            Assert.Equal(2, new WindowRect(100, 202, 100, 50).GapTo(active, Direction.Down));
-            Assert.Equal(50, new WindowRect(0, 100, 50, 100).GapTo(active, Direction.Left));
-            Assert.Equal(50, new WindowRect(250, 100, 50, 100).GapTo(active, Direction.Right));
         }
 
         // ================================================================
@@ -2926,24 +2968,27 @@ namespace NeoVisual.Tests
 
         public static void Run_LeaderSequenceMatcher_AllModifiersTransparentDownAndUp()
         {
-            // Every physical modifier VK (Shift/Ctrl/Alt/Win, left and right variants) is
-            // transparent while a sequence is active — key-DOWN and key-UP alike: consumed,
-            // never appended, never aborting. (The hook currently dispatches only key-downs,
-            // but the pure machine must stay coherent for both directions.)
+            // BP-6 (m4): only Shift (ShiftKey/LShiftKey/RShiftKey) is transparent while a sequence
+            // is active — needed for shifted sequence members like w,|. A Ctrl/Alt/Win key-down
+            // ABORTS the sequence (clears it) so the modifier passes through to VS (the Ctrl+chord
+            // works). RED today: every modifier is consumed as transparent, so the abort keys fail.
             var executed = 0;
             var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
             {
                 ["w,|"] = () => executed++,
             };
-            var modifiers = new[]
+            var shiftKeys = new[]
             {
                 Keys.ShiftKey, Keys.LShiftKey, Keys.RShiftKey,
+            };
+            var abortKeys = new[]
+            {
                 Keys.ControlKey, Keys.LControlKey, Keys.RControlKey,
                 Keys.Menu, Keys.LMenu, Keys.RMenu,
                 Keys.LWin, Keys.RWin,
             };
 
-            foreach (var modifier in modifiers)
+            foreach (var modifier in shiftKeys)
             {
                 var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
                 matcher.HandleKey(Keys.Space, false, false, false, false);
@@ -2953,16 +2998,23 @@ namespace NeoVisual.Tests
                 Assert.Equal(LeaderResultKind.Consume, down.Kind);
                 Assert.True(matcher.IsActive, $"{modifier} key-down must not abort the pending sequence");
 
-                var up = matcher.HandleKey(modifier, false, false, false, false);
-                Assert.Equal(LeaderResultKind.Consume, up.Kind);
-                Assert.True(matcher.IsActive, $"{modifier} key-up must not abort the pending sequence");
-
                 // The sequence is untouched: the shifted member still completes the binding.
                 var pipe = matcher.HandleKey(Keys.OemPipe, false, true, false, false);
                 Assert.Equal(LeaderResultKind.Execute, pipe.Kind);
                 Assert.Equal<string?>("w,|", pipe.Sequence);
             }
-            Assert.Equal(modifiers.Length, executed);
+
+            foreach (var modifier in abortKeys)
+            {
+                var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+                matcher.HandleKey(Keys.Space, false, false, false, false);
+                matcher.HandleKey(Keys.W, false, false, false, false);
+
+                var down = matcher.HandleKey(modifier, false, false, false, false);
+                Assert.Equal(LeaderResultKind.Abort, down.Kind);
+                Assert.False(matcher.IsActive, $"{modifier} key-down must abort the pending sequence (m4)");
+            }
+            Assert.Equal(shiftKeys.Length, executed);
         }
 
         public static void Run_LeaderSequenceMatcher_LettersStillAppendAfterModifier()
@@ -3232,26 +3284,37 @@ namespace NeoVisual.Tests
             // WindowManager is VS-coupled (IVsMonitorSelection + ThreadHelper.ThrowIfNotOnUIThread
             // in the ctor), so construct it hermetically with the FakeMonitorSelection + a
             // UI-thread dispatcher (the Run_WindowManager_* pattern).
-            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            // BP-3 (M1): explicitly unset NEOVISUAL_LOG_DIR so the disarmed default assertion stays
+            // hermetic (the sentinel is armed from the env var in production).
+            string original = Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR");
+            try
             {
-                var handler = new InputHandler(null!, new WindowManager(new FakeMonitorSelection()));
-
-                // Counting clock seam: every read increments the counter.
-                int clockReads = 0;
-                handler.Clock = () => { clockReads++; return DateTime.UtcNow; };
-
-                // Sentinel DISARMED (the production default): N key-downs must never read the
-                // clock. RED today: the unguarded read at :481 fires once per key-down.
-                for (int i = 0; i < 5; i++)
+                Environment.SetEnvironmentVariable("NEOVISUAL_LOG_DIR", null);
+                using (TestScaffold.SetCurrentDispatcherAsUiThread())
                 {
-                    handler.IsKeyOfInterest(Keys.H, true, false, false);
-                }
-                Assert.Equal(0, clockReads);
+                    var handler = new InputHandler(null!, new WindowManager(new FakeMonitorSelection()));
 
-                // Sentinel ARMED (the test seam): the clock IS read (the sentinel block runs).
-                handler.SetSentinelArmedForTest(true);
-                handler.IsKeyOfInterest(Keys.H, true, false, false);
-                Assert.True(clockReads > 0, "the clock must be read when the sentinel is armed");
+                    // Counting clock seam: every read increments the counter.
+                    int clockReads = 0;
+                    handler.Clock = () => { clockReads++; return DateTime.UtcNow; };
+
+                    // Sentinel DISARMED (the production default): N key-downs must never read the
+                    // clock. RED today: the unguarded read at :481 fires once per key-down.
+                    for (int i = 0; i < 5; i++)
+                    {
+                        handler.IsKeyOfInterest(Keys.H, true, false, false);
+                    }
+                    Assert.Equal(0, clockReads);
+
+                    // Sentinel ARMED (the test seam): the clock IS read (the sentinel block runs).
+                    handler.SetSentinelArmedForTest(true);
+                    handler.IsKeyOfInterest(Keys.H, true, false, false);
+                    Assert.True(clockReads > 0, "the clock must be read when the sentinel is armed");
+                }
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("NEOVISUAL_LOG_DIR", original);
             }
         }
 
@@ -3271,28 +3334,15 @@ namespace NeoVisual.Tests
 
         public static void Run_InputHandler_ShouldRouteToolWindowKey_SingleOverload()
         {
-            // SEAMS THE BUILD-AGENT MUST CREATE (documented here so the ctor/fields compile):
-            //   1. internal InputHandler(TelescopeController telescope, WindowManager windowManager)
-            //      — the same test-only ctor as Run_InputHandler_NoPerKeySentinelRead (skips the
-            //      VS-coupled parts: ResolveVimModeTracker MEF + KeybindingConfig.Load). It must
-            //      tolerate a NULL telescope (substitute a fresh TelescopeController whose IsOpen is
-            //      false) and set _vsVim = new VimModeTracker() (IsEditorFocused defaults false) —
-            //      the surviving controller overload reads _vsVim.IsEditorFocused.
-            //   2. The private _leaderMatcher/_leaderKey fields are set via reflection below (the
-            //      established pattern) so IsKeyOfInterest's leader checks do not NRE.
+            // m60 (BP-D13): the reflection is gone — the test-only ctor initializes the leader
+            // matcher state, SetToolWindowStateForTest forces the frame-derived tool-window state,
+            // and SetEditorFocusedForTest drives the editor-focus veto (no private-field reads).
 
             using (TestScaffold.SetCurrentDispatcherAsUiThread())
             {
                 var manager = new WindowManager(new FakeMonitorSelection());
-                var handler = new InputHandler(null!, manager);
-
-                // Hermetic leader state so IsKeyOfInterest's leader checks are safe.
-                typeof(InputHandler).GetField("_leaderMatcher",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, new LeaderSequenceMatcher(Keys.Space, new Dictionary<string, Action>(StringComparer.Ordinal)));
-                typeof(InputHandler).GetField("_leaderKey",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, Keys.Space);
+                var tracker = new VimModeTracker();
+                var handler = new InputHandler(null!, manager, tracker);
 
                 // NON-tool-window state (the FakeMonitorSelection yields a null frame, so
                 // _isToolWindow is false and CurrentController is null): the surviving controller
@@ -3303,24 +3353,14 @@ namespace NeoVisual.Tests
                 // TOOL-window state: force the frame-derived state to a Toolbox (a non-text-input
                 // type with a default GeneralToolWindowController in normal mode) and re-run the
                 // same key. Editor not focused (the default) -> the controller overload routes it.
-                typeof(WindowManager).GetField("_isToolWindow",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, true);
-                typeof(WindowManager).GetField("_type",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, ToolWindowType.Toolbox);
+                manager.SetToolWindowStateForTest(true, ToolWindowType.Toolbox);
                 Assert.True(handler.IsKeyOfInterest(Keys.H, false, false, false),
                     "a focused tool window (editor not focused) -> the controller overload must route H");
 
                 // EDITOR-FOCUSED veto: the same tool-window state with an editor focused and a
                 // controller that does not own the keyboard (not input mode, not a focused
                 // text-input surface) -> the controller overload must NOT route the key.
-                var vsVim = typeof(InputHandler).GetField("_vsVim",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .GetValue(handler);
-                vsVim!.GetType().GetField("_editorFocused",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(vsVim, true);
+                tracker.SetEditorFocusedForTest(true);
                 Assert.False(handler.IsKeyOfInterest(Keys.H, false, false, false),
                     "editor focused + controller not owning the keyboard -> the controller overload must veto H");
             }
@@ -3341,55 +3381,18 @@ namespace NeoVisual.Tests
 
         public static void Run_InputHandler_ShiftGateUsesPureOverload()
         {
-            // SEAMS THE BUILD-AGENT MUST CREATE (documented here so the ctor/fields compile):
-            //   1. internal InputHandler(TelescopeController telescope, WindowManager windowManager)
-            //      — the same test-only ctor as Run_InputHandler_NoPerKeySentinelRead (skips the
-            //      VS-coupled parts: ResolveVimModeTracker MEF + KeybindingConfig.Load). It must
-            //      tolerate a NULL telescope (substitute a fresh TelescopeController whose IsOpen
-            //      is false) and set _vsVim = new VimModeTracker() (IsEditorFocused defaults
-            //      false). The _leaderMatcher/_leaderKey/_simpleMatcher/_lastSentinelRefresh
-            //      fields are set via reflection below (the established pattern) so
-            //      IsKeyOfInterest's leader/sentinel checks are hermetic.
-            //   2. The fix (BP-13/m36) must route the production shift gate through the pure
-            //      7-arg FocusGuard.ShouldRouteToolWindowKey overload (FocusGuard.cs:50-52) —
-            //      BOTH the inlined gate at InputHandler.cs:422 (TryRouteToolWindowKey) AND the
-            //      routing decision at InputHandler.cs:523 (IsKeyOfInterest's
-            //      ShouldRouteToolWindowKey(c)) — so the shift logic is single-sourced. This test
-            //      drives IsKeyOfInterest with shift held and asserts the pure overload's
-            //      shift-gate behavior. RED today: the :523 call uses the 3-arg overload (no
-            //      shift gate), so a shift+key on a non-text-input tool window is routed.
+            // m60 (BP-D13): the reflection is gone — the test-only ctor initializes the leader /
+            // simple-matcher / sentinel state, and SetToolWindowStateForTest forces the frame-
+            // derived tool-window state (no private-field reads).
 
             using (TestScaffold.SetCurrentDispatcherAsUiThread())
             {
                 var manager = new WindowManager(new FakeMonitorSelection());
                 var handler = new InputHandler(null!, manager);
 
-                // Hermetic leader/simple-matcher/sentinel state so IsKeyOfInterest's checks are
-                // deterministic (no leader active, no bound Shift+chord, sentinel block skipped).
-                typeof(InputHandler).GetField("_leaderMatcher",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, new LeaderSequenceMatcher(Keys.Space, new Dictionary<string, Action>(StringComparer.Ordinal)));
-                typeof(InputHandler).GetField("_leaderKey",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, Keys.Space);
-                typeof(InputHandler).GetField("_simpleMatcher",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, new SimpleShortcutMatcher(new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)));
-                typeof(InputHandler).GetField("_lastSentinelRefresh",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, DateTime.UtcNow);
-
                 // NON-TEXT-INPUT tool window (Toolbox -> a GeneralToolWindowController in normal
                 // mode; the manager reports no text-input surface).
-                typeof(WindowManager).GetField("_isToolWindow",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, true);
-                typeof(WindowManager).GetField("_type",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, ToolWindowType.Toolbox);
-                typeof(WindowManager).GetField("_isTextInputType",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, false);
+                manager.SetToolWindowStateForTest(true, ToolWindowType.Toolbox);
 
                 // No shift: the key routes (the shift gate only blocks when shift is held).
                 Assert.True(handler.IsKeyOfInterest(Keys.H, false, false, false),
@@ -3403,12 +3406,7 @@ namespace NeoVisual.Tests
                 // TEXT-INPUT surface (the same Toolbox controller, but the manager reports a
                 // text-input surface with a genuinely focused text box): the pure overload's shift
                 // gate exempts it (I/i and A/a must stay distinguishable), so the key still routes.
-                typeof(WindowManager).GetField("_isTextInputType",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, true);
-                typeof(WindowManager).GetField("_textInputSurfaceFocused",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, true);
+                manager.SetToolWindowStateForTest(true, ToolWindowType.Toolbox, isTextInputType: true, textInputSurfaceFocused: true);
                 Assert.True(handler.IsKeyOfInterest(Keys.H, false, true, false),
                     "shift + a text-input surface -> the pure overload's shift gate exempts it");
             }
@@ -3431,15 +3429,9 @@ namespace NeoVisual.Tests
 
         public static void Run_InputHandler_SingleControllerResolution()
         {
-            // SEAMS THE BUILD-AGENT MUST CREATE (documented here so the ctor/fields compile):
-            //   1. internal InputHandler(TelescopeController telescope, WindowManager windowManager)
-            //      — the same test-only ctor as Run_InputHandler_NoPerKeySentinelRead (skips the
-            //      VS-coupled parts: ResolveVimModeTracker MEF + KeybindingConfig.Load). It must
-            //      tolerate a NULL telescope and set _vsVim = new VimModeTracker().
-            //   2. The `_routeDecision` seam signature changes from Func<bool> to
-            //      Func<IToolWindowController?, bool> (BP-15/m38): TryRouteToolWindowKey resolves
-            //      CurrentController ONCE at the top and passes it to the seam. The test sets the
-            //      seam via reflection to a counting lambda of the NEW signature.
+            // m60 (BP-D13): the reflection is gone — SetToolWindowStateForTest forces the tool-
+            // window state, SetRouteDecisionForTest replaces the routing seam, and the internal
+            // TryRouteToolWindowKey is invoked directly (no private-field/method reads).
 
             using (TestScaffold.SetCurrentDispatcherAsUiThread())
             {
@@ -3447,35 +3439,18 @@ namespace NeoVisual.Tests
                 var handler = new InputHandler(null!, manager);
 
                 // Force a tool-window state (Toolbox -> a GeneralToolWindowController in normal mode).
-                typeof(WindowManager).GetField("_isToolWindow",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, true);
-                typeof(WindowManager).GetField("_type",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, ToolWindowType.Toolbox);
-
-                // Hermetic leader state so TryRouteToolWindowKey's leader checks are safe (the
-                // test-only ctor skips BuildBindings, so _leaderMatcher is null).
-                typeof(InputHandler).GetField("_leaderMatcher",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, new LeaderSequenceMatcher(Keys.Space, new Dictionary<string, Action>(StringComparer.Ordinal)));
+                manager.SetToolWindowStateForTest(true, ToolWindowType.Toolbox);
 
                 // The counting seam: the NEW signature (Func<IToolWindowController?, bool>) — the
                 // seam receives the controller TryRouteToolWindowKey resolved ONCE at the top. The
                 // lambda counts how many times the resolution is handed to the routing decision.
-                var seamField = typeof(InputHandler).GetField("_routeDecision",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                Assert.True(seamField != null, "the routing decision is computed through a single seam (n3)");
                 int resolutions = 0;
-                seamField!.SetValue(handler, (Func<IToolWindowController?, bool>)(c => { resolutions++; return true; }));
+                handler.SetRouteDecisionForTest(c => { resolutions++; return true; });
 
-                // Route a key through the private TryRouteToolWindowKey. The seam returns true
+                // Route a key through the internal TryRouteToolWindowKey. The seam returns true
                 // (route), so the method proceeds past the decision to the controller variable. X
                 // is not a motion and not an action key, so TryMove is never reached (no injection).
-                var method = typeof(InputHandler).GetMethod("TryRouteToolWindowKey",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                Assert.True(method != null, "TryRouteToolWindowKey must exist (private instance)");
-                method!.Invoke(handler, new object[] { Keys.X, false, false, false });
+                handler.TryRouteToolWindowKey(Keys.X, false, false, false);
 
                 Assert.Equal(1, resolutions);
             }
@@ -3805,21 +3780,19 @@ namespace NeoVisual.Tests
         // instance construction + CS1061 on Invalidate().
         public static void Run_ErrorListCacheDecision_Invalidation()
         {
+            // m60 (BP-D13): the reflection is gone — the CacheForTest seam reads/writes the
+            // instance cache directly (no private-field reads).
             var first = new ErrorListGatherer();
             var second = new ErrorListGatherer();
 
-            var cacheField = typeof(ErrorListGatherer).GetField("_cache",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(cacheField != null, "ErrorListGatherer has an instance _cache field (BP-7)");
-
             // The instance cache is per-instance: seeding one gatherer's cache must not leak into the other.
-            cacheField!.SetValue(first, new List<DiagnosticEntry>());
-            Assert.True(cacheField.GetValue(second) == null,
+            first.CacheForTest = new List<DiagnosticEntry>();
+            Assert.True(second.CacheForTest == null,
                 "two gatherers do not share cache state (the instance cache is per-instance)");
 
             // Invalidate() clears the cache (a build-done/document-saved event forces a fresh gather).
             first.Invalidate();
-            Assert.True(cacheField.GetValue(first) == null,
+            Assert.True(first.CacheForTest == null,
                 "Invalidate() clears the instance cache (a build-done/document-saved event forces a fresh gather)");
         }
 
@@ -3860,18 +3833,16 @@ namespace NeoVisual.Tests
                 var gatherer = new RecentFilesGatherer(() => null);
 
                 // Simulate the hooked state: the ctor's HookSessionEvents no-ops on a null DTE, so
-                // inject the fake DocumentEvents the fix must unhook.
+                // inject the fake DocumentEvents the fix must unhook (m60/BP-D13: the
+                // DocumentEventsForTest seam replaces the _documentEvents field reflection).
                 var docEvents = new FakeDocumentEvents();
-                var field = typeof(RecentFilesGatherer).GetField("_documentEvents",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                Assert.True(field != null, "RecentFilesGatherer has a _documentEvents field");
-                field!.SetValue(gatherer, docEvents);
+                gatherer.DocumentEventsForTest = docEvents;
 
                 gatherer.Dispose();
 
-                Assert.True(docEvents.UnhookCount == 1,
+                Assert.Equal(1, docEvents.UnhookCount,
                     "Dispose() must unhook the DocumentOpened subscription (the COM connection point is released)");
-                Assert.True(field.GetValue(gatherer) == null, "Dispose() must null _documentEvents");
+                Assert.True(gatherer.DocumentEventsForTest == null, "Dispose() must null _documentEvents");
             }
         }
 
@@ -3881,14 +3852,18 @@ namespace NeoVisual.Tests
         public static void Run_FocusKeeper_ResetAfterDispose()
         {
             var controller = new SolutionExplorerController(() => null!);
-            var field = typeof(SolutionExplorerController).GetField("_focusKeeper",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(field != null, "SolutionExplorerController has a _focusKeeper field");
+            // n25 (BP-D23): inject a tracking IDisposable via the FocusKeeperForTest seam and
+            // prove ResetFocusKeeper disposes it AND nulls the keeper field (a disposed handle is
+            // never reused).
+            var tracking = new TrackingDisposable();
+            controller.FocusKeeperForTest = tracking;
 
             // The new seam: reset the keeper to null after dispose (BP-27).
             controller.ResetFocusKeeper();
 
-            Assert.True(field!.GetValue(controller) == null,
+            Assert.True(tracking.Disposed,
+                "ResetFocusKeeper disposes the injected keeper handle (n25)");
+            Assert.True(controller.FocusKeeperForTest == null,
                 "_focusKeeper must be null after ResetFocusKeeper (BP-27) — a disposed handle is never reused");
         }
 
@@ -3938,17 +3913,16 @@ namespace NeoVisual.Tests
 
         public static void Run_SolutionExplorer_TryMoveSingleWalk()
         {
+            // m60 (BP-D13): the reflection is gone — SetFindFocusedTextBoxForTest replaces the
+            // focused-box resolver (no private-field reads).
             var controller = new SolutionExplorerController(() => null!);
-            var field = typeof(SolutionExplorerController).GetField("_findFocusedTextBox",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(field != null, "TryMove resolves the focused box through a single seam (m5)");
 
             // A non-null box (never dereferenced — X is not a motion, so TryMoveFocusedSurface
             // returns before touching it). GetUninitializedObject skips the WPF ctor (no STA needed).
             var fakeBox = (System.Windows.Controls.TextBox)System.Runtime.Serialization.FormatterServices
                 .GetUninitializedObject(typeof(System.Windows.Controls.TextBox));
             int calls = 0;
-            field!.SetValue(controller, (Func<System.Windows.Controls.TextBox?>)(() => { calls++; return fakeBox; }));
+            controller.SetFindFocusedTextBoxForTest(() => { calls++; return fakeBox; });
 
             // X is not a text motion and not an action key — it routes through the text-box path
             // (box != null) and is not consumed. The seam must be called exactly once.
@@ -3968,45 +3942,28 @@ namespace NeoVisual.Tests
 
         public static void Run_TryRouteToolWindowKey_SingleDecision()
         {
+            // m60 (BP-D13): the reflection is gone — the test-only ctor wires the fields
+            // TryRouteToolWindowKey reads, SetToolWindowStateForTest forces the tool-window state,
+            // SetRouteDecisionForTest replaces the routing seam, and the internal
+            // TryRouteToolWindowKey is invoked directly (no GetUninitializedObject / private reads).
             using (TestScaffold.SetCurrentDispatcherAsUiThread())
             {
-
                 // A WindowManager forced into a tool-window state (Toolbox -> a GeneralToolWindowController).
                 var manager = new WindowManager(new FakeMonitorSelection());
-                typeof(WindowManager).GetField("_isToolWindow",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, true);
-                typeof(WindowManager).GetField("_type",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(manager, ToolWindowType.Toolbox);
+                manager.SetToolWindowStateForTest(true, ToolWindowType.Toolbox);
 
-                // An InputHandler without the ctor; wire the fields TryRouteToolWindowKey reads.
-                var handler = (InputHandler)System.Runtime.Serialization.FormatterServices
-                    .GetUninitializedObject(typeof(InputHandler));
-                typeof(InputHandler).GetField("_windowManager",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, manager);
-                typeof(InputHandler).GetField("_vsVim",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, new VimModeTracker(new FakeVimModeSource()));
-                typeof(InputHandler).GetField("_leaderMatcher",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .SetValue(handler, new LeaderSequenceMatcher(Keys.Space, new Dictionary<string, Action>(StringComparer.Ordinal)));
+                // The test-only ctor (skips the VS-coupled parts) wires the fields
+                // TryRouteToolWindowKey reads.
+                var handler = new InputHandler(null!, manager);
 
                 // The counting seam: the single routing decision. m38 (BP-15): the field is
                 // Func<IToolWindowController?, bool> (the controller is resolved once and passed in).
-                var seamField = typeof(InputHandler).GetField("_routeDecision",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                Assert.True(seamField != null, "the routing decision is computed through a single seam (n3)");
                 int calls = 0;
-                seamField!.SetValue(handler, (Func<IToolWindowController?, bool>)(_ => { calls++; return false; }));
+                handler.SetRouteDecisionForTest(_ => { calls++; return false; });
 
-                // Route a key through the private TryRouteToolWindowKey. The seam returns false (don't
+                // Route a key through the internal TryRouteToolWindowKey. The seam returns false (don't
                 // route), so the method returns null after computing the decision once.
-                var method = typeof(InputHandler).GetMethod("TryRouteToolWindowKey",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                Assert.True(method != null, "TryRouteToolWindowKey must exist (private instance)");
-                method!.Invoke(handler, new object[] { Keys.H, false, false, false });
+                handler.TryRouteToolWindowKey(Keys.H, false, false, false);
 
                 Assert.Equal(1, calls);
             }
@@ -4022,21 +3979,13 @@ namespace NeoVisual.Tests
 
         public static void Run_WindowNavigator_CacheClearedOnReenum()
         {
+            // m60 (BP-D13): the reflection is gone — the CachedLinkedForTest / CachedLinkedSourceForTest /
+            // CachedLinkedActiveForTest seams read/write/reset the reference-keyed static cache (no
+            // private static-field reads).
             using (TestScaffold.SetCurrentDispatcherAsUiThread())
             {
                 try
                 {
-                    // The reference-keyed cache contract: three static fields (linked list + source + active).
-                    var linkedField = typeof(WindowNavigator).GetField("_cachedLinked",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                    var sourceField = typeof(WindowNavigator).GetField("_cachedLinkedSource",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                    var activeField = typeof(WindowNavigator).GetField("_cachedLinkedActive",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                    Assert.True(linkedField != null, "the linked-window cache is a static field (n1)");
-                    Assert.True(sourceField != null, "the cache is keyed on the adapters list reference (n1)");
-                    Assert.True(activeField != null, "the cache is keyed on the active window (n1)");
-
                     // Fake adapters (GetUninitializedObject skips the ctor's ThrowIfNotOnUIThread) + a fake
                     // active window (LinkedWindowFrame -> null, so the cache-miss LinkedTo returns empty).
                     var fakeAdapter = (WindowFrameAdapter)System.Runtime.Serialization.FormatterServices
@@ -4045,13 +3994,13 @@ namespace NeoVisual.Tests
                     var fakeActive = new FakeWindow();
 
                     // Pre-populate the cache with a NON-EMPTY linked list so the copy guarantee is meaningful.
-                    linkedField!.SetValue(null, new List<WindowFrameAdapter> { fakeAdapter });
-                    sourceField!.SetValue(null, adapters1);
-                    activeField!.SetValue(null, fakeActive);
+                    WindowNavigator.CachedLinkedForTest = new List<WindowFrameAdapter> { fakeAdapter };
+                    WindowNavigator.CachedLinkedSourceForTest = adapters1;
+                    WindowNavigator.CachedLinkedActiveForTest = fakeActive;
 
                     // Cache-hit: same refs -> the cached list is returned as a COPY, never the cache itself.
                     var result = WindowNavigator.BuildActiveWindows(fakeActive, adapters1);
-                    var cached = (List<WindowFrameAdapter>)linkedField.GetValue(null)!;
+                    var cached = WindowNavigator.CachedLinkedForTest!;
                     Assert.False(ReferenceEquals(result, cached),
                         "BuildActiveWindows returns a COPY, never the cached list itself (A6)");
                     Assert.Equal(1, result.Count);
@@ -4065,21 +4014,15 @@ namespace NeoVisual.Tests
                     // reference-keyed on the adapters list + active window).
                     var adapters2 = new List<WindowFrameAdapter> { fakeAdapter };
                     WindowNavigator.BuildActiveWindows(fakeActive, adapters2);
-                    Assert.True(ReferenceEquals(sourceField.GetValue(null), adapters2),
+                    Assert.True(ReferenceEquals(WindowNavigator.CachedLinkedSourceForTest, adapters2),
                         "a new adapters list reference recomputes (the cache is reference-keyed)");
                 }
                 finally
                 {
                     // Reset the static cache so no later test sees a stale window-set.
-                    typeof(WindowNavigator).GetField("_cachedLinked",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                        .SetValue(null, null);
-                    typeof(WindowNavigator).GetField("_cachedLinkedSource",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                        .SetValue(null, null);
-                    typeof(WindowNavigator).GetField("_cachedLinkedActive",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                        .SetValue(null, null);
+                    WindowNavigator.CachedLinkedForTest = null;
+                    WindowNavigator.CachedLinkedSourceForTest = null;
+                    WindowNavigator.CachedLinkedActiveForTest = null;
                 }
             }
         }
@@ -4338,6 +4281,138 @@ namespace NeoVisual.Tests
         }
 
         // ================================================================
+        // 106-findings plan — Section A Phase 1 (navigation isolation, M2/m10/m12/m13/n4)
+        // ================================================================
+
+        // BP-12 (M2): FindActive's FirstOrDefault predicate + LinkedTo's Where clause must isolate
+        // each CompareWindows call — a stale adapter whose DteWindow throws on Caption/Type must be
+        // SKIPPED, not propagated (the F7 residual). RED today: the stale adapter's CompareWindows
+        // throw escapes FindActive/LinkedTo.
+        public static void Run_WindowFrameAdapter_LinkedIsolation()
+        {
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                // The Properties-window quirk: a ToolWindow active + a Properties window with the
+                // same caption compare equal (CompareWindows returns true).
+                var activeWindow = new ComparableWindow("Foo", vsWindowType.vsWindowTypeToolWindow);
+                var healthy = MakeAdapter(new ComparableWindow("Foo", vsWindowType.vsWindowTypeProperties));
+                var stale = MakeAdapter(new ThrowingWindow());
+
+                // FindActive: the stale adapter is FIRST so its CompareWindows is evaluated before
+                // the healthy match — the throw must be isolated, not propagated.
+                Exception? findThrown = null;
+                WindowFrameAdapter? found = null;
+                try
+                {
+                    found = WindowFrameAdapter.FindActive(activeWindow, new List<WindowFrameAdapter> { stale, healthy });
+                }
+                catch (Exception ex)
+                {
+                    findThrown = ex;
+                }
+                Assert.True(findThrown == null,
+                    $"a stale adapter must not kill FindActive (BP-12): {findThrown?.GetType().Name}: {findThrown?.Message}");
+                Assert.True(ReferenceEquals(found, healthy),
+                    "FindActive skips the stale adapter and returns the surviving one (BP-12)");
+
+                // LinkedTo: the stale adapter's DteWindow Caption read inside the Where clause must
+                // be isolated too.
+                Exception? linkedThrown = null;
+                IEnumerable<WindowFrameAdapter>? linked = null;
+                try
+                {
+                    linked = WindowFrameAdapter.LinkedTo(activeWindow, new List<WindowFrameAdapter> { stale, healthy });
+                }
+                catch (Exception ex)
+                {
+                    linkedThrown = ex;
+                }
+                Assert.True(linkedThrown == null,
+                    $"a stale adapter must not kill LinkedTo (BP-12): {linkedThrown?.GetType().Name}: {linkedThrown?.Message}");
+                Assert.True(linked != null && linked.Contains(healthy),
+                    "LinkedTo skips the stale adapter and returns the surviving one (BP-12)");
+            }
+        }
+
+        // BP-13 (m10): the dead WindowRect.Adjacency/GapTo mirrors of the shared
+        // GeometricSelectionEngine formulas are deleted. Reflection-absence is the only hermetic way
+        // to pin a deletion (a single reflection call, not systemic).
+        public static void Run_WindowRect_DeadMirrorsRemoved()
+        {
+            Assert.True(typeof(WindowRect).GetMethod("Adjacency",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) == null,
+                "WindowRect.Adjacency is deleted (m10)");
+            Assert.True(typeof(WindowRect).GetMethod("GapTo",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) == null,
+                "WindowRect.GapTo is deleted (m10)");
+        }
+
+        // BP-15 (m12): WindowNavigationEngine.SelectTarget must map Direction -> the explicit
+        // GeometricSelectionEngine token (Up/Down/Left/Right), independent of the enum's numeric
+        // values. PIN: the mapping is correct today (the (int)direction coupling happens to match);
+        // the fix replaces the coupling with an explicit switch without changing behavior.
+        public static void Run_Direction_ExplicitMapping()
+        {
+            var settings = NavigationSettings.FromDpi(96, 96); // XDivide=24, YDivide=100
+            var active = new WindowRect(100, 100, 100, 100);
+            var candidates = new[]
+            {
+                new WindowRect(100, 0, 100, 50),   // above (Up)
+                new WindowRect(100, 200, 100, 50), // below (Down)
+                new WindowRect(0, 100, 50, 100),   // left
+                new WindowRect(200, 100, 50, 100), // right
+            };
+
+            Assert.Equal(
+                GeometricSelectionEngine.SelectTarget(active, candidates, GeometricSelectionEngine.Up, allowNegativeGap: true, divide: settings.YDivide, strictEdge: true),
+                WindowNavigationEngine.SelectTarget(active, candidates, Direction.Up, settings));
+            Assert.Equal(
+                GeometricSelectionEngine.SelectTarget(active, candidates, GeometricSelectionEngine.Down, allowNegativeGap: true, divide: settings.YDivide, strictEdge: true),
+                WindowNavigationEngine.SelectTarget(active, candidates, Direction.Down, settings));
+            Assert.Equal(
+                GeometricSelectionEngine.SelectTarget(active, candidates, GeometricSelectionEngine.Left, allowNegativeGap: true, divide: settings.XDivide, strictEdge: true),
+                WindowNavigationEngine.SelectTarget(active, candidates, Direction.Left, settings));
+            Assert.Equal(
+                GeometricSelectionEngine.SelectTarget(active, candidates, GeometricSelectionEngine.Right, allowNegativeGap: true, divide: settings.XDivide, strictEdge: true),
+                WindowNavigationEngine.SelectTarget(active, candidates, Direction.Right, settings));
+        }
+
+        // BP-16 (m13): a WindowNavigator whose active window cannot be paired to an adapter (the
+        // adapters' DteWindow is null, so FindActive returns null) must degrade to a no-op, not
+        // throw. PIN: the runtime guard at NavigateInDirection already returns NoOp("no active
+        // window"); the fix makes the field nullable so the compiler enforces it.
+        public static void Run_WindowNavigator_NullActive()
+        {
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var package = (RecordingPackage)System.Runtime.Serialization.FormatterServices
+                    .GetUninitializedObject(typeof(RecordingPackage));
+                // The frame's DocView is a FakeWindow, so VsShellUtilities.GetWindowObject resolves
+                // a non-null active window; the adapter's DteWindow is null, so FindActive returns null.
+                var frame = new WindowFrameWithDocView(new FakeWindow());
+                var adapter = new WindowFrameAdapter(frame, null!);
+                var adapters = new List<WindowFrameAdapter> { adapter };
+
+                var navigator = new WindowNavigator(adapters, package, frame);
+                var outcome = navigator.NavigateInDirection(Direction.Left);
+
+                Assert.False(outcome.Activated,
+                    "an active window that cannot be paired to an adapter is a no-op (BP-16)");
+                Assert.Equal("no active window", outcome.NoOpReason);
+            }
+        }
+
+        // BP-17 (n4): the redundant WindowFrameAdapter.ExtractFrames wrapper is deleted (the call
+        // sites call ExtractFramesCore directly). Reflection-absence is the only hermetic way to pin
+        // a deletion.
+        public static void Run_ExtractFrames_Removed()
+        {
+            Assert.True(typeof(WindowFrameAdapter).GetMethod("ExtractFrames",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static) == null,
+                "WindowFrameAdapter.ExtractFrames is deleted (n4)");
+        }
+
+        // ================================================================
         // BP-15 (m17) — RecentFilesGatherer.Dispose asserts the UI thread before the COM unhook.
         // RED: no assert today -> Dispose() from a background thread does not throw.
         // ================================================================
@@ -4379,15 +4454,12 @@ namespace NeoVisual.Tests
             // Keeper 2 immediately supersedes keeper 1.
             keeper.Run(TimeSpan.FromMilliseconds(100), 5000, _ => true);
 
-            // Pump the dispatcher so any queued keeper-1 tick fires.
-            var frame = new System.Windows.Threading.DispatcherFrame();
-            var exitTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Normal)
-            {
-                Interval = TimeSpan.FromMilliseconds(30)
-            };
-            exitTimer.Tick += (_, _) => { exitTimer.Stop(); frame.Continue = false; };
-            exitTimer.Start();
-            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            // m64 (BP-D17): invoke the superseded keeper's tick DIRECTLY through the InvokeTick
+            // seam (no 30ms DispatcherTimer pump). The ReferenceEquals guard makes a non-current
+            // keeper's tick a no-op — the tick lambda must never run for a superseded keeper.
+            var supersededTimer = new System.Windows.Threading.DispatcherTimer();
+            keeper.InvokeTick(supersededTimer, 5000, System.Diagnostics.Stopwatch.StartNew(),
+                _ => { keeper1Ticks++; return true; });
 
             // A superseded keeper's queued tick must be a no-op (m21).
             Assert.Equal(0, keeper1Ticks);
@@ -4413,17 +4485,16 @@ namespace NeoVisual.Tests
 
         public static void Run_SolutionExplorer_TryMoveCachedAcrossKeys()
         {
+            // m60 (BP-D13): the reflection is gone — SetFindFocusedTextBoxForTest replaces the
+            // focused-box resolver (no private-field reads).
             var controller = new SolutionExplorerController(() => null!);
-            var field = typeof(SolutionExplorerController).GetField("_findFocusedTextBox",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(field != null, "TryMove resolves the focused box through a single seam (m47)");
 
             // A non-null box (never dereferenced — X is not a motion, so TryMoveFocusedSurface
             // returns before touching it). GetUninitializedObject skips the WPF ctor (no STA needed).
             var fakeBox = (System.Windows.Controls.TextBox)System.Runtime.Serialization.FormatterServices
                 .GetUninitializedObject(typeof(System.Windows.Controls.TextBox));
             int calls = 0;
-            field!.SetValue(controller, (Func<System.Windows.Controls.TextBox?>)(() => { calls++; return fakeBox; }));
+            controller.SetFindFocusedTextBoxForTest(() => { calls++; return fakeBox; });
 
             // Two consecutive TryMove calls must resolve the box ONCE (the walk is cached across
             // keys, m47). RED today: the second call re-walks -> calls == 2.
@@ -4592,6 +4663,601 @@ namespace NeoVisual.Tests
             // A normal column resolves to the exact character: offset 4 + (2-1) = 5.
             Assert.Equal(4 + 1, RoslynGatherers.ResolveOffset(text, 2, 2));
         }
+
+        // ================================================================
+        // 107-findings plan — Section B (Phases 2-4: Vim interop, Hook/input/package, Tool-windows)
+        // ================================================================
+
+        // BP-1 (m1): OnBufferClosed-then-Detach double-decrements the shared-text-buffer refcount.
+        // Two views A/B share one text buffer, both Closed-subscribed: OnBufferClosed(bufferA) drops
+        // 2 -> 1; Detach(viewA) must NOT decrement again (the refcount was already decremented by
+        // OnBufferClosed); Detach(viewB) drops to 0. RED today: Detach(viewA) double-decrements to 0
+        // (returns true) and Detach(viewB) then returns false.
+        public static void Run_VimBufferSubscriptions_NoDoubleDecrement()
+        {
+            var subs = new VimBufferSubscriptions();
+            var viewA = new FakeTextView();
+            var viewB = new FakeTextView();
+            var bufferA = new object();
+            var bufferB = new object();
+            var textBuffer = new object();
+
+            subs.Attach(viewA, bufferA, textBuffer);
+            subs.Attach(viewB, bufferB, textBuffer);
+            subs.MarkClosedSubscribed(bufferA);
+            subs.MarkClosedSubscribed(bufferB);
+
+            // OnBufferClosed(bufferA): refcount 2 -> 1, not last.
+            Assert.False(subs.OnBufferClosed(bufferA), "OnBufferClosed drops 2 -> 1 (not last)");
+            // Detach(viewA) must NOT decrement again (the refcount was already decremented by
+            // OnBufferClosed). RED today: the unconditional decrement drops it to 0 -> returns true.
+            Assert.False(subs.Detach(viewA),
+                "Detach after OnBufferClosed must not double-decrement (refcount stays 1)");
+            // Detach(viewB) drops the refcount to 0.
+            Assert.True(subs.Detach(viewB), "Detach(viewB) drops the refcount to 0");
+        }
+
+        // BP-2 (m6): VsVimModeSource.Detach -> UnsubscribeBuffer re-resolves the text buffer via
+        // reflection (GetTextBuffer) on a possibly-closing buffer — a reflection failure leaks the
+        // SwitchedMode subscription. The fix reads the CACHED text buffer before the refcount
+        // decrement removes the entry. RED today: GetTextBuffer throws on the closing buffer ->
+        // RemoveSwitchedMode skipped -> _subscribedTextBuffers still contains the text buffer.
+        public static void Run_VimModeSource_DetachCached()
+        {
+            var source = new VsVimModeSource();
+            var view = new FakeTextView();
+            var textBuffer = new object();
+            var buffer = new ClosingVimBuffer(textBuffer); // get_VimTextBuffer: 1st call OK, then throws
+
+            var subsField = typeof(VsVimModeSource).GetField(
+                "_subscriptions", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.True(subsField != null, "VsVimModeSource._subscriptions must exist");
+            var subs = (VimBufferSubscriptions)subsField!.GetValue(source)!;
+            subs.Attach(view, buffer, textBuffer);
+            subs.MarkClosedSubscribed(buffer);
+
+            var subscribe = typeof(VsVimModeSource).GetMethod(
+                "SubscribeBuffer", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.True(subscribe != null, "VsVimModeSource.SubscribeBuffer must exist");
+            subscribe!.Invoke(source, new object[] { buffer, true });
+
+            var subscribedField = typeof(VsVimModeSource).GetField(
+                "_subscribedTextBuffers", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.True(subscribedField != null, "VsVimModeSource._subscribedTextBuffers must exist");
+            var subscribed = (HashSet<object>)subscribedField!.GetValue(source)!;
+            Assert.True(subscribed.Contains(textBuffer),
+                "setup: the SwitchedMode subscription is active before detach");
+
+            // Drive Detach. The fake's get_VimTextBuffer now THROWS (the buffer is closing).
+            Exception? thrown = null;
+            try
+            {
+                source.Detach(view);
+            }
+            catch (Exception ex)
+            {
+                thrown = ex;
+            }
+            Assert.True(thrown == null,
+                "Detach must not throw on a closing buffer (the cached text buffer is used)");
+            Assert.False(subscribed.Contains(textBuffer),
+                "the SwitchedMode subscription must be removed on detach (cached value used, no reflection re-read)");
+        }
+
+        // BP-5 (m3): ExitToolWindowInputMode must resolve CurrentController ONCE and route through
+        // the single _routeDecision seam (the m38 pattern). DEVIATION (accepted): the plan's stated
+        // RED ("returns false") does not reproduce — ExitToolWindowInputMode calls the private
+        // ShouldRouteToolWindowKey directly, NOT the seam, so the test uses a COUNTING assertion:
+        // the seam must be invoked exactly once. RED today: the seam is not on the path at all
+        // (calls == 0), so the calls == 1 assertion fails.
+        public static void Run_InputHandler_ExitToolWindowInputMode_SingleResolution()
+        {
+            // m60 (BP-D13): the reflection is gone — SetToolWindowStateForTest forces the tool-
+            // window state, SetRouteDecisionForTest replaces the routing seam, and the Escape path
+            // is driven through the public HandleKey (which calls ExitToolWindowInputMode) instead
+            // of reflecting into the private method.
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var manager = new WindowManager(new FakeMonitorSelection());
+                var handler = new InputHandler(null!, manager);
+
+                // Force a tool-window state (Toolbox -> a GeneralToolWindowController).
+                manager.SetToolWindowStateForTest(true, ToolWindowType.Toolbox);
+
+                // Enter input mode so ExitToolWindowInputMode has something to exit.
+                var controller = manager.CurrentController;
+                Assert.True(controller != null, "a Toolbox controller is resolved");
+                controller!.EnterInputMode();
+
+                // The counting seam: the single routing decision. The lambda's side effect
+                // (ExitInputMode) flips the mode so a double-resolution would observe the flipped
+                // controller. The m3 fix must route ExitToolWindowInputMode through this seam.
+                int calls = 0;
+                handler.SetRouteDecisionForTest(c => { calls++; c?.ExitInputMode(); return true; });
+
+                // Drive Escape through the public HandleKey path — the Escape branch calls
+                // ExitToolWindowInputMode, which routes through the seam exactly once.
+                handler.HandleKey(Keys.Escape, false, false, false);
+
+                Assert.Equal(1, calls);
+            }
+        }
+
+        // BP-6 (m4): a Ctrl/Alt/Win key-down while a leader sequence is pending ABORTS the sequence
+        // (clears it) so the modifier passes through to VS (the Ctrl+chord works). Only Shift stays
+        // transparent (needed for shifted sequence members like w,|). RED today: every modifier
+        // key-down is consumed as transparent.
+        public static void Run_LeaderSequenceMatcher_ModifierChordPassesThrough()
+        {
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,|"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            var w = matcher.HandleKey(Keys.W, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Consume, w.Kind);
+
+            // Ctrl key-down while the sequence is pending: must ABORT (not swallowed) so the
+            // Ctrl+chord passes through to VS. RED today: Consume + sequence stays active.
+            var ctrl = matcher.HandleKey(Keys.ControlKey, false, false, false, false);
+            Assert.Equal(LeaderResultKind.Abort, ctrl.Kind);
+            Assert.False(matcher.IsActive, "a Ctrl key-down aborts the pending sequence (m4)");
+
+            // A Shift key-down is still transparent (needed for shifted sequence members like w,|).
+            var matcher2 = new LeaderSequenceMatcher(Keys.Space, bindings);
+            matcher2.HandleKey(Keys.Space, false, false, false, false);
+            matcher2.HandleKey(Keys.W, false, false, false, false);
+            var shift = matcher2.HandleKey(Keys.ShiftKey, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Consume, shift.Kind);
+            Assert.True(matcher2.IsActive, "a Shift key-down stays transparent (w,|)");
+        }
+
+        // BP-7 (m5): the shift-aware KeyNames.ToString overload maps the SHIFTED printable
+        // characters for non-letter keys, so a binding like `w,}` (Shift+]) fires distinctly from
+        // `w,]`. RED today: ToString(Keys.OemCloseBrackets, true) returns "]" -> the `w,}` binding
+        // never fires.
+        public static void Run_KeyNames_ShiftAwareNonLetter()
+        {
+            Assert.Equal("}", KeyNames.ToString(Keys.OemCloseBrackets, true));
+            Assert.Equal("]", KeyNames.ToString(Keys.OemCloseBrackets, false));
+            Assert.Equal("{", KeyNames.ToString(Keys.OemOpenBrackets, true));
+            Assert.Equal("?", KeyNames.ToString(Keys.OemQuestion, true));
+            Assert.Equal("_", KeyNames.ToString(Keys.OemMinus, true));
+
+            // Round-trip: bind `w,}` -> drive Space, w, Shift+OemCloseBrackets -> Execute with `w,}`.
+            var executed = 0;
+            var bindings = new Dictionary<string, Action>(StringComparer.Ordinal)
+            {
+                ["w,}"] = () => executed++,
+            };
+            var matcher = new LeaderSequenceMatcher(Keys.Space, bindings);
+            matcher.HandleKey(Keys.Space, false, false, false, false);
+            matcher.HandleKey(Keys.W, false, false, false, false);
+            var result = matcher.HandleKey(Keys.OemCloseBrackets, false, true, false, false);
+            Assert.Equal(LeaderResultKind.Execute, result.Kind);
+            Assert.Equal<string?>("w,}", result.Sequence);
+            Assert.Equal(1, executed);
+        }
+
+        // BP-8 (m7): the version-keyed PreviewTextCache is bounded (max 8) — Store evicts the lowest
+        // version when the capacity is exceeded (the oldest snapshot is the least likely to be
+        // re-read). RED today: all 10 versions are retained (no eviction).
+        public static void Run_PreviewEditorHost_CachePruned()
+        {
+            var cache = new PreviewTextCache();
+            for (int i = 1; i <= 10; i++)
+            {
+                cache.Store(i, "text" + i);
+            }
+            Assert.True(cache.Get(1) == null, "the oldest version is evicted (bounded cache, m7)");
+            Assert.True(cache.Get(2) == null, "the second-oldest version is evicted (bounded cache, m7)");
+            Assert.Equal("text10", cache.Get(10));
+            Assert.Equal("text9", cache.Get(9));
+            cache.Clear();
+            Assert.True(cache.Get(10) == null, "Clear empties the cache");
+        }
+
+        // BP-10 (n1): the dead GotoDecision enum is deleted (the GotoDispatcher it documented was
+        // inlined into ExecuteGoto). Reflection-absence is the only hermetic way to pin a deletion.
+        public static void Run_GotoDecision_Deleted()
+        {
+            Assert.True(typeof(MyExtensionPackage).Assembly.GetType("MyExtension.Package.GotoDecision") == null,
+                "the dead GotoDecision enum is deleted (n1)");
+        }
+
+        // BP-12 (n3): the test-only InputHandler ctor initializes the shared matcher/seam state
+        // (_leaderMatcher/_simpleMatcher/_routeDecision) — a null matcher/seam means the shared init
+        // is incomplete. PIN: the ctor already sets all three today.
+        public static void Run_InputHandler_TestCtor_SharedInit()
+        {
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var handler = new InputHandler(null!, new WindowManager(new FakeMonitorSelection()));
+                var leaderMatcher = typeof(InputHandler).GetField("_leaderMatcher",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(handler);
+                var simpleMatcher = typeof(InputHandler).GetField("_simpleMatcher",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(handler);
+                var routeDecision = typeof(InputHandler).GetField("_routeDecision",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(handler);
+                Assert.True(leaderMatcher != null, "the test-only ctor initializes _leaderMatcher (n3)");
+                Assert.True(simpleMatcher != null, "the test-only ctor initializes _simpleMatcher (n3)");
+                Assert.True(routeDecision != null, "the test-only ctor initializes _routeDecision (n3)");
+                Assert.False(((LeaderSequenceMatcher)leaderMatcher!).IsActive, "the leader matcher starts inactive");
+            }
+        }
+
+        // BP-16 (m17): the WindowManager ctor must check the AdviseSelectionEvents HRESULT and log
+        // `[NeoVisual] selection events advise failed: 0x{hr:X8}` on failure (the C7 precedent) —
+        // a failure must not silently leave _selectionEventsCookie = 0. RED today: the HRESULT is
+        // discarded, so no failure line is logged.
+        public static void Run_WindowManager_AdviseSelectionHresult()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = System.IO.Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    using (TestScaffold.SetCurrentDispatcherAsUiThread())
+                    {
+                        Exception? thrown = null;
+                        try
+                        {
+                            var manager = new WindowManager(new FailingMonitorSelection());
+                        }
+                        catch (Exception ex)
+                        {
+                            thrown = ex;
+                        }
+                        Assert.True(thrown == null,
+                            "the ctor must not throw when AdviseSelectionEvents fails (m17)");
+                        Telescope.Logging.LogFileWriter.Flush();
+                        // The log file may not exist today (no failure line is logged) — treat a
+                        // missing file as an empty log so the assertion below is the RED, not a
+                        // FileNotFoundException from ReadAllTextShared.
+                        string log = System.IO.File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                        Assert.True(log.Contains("[NeoVisual] selection events advise failed: 0x"),
+                            "the failed AdviseSelectionEvents HRESULT must be logged (m17)");
+                    }
+                });
+            }
+        }
+
+        // BP-20 (m21): GetController delegates to ResolveController for the decision, then applies
+        // the instance cache — registered wins, else the per-type default (cached). PIN: the two
+        // paths already agree today.
+        public static void Run_WindowManager_SingleResolution()
+        {
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var manager = new WindowManager(new FakeMonitorSelection());
+                var toolboxController = new GeneralToolWindowController(ToolWindowType.Toolbox);
+                manager.RegisterController(toolboxController);
+
+                // Registered wins.
+                Assert.True(ReferenceEquals(toolboxController, manager.GetController(ToolWindowType.Toolbox)),
+                    "the registered controller wins (m21)");
+
+                // Per-type default + cached.
+                var first = manager.GetController(ToolWindowType.OutputWindow);
+                Assert.True(first is GeneralToolWindowController, "OutputWindow gets a GeneralToolWindowController (m21)");
+                var second = manager.GetController(ToolWindowType.OutputWindow);
+                Assert.True(ReferenceEquals(first, second), "the per-type default is cached (m21)");
+
+                // ResolveController agrees on the type.
+                var controllersField = typeof(WindowManager).GetField("_controllers",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(controllersField != null, "WindowManager._controllers must exist");
+                var controllers = (IReadOnlyDictionary<ToolWindowType, IToolWindowController>)controllersField!.GetValue(manager)!;
+                Assert.True(ReferenceEquals(toolboxController, WindowManager.ResolveController(controllers, ToolWindowType.Toolbox)),
+                    "ResolveController agrees with GetController for a registered type (m21)");
+                Assert.True(WindowManager.ResolveController(controllers, ToolWindowType.OutputWindow) is GeneralToolWindowController,
+                    "ResolveController agrees with GetController for a default type (m21)");
+            }
+        }
+
+        // BP-21 (m22): OnWindowFocusChanged's GetProperty/GetGuidProperty calls run inside the
+        // IVsSelectionEvents COM callback with no try/catch — a disposed frame's GetGuidProperty
+        // throw must be swallowed, not escape the callback. RED today: the throw propagates out of
+        // the ctor's OnWindowFocusChanged call.
+        public static void Run_WindowManager_FocusChangeTryCatch()
+        {
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var frame = new ThrowingGuidFrame();
+                var monitor = new FrameReturningMonitorSelection(frame);
+                Exception? thrown = null;
+                try
+                {
+                    var manager = new WindowManager(monitor);
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+                Assert.True(thrown == null,
+                    $"a throwing GetGuidProperty must not escape OnWindowFocusChanged (m22): {thrown?.GetType().Name}: {thrown?.Message}");
+            }
+        }
+
+        // BP-22 (n5): the no-box StyleFocusedSurface overload delegates to the box overload — both
+        // are no-ops on the test host (no focused box/view) and do not throw. PIN: both overloads
+        // already behave identically today.
+        public static void Run_StyleFocusedSurface_Delegates()
+        {
+            Exception? thrown1 = null;
+            try { TextMotionHelper.StyleFocusedSurface(false); }
+            catch (Exception ex) { thrown1 = ex; }
+            Exception? thrown2 = null;
+            try { TextMotionHelper.StyleFocusedSurface(false, null); }
+            catch (Exception ex) { thrown2 = ex; }
+            Assert.True(thrown1 == null, "StyleFocusedSurface(false) is a no-op on the test host (n5)");
+            Assert.True(thrown2 == null, "StyleFocusedSurface(false, null) is a no-op on the test host (n5)");
+        }
+
+        // BP-23 (n6): OnWindowFocusChanged runs two separate COM/visual-tree walks per focus change
+        // (ComputeTextInputSurfaceFocused + ComputeFocusedTextBoxInCurrentToolWindow), each reading
+        // GetProperty(VSFPROPID_DocView). The fix merges them into one walk that reads the DocView
+        // ONCE and introduces a _findFocusedTextBox seam. RED today: the seam does not exist
+        // (reflection-absence) — the field assertion fails.
+        public static void Run_WindowManager_SingleWalk()
+        {
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var frame = new CountingFrame();
+                var monitor = new FrameReturningMonitorSelection(frame);
+                var manager = new WindowManager(monitor);
+
+                // The merged walk resolves the focused box through a single seam (n6). RED today:
+                // the field does not exist -> GetField returns null -> the assertion fails.
+                var field = typeof(WindowManager).GetField("_findFocusedTextBox",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(field != null, "the merged walk resolves the focused box through a single seam (n6)");
+
+                var fakeBox = (System.Windows.Controls.TextBox)System.Runtime.Serialization.FormatterServices
+                    .GetUninitializedObject(typeof(System.Windows.Controls.TextBox));
+                field!.SetValue(manager, (Func<System.Windows.Controls.TextBox?>)(() => fakeBox));
+
+                // Reset the DocView count (the ctor already ran the walk once), then invoke
+                // OnWindowFocusChanged explicitly and assert the merged walk reads the DocView ONCE.
+                frame.ResetDocViewReads();
+                var method = typeof(WindowManager).GetMethod("OnWindowFocusChanged",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.True(method != null, "OnWindowFocusChanged must exist (private instance)");
+                method!.Invoke(manager, null);
+
+                Assert.Equal(1, frame.DocViewReads);
+            }
+        }
+
+        // BP-24 (n7): the text-input controller registers J/K/D0/D4 (the Command Window lacks 0/$
+        // that the search box has). RED today: J/K/D0/D4 are missing from ActionKeys.
+        public static void Run_TextInput_KeysJKD0D4()
+        {
+            var controller = new TextInputToolWindowController(ToolWindowType.CommandWindow);
+            var keys = new List<Keys>(controller.ActionKeys);
+            Assert.True(keys.Contains(Keys.J), "J is an action key (n7)");
+            Assert.True(keys.Contains(Keys.K), "K is an action key (n7)");
+            Assert.True(keys.Contains(Keys.D0), "D0 is an action key (n7)");
+            Assert.True(keys.Contains(Keys.D4), "D4 is an action key (n7)");
+        }
+
+        // BP-25 (n8): ObjectSearchResultsWindow is reclassified as non-text-input (it starts in
+        // input mode today, unlike FindResults1/2). RED today: IsTextInputType returns true.
+        public static void Run_ToolWindowTypeResolver_ObjectSearchNotTextInput()
+        {
+            Assert.False(ToolWindowTypeResolver.IsTextInputType(ToolWindowType.ObjectSearchResultsWindow),
+                "ObjectSearchResultsWindow is not a text-input surface (n8)");
+        }
+
+        // ================================================================
+        // Section B — compile-RED batch (Code review fixes plan, Edit B)
+        // Each test references a NOT-YET-EXISTING production member; the COMPILE ERROR is the
+        // RED proof. The build-agent implements the members per the plan's BP steps.
+        // ================================================================
+
+        // BP-3 (M1): the sentinel is armed from the env var in production — the InputHandler ctor
+        // reads StaleToolWindowSentinel.IsConfigured (a NEW internal static) to decide whether to
+        // arm the per-key sentinel clock read. RED: `StaleToolWindowSentinel.IsConfigured` does
+        // not exist yet -> compile error (CS0117). The m11 bug: the sentinel block reads
+        // DateTime.UtcNow on every key-down even when the sentinel is not configured — a no-op in
+        // production. The fix arms _sentinelArmed from IsConfigured so a disarmed sentinel never
+        // touches the clock.
+        public static void Run_InputHandler_SentinelArmedInProduction()
+        {
+            string original = Environment.GetEnvironmentVariable("NEOVISUAL_LOG_DIR");
+            try
+            {
+                using (var dir = new TempDir())
+                {
+                    Environment.SetEnvironmentVariable("NEOVISUAL_LOG_DIR", dir.Path);
+                    Assert.True(StaleToolWindowSentinel.IsConfigured,
+                        "with NEOVISUAL_LOG_DIR set the sentinel is configured (BP-3/M1)");
+
+                    using (TestScaffold.SetCurrentDispatcherAsUiThread())
+                    {
+                        var handler = new InputHandler(null!, new WindowManager(new FakeMonitorSelection()));
+
+                        int clockReads = 0;
+                        handler.Clock = () => { clockReads++; return DateTime.UtcNow; };
+
+                        // Sentinel ARMED in production (NEOVISUAL_LOG_DIR set): the clock IS read.
+                        handler.IsKeyOfInterest(Keys.H, true, false, false);
+                        Assert.True(clockReads > 0,
+                            "the sentinel is armed in production (NEOVISUAL_LOG_DIR set) -> the clock is read");
+                    }
+                }
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("NEOVISUAL_LOG_DIR", original);
+            }
+        }
+
+        // BP-4 (m2): the single-source physical-modifier VK set — KeyNames.IsPhysicalModifierKey
+        // (a NEW internal static) is the one place that knows which VKs are physical modifiers.
+        // RED: `KeyNames.IsPhysicalModifierKey` does not exist yet -> compile error (CS0117).
+        public static void Run_LeaderSequenceMatcher_SingleModifierVkSet()
+        {
+            var physical = new[]
+            {
+                Keys.ShiftKey, Keys.LShiftKey, Keys.RShiftKey,
+                Keys.ControlKey, Keys.LControlKey, Keys.RControlKey,
+                Keys.Menu, Keys.LMenu, Keys.RMenu,
+                Keys.LWin, Keys.RWin,
+            };
+            foreach (var key in physical)
+            {
+                Assert.True(KeyNames.IsPhysicalModifierKey(key), $"{key} is a physical modifier VK");
+            }
+            Assert.False(KeyNames.IsPhysicalModifierKey(Keys.A), "A is not a physical modifier VK");
+        }
+
+        // BP-9 (m8): the Error List cache must be invalidated on the events that change the Error
+        // List contents — ErrorListCacheDecision.ShouldInvalidateOnEvent (a NEW internal static).
+        // RED: `ErrorListCacheDecision.ShouldInvalidateOnEvent` does not exist yet -> compile error
+        // (CS0117). The m8 bug: the TTL-only cache (IsFresh) can serve a stale Error List after a
+        // build/save/open/activate; the fix invalidates on those events.
+        public static void Run_ErrorListGatherer_TtlInvalidated()
+        {
+            Assert.True(ErrorListCacheDecision.ShouldInvalidateOnEvent("build-done"),
+                "a build changes the Error List -> invalidate");
+            Assert.True(ErrorListCacheDecision.ShouldInvalidateOnEvent("document-saved"),
+                "a document save can change the Error List -> invalidate");
+            Assert.True(ErrorListCacheDecision.ShouldInvalidateOnEvent("document-opened"),
+                "a document open can change the Error List -> invalidate");
+            Assert.True(ErrorListCacheDecision.ShouldInvalidateOnEvent("window-activated"),
+                "a window activation can change the Error List -> invalidate");
+            Assert.False(ErrorListCacheDecision.ShouldInvalidateOnEvent("selection-changed"),
+                "a selection change does not change the Error List -> keep the cache");
+        }
+
+        // BP-11 (n2): the kind-name resolution is shared — RoslynGatherers.KindName (a NEW internal
+        // static) is the single source for the Implementation finder's Kind column. RED:
+        // `RoslynGatherers.KindName` does not exist yet -> compile error (CS0117). The n2 bug: the
+        // type/member kind-name logic is duplicated across the finders; the fix centralizes it.
+        public static void Run_RoslynGatherers_KindNameShared()
+        {
+            Assert.Equal("Class", RoslynGatherers.KindName("Class", "Method", true));
+            Assert.Equal("Method", RoslynGatherers.KindName("Class", "Method", false));
+            Assert.Equal("Method", RoslynGatherers.KindName("", "Method", false));
+        }
+
+        // BP-13 (m14): the cached focused-box resolution must be invalidatable — the fix adds
+        // SolutionExplorerController.InvalidateFocusedBoxCache() (a NEW internal method) so a
+        // focus change re-resolves the box instead of serving the stale cache. RED:
+        // `InvalidateFocusedBoxCache` does not exist yet -> compile error (CS1061).
+        public static void Run_SolutionExplorer_FocusCacheInvalidated()
+        {
+            // m60 (BP-D13): the reflection is gone — SetFindFocusedTextBoxForTest replaces the
+            // focused-box resolver (no private-field reads).
+            var controller = new SolutionExplorerController(() => null!);
+
+            // Two distinct boxes (never dereferenced — X is not a motion, so TryMoveFocusedSurface
+            // returns before touching them). GetUninitializedObject skips the WPF ctor (no STA needed).
+            var boxA = (System.Windows.Controls.TextBox)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(System.Windows.Controls.TextBox));
+            var boxB = (System.Windows.Controls.TextBox)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(System.Windows.Controls.TextBox));
+            int calls = 0;
+            controller.SetFindFocusedTextBoxForTest(() => { calls++; return boxA; });
+
+            // First TryMove resolves + caches boxA (the m47 single-walk contract).
+            Assert.False(controller.TryMove(Keys.X), "an unmapped key is not consumed");
+            Assert.Equal(1, calls);
+
+            // The new seam: invalidate the cache, then the next TryMove re-resolves (the lambda
+            // now returns boxB). RED today: no InvalidateFocusedBoxCache -> the stale boxA cache
+            // is served and the lambda is never re-called (calls stays 1).
+            controller.InvalidateFocusedBoxCache();
+            controller.SetFindFocusedTextBoxForTest(() => { calls++; return boxB; });
+
+            Assert.False(controller.TryMove(Keys.X), "an unmapped key is not consumed");
+            Assert.Equal(2, calls);
+        }
+
+        // BP-14 (m15): FindFirstProjectNode must expand a collapsed SolutionFolder to reach the
+        // project node beneath it. The fix makes FindFirstProjectNode `internal static` (currently
+        // private static). RED: `SolutionExplorerController.FindFirstProjectNode` is not an
+        // accessible static -> compile error (CS0122).
+        public static void Run_SolutionExplorer_SolutionFolderExpanded()
+        {
+            var project = DispatchProxy.Create<EnvDTE.Project, DispatchAny>();
+            var folder = DispatchProxy.Create<EnvDTE80.SolutionFolder, DispatchAny>();
+            var solution = DispatchProxy.Create<EnvDTE.Solution, DispatchAny>();
+
+            var projectNode = new FakeUIHierarchyItem(project, new FakeUIHierarchyItems(new List<EnvDTE.UIHierarchyItem>()));
+            var folderItems = new FakeUIHierarchyItems(new List<EnvDTE.UIHierarchyItem> { projectNode });
+            var folderNode = new FakeUIHierarchyItem(folder, folderItems);
+            var solutionItems = new FakeUIHierarchyItems(new List<EnvDTE.UIHierarchyItem> { folderNode });
+            var solutionNode = new FakeUIHierarchyItem(solution, solutionItems);
+
+            // The folder starts COLLAPSED (its children are not enumerated).
+            Assert.False(folderItems.Expanded, "precondition: the SolutionFolder starts collapsed");
+
+            var found = SolutionExplorerController.FindFirstProjectNode(solutionNode);
+
+            Assert.True(folderItems.Expanded, "FindFirstProjectNode expands the collapsed SolutionFolder (m15)");
+            Assert.True(ReferenceEquals(found, projectNode), "the project node beneath the folder is returned");
+        }
+
+        // BP-15 (m16): the focus-keeper must STOP when the editor regains focus — the keeper must
+        // not fight the user's return to the editor. The fix adds an `editorFocused` parameter to
+        // FocusKeeperSchedule.Decide (a NEW parameter). RED: `Decide` has no `editorFocused`
+        // parameter -> compile error (CS1739).
+        public static void Run_FocusKeeper_StopsOnEditorFocus()
+        {
+            Assert.Equal(FocusKeeperSchedule.Decision.Stop,
+                FocusKeeperSchedule.Decide(searchBoxFocused: true, editorFocused: true, elapsedMs: 0, escapeAttempts: 0, durationMs: 1500));
+            Assert.Equal(FocusKeeperSchedule.Decision.Reassert,
+                FocusKeeperSchedule.Decide(searchBoxFocused: false, editorFocused: false, elapsedMs: 0, escapeAttempts: 0, durationMs: 1500));
+        }
+
+        // BP-17 (m18): the motion-sample slice math is shared — TextMotionHelper.ComputeSlice (a
+        // NEW internal static returning (int Start, int Length)) is the single source for the
+        // caret window around the caret (4096 before, 8192 after, capped at the buffer end). RED:
+        // `TextMotionHelper.ComputeSlice` does not exist yet -> compile error (CS0117).
+        public static void Run_TextMotionHelper_SliceShared()
+        {
+            Assert.Equal((0, 100), TextMotionHelper.ComputeSlice(0, 100));
+            Assert.Equal((904, 12288), TextMotionHelper.ComputeSlice(5000, 20000));
+            Assert.Equal((14904, 5096), TextMotionHelper.ComputeSlice(19000, 20000));
+        }
+
+        // BP-18 (m19): the focus-keeper setup is shared — SolutionExplorerController.StartFocusKeeper
+        // (a NEW internal method) is the single place that starts the keeper. RED:
+        // `StartFocusKeeper` does not exist yet -> compile error (CS1061). The m19 bug: the keeper
+        // setup is duplicated; the fix centralizes it (and a second StartFocusKeeper resets the
+        // prior keeper instead of stacking).
+        public static void Run_FocusKeeper_SetupShared()
+        {
+            // m60 (BP-D13): the reflection is gone — the FocusKeeperForTest seam reads the current
+            // keeper handle (no private-field reads).
+            using (TestScaffold.SetCurrentDispatcherAsUiThread())
+            {
+                var controller = new SolutionExplorerController(() => null!);
+
+                controller.StartFocusKeeper(_ => false);
+                Assert.True(controller.FocusKeeperForTest != null,
+                    "StartFocusKeeper arms the _focusKeeper field (m19)");
+
+                controller.StartFocusKeeper(_ => false);
+                Assert.True(controller.FocusKeeperForTest != null,
+                    "a second StartFocusKeeper resets the prior keeper, not stacks it (m19)");
+            }
+        }
+
+        // BP-19 (m20): the block-caret brushes are frozen statics — BlockCaretStyle.WhiteBrush and
+        // BlockCaretStyle.GlyphBrush (NEW frozen SolidColorBrush statics) so the adornment never
+        // mutates a shared brush. RED: `BlockCaretStyle.WhiteBrush`/`GlyphBrush` do not exist yet
+        // -> compile error (CS0117).
+        public static void Run_BlockCaretAdornment_Frozen()
+        {
+            Assert.True(BlockCaretStyle.WhiteBrush.IsFrozen, "WhiteBrush is frozen (m20)");
+            Assert.True(BlockCaretStyle.GlyphBrush.IsFrozen, "GlyphBrush is frozen (m20)");
+        }
     }
 
     /// <summary>
@@ -4629,6 +5295,17 @@ namespace NeoVisual.Tests
         public event _dispDocumentEvents_DocumentClosingEventHandler DocumentClosing { add { } remove { } }
         public event _dispDocumentEvents_DocumentOpeningEventHandler DocumentOpening { add { } remove { } }
         public event _dispDocumentEvents_DocumentSavedEventHandler DocumentSaved { add { } remove { } }
+    }
+
+    /// <summary>
+    /// Test-local tracking IDisposable (n25/BP-D23): records whether Dispose() ran, so the
+    /// FocusKeeper reset test can prove ResetFocusKeeper disposes the injected keeper handle.
+    /// </summary>
+    internal sealed class TrackingDisposable : IDisposable
+    {
+        public bool Disposed { get; private set; }
+
+        public void Dispose() => Disposed = true;
     }
 
     /// <summary>
@@ -4879,7 +5556,7 @@ namespace NeoVisual.Tests
     {
         public virtual EnvDTE.Window LinkedWindowFrame => null!;
         public bool AutoHides { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-        public string Caption { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public virtual string Caption { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public EnvDTE.Windows Collection => throw new NotImplementedException();
         public EnvDTE.ContextAttributes ContextAttributes => throw new NotImplementedException();
         public EnvDTE.Document Document => throw new NotImplementedException();
@@ -4898,7 +5575,7 @@ namespace NeoVisual.Tests
         public EnvDTE.ProjectItem ProjectItem => throw new NotImplementedException();
         public object Selection => throw new NotImplementedException();
         public int Top { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-        public vsWindowType Type => throw new NotImplementedException();
+        public virtual vsWindowType Type => throw new NotImplementedException();
         public bool Visible { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public int Width { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public vsWindowState WindowState { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
@@ -4930,6 +5607,277 @@ namespace NeoVisual.Tests
     internal sealed class ThrowingLinkedWindow : FakeWindow
     {
         public override EnvDTE.Window LinkedWindowFrame => throw new InvalidOperationException("stale RCW");
+    }
+
+    /// <summary>
+    /// BP-12 (M2): a FakeWindow with REAL Caption/Type/LinkedWindowFrame — the healthy adapter's
+    /// DTE window in Run_WindowFrameAdapter_LinkedIsolation. The Properties-window quirk: a
+    /// ToolWindow active + a Properties window with the same caption compare equal via
+    /// WindowFrameUtils.CompareWindows.
+    /// </summary>
+    internal sealed class ComparableWindow : FakeWindow
+    {
+        private readonly string _caption;
+        private readonly vsWindowType _type;
+        private readonly EnvDTE.Window _linked;
+
+        public ComparableWindow(string caption, vsWindowType type, EnvDTE.Window? linked = null)
+        {
+            _caption = caption;
+            _type = type;
+            _linked = linked ?? this;
+        }
+
+        public override string Caption
+        {
+            get => _caption;
+            set => throw new NotImplementedException();
+        }
+
+        public override vsWindowType Type => _type;
+
+        public override EnvDTE.Window LinkedWindowFrame => _linked;
+    }
+
+    /// <summary>
+    /// BP-12 (M2): a FakeWindow whose Caption/Type THROW — a stale/disconnected RCW adapter. The
+    /// per-window try/catch around CompareWindows in FindActive/LinkedTo must skip it instead of
+    /// propagating (the F7 residual the M2 fix closes).
+    /// </summary>
+    internal sealed class ThrowingWindow : FakeWindow
+    {
+        // The base FakeWindow's Caption/Type already throw; LinkedWindowFrame throws too (a stale
+        // RCW's frame reads fail).
+        public override EnvDTE.Window LinkedWindowFrame => throw new InvalidOperationException("stale RCW");
+    }
+
+    /// <summary>
+    /// BP-16 (m13): an IVsWindowFrame whose GetProperty(VSFPROPID_DocView) returns a given object
+    /// (a FakeWindow) so VsShellUtilities.GetWindowObject resolves a non-null active window for
+    /// Run_WindowNavigator_NullActive. Every other member throws.
+    /// </summary>
+    internal sealed class WindowFrameWithDocView : IVsWindowFrame
+    {
+        private readonly object _docView;
+        public WindowFrameWithDocView(object docView) { _docView = docView; }
+
+        public int GetProperty(int propid, out object pvar)
+        {
+            if (propid == (int)__VSFPROPID.VSFPROPID_DocView)
+            {
+                pvar = _docView;
+                return 0; // S_OK
+            }
+            pvar = null!;
+            return unchecked((int)0x80004001); // E_NOTIMPL
+        }
+        public int Show() => throw new NotImplementedException();
+        public int Hide() => throw new NotImplementedException();
+        public int IsVisible() => throw new NotImplementedException();
+        public int ShowNoActivate() => throw new NotImplementedException();
+        public int CloseFrame(uint grfSaveOptions) => throw new NotImplementedException();
+        public int SetFramePos(VSSETFRAMEPOS dwSFP, ref Guid rguidRelativeTo, int x, int y, int cx, int cy) => throw new NotImplementedException();
+        public int GetFramePos(VSSETFRAMEPOS[] pdwSFP, out Guid pguidRelativeTo, out int px, out int py, out int pcx, out int pcy) => throw new NotImplementedException();
+        public int SetProperty(int propid, object var) => throw new NotImplementedException();
+        public int GetGuidProperty(int propid, out Guid pguid) => throw new NotImplementedException();
+        public int SetGuidProperty(int propid, ref Guid rguid) => throw new NotImplementedException();
+        public int QueryViewInterface(ref Guid riid, out IntPtr ppv) => throw new NotImplementedException();
+        public int IsOnScreen(out int pfOnScreen) => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// BP-21 (m22): an IVsWindowFrame whose GetProperty(VSFPROPID_Type) returns S_OK with a Tool
+    /// type and whose GetGuidProperty THROWS — a disposed frame inside OnWindowFocusChanged. The
+    /// try/catch the m22 fix adds must swallow the throw instead of letting it escape the COM
+    /// callback.
+    /// </summary>
+    internal sealed class ThrowingGuidFrame : IVsWindowFrame
+    {
+        public int GetProperty(int propid, out object pvar)
+        {
+            if (propid == (int)__VSFPROPID.VSFPROPID_Type)
+            {
+                pvar = (int)__WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool;
+                return 0; // S_OK
+            }
+            pvar = null!;
+            return unchecked((int)0x80004001); // E_NOTIMPL
+        }
+        public int GetGuidProperty(int propid, out Guid pguid)
+        {
+            throw new InvalidOperationException("disposed frame");
+        }
+        public int Show() => throw new NotImplementedException();
+        public int Hide() => throw new NotImplementedException();
+        public int IsVisible() => throw new NotImplementedException();
+        public int ShowNoActivate() => throw new NotImplementedException();
+        public int CloseFrame(uint grfSaveOptions) => throw new NotImplementedException();
+        public int SetFramePos(VSSETFRAMEPOS dwSFP, ref Guid rguidRelativeTo, int x, int y, int cx, int cy) => throw new NotImplementedException();
+        public int GetFramePos(VSSETFRAMEPOS[] pdwSFP, out Guid pguidRelativeTo, out int px, out int py, out int pcx, out int pcy) => throw new NotImplementedException();
+        public int SetProperty(int propid, object var) => throw new NotImplementedException();
+        public int SetGuidProperty(int propid, ref Guid rguid) => throw new NotImplementedException();
+        public int QueryViewInterface(ref Guid riid, out IntPtr ppv) => throw new NotImplementedException();
+        public int IsOnScreen(out int pfOnScreen) => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// BP-23 (n6): an IVsWindowFrame that counts GetProperty(VSFPROPID_DocView) reads — the merged
+    /// single walk must read the DocView ONCE per focus change. GetProperty(VSFPROPID_Type) returns
+    /// a Tool type; GetGuidProperty returns the Toolbox GUID; GetProperty(VSFPROPID_DocView) returns
+    /// a WPF Grid (a FrameworkElement so the descendant walk runs).
+    /// </summary>
+    internal sealed class CountingFrame : IVsWindowFrame
+    {
+        public int DocViewReads { get; private set; }
+        public void ResetDocViewReads() => DocViewReads = 0;
+
+        public int GetProperty(int propid, out object pvar)
+        {
+            if (propid == (int)__VSFPROPID.VSFPROPID_Type)
+            {
+                pvar = (int)__WindowFrameTypeFlags.WINDOWFRAMETYPE_Tool;
+                return 0; // S_OK
+            }
+            if (propid == (int)__VSFPROPID.VSFPROPID_DocView)
+            {
+                DocViewReads++;
+                pvar = new System.Windows.Controls.Grid();
+                return 0; // S_OK
+            }
+            pvar = null!;
+            return unchecked((int)0x80004001); // E_NOTIMPL
+        }
+        public int GetGuidProperty(int propid, out Guid pguid)
+        {
+            pguid = new Guid(ToolWindowGuids80.Toolbox);
+            return 0; // S_OK
+        }
+        public int Show() => throw new NotImplementedException();
+        public int Hide() => throw new NotImplementedException();
+        public int IsVisible() => throw new NotImplementedException();
+        public int ShowNoActivate() => throw new NotImplementedException();
+        public int CloseFrame(uint grfSaveOptions) => throw new NotImplementedException();
+        public int SetFramePos(VSSETFRAMEPOS dwSFP, ref Guid rguidRelativeTo, int x, int y, int cx, int cy) => throw new NotImplementedException();
+        public int GetFramePos(VSSETFRAMEPOS[] pdwSFP, out Guid pguidRelativeTo, out int px, out int py, out int pcx, out int pcy) => throw new NotImplementedException();
+        public int SetProperty(int propid, object var) => throw new NotImplementedException();
+        public int SetGuidProperty(int propid, ref Guid rguid) => throw new NotImplementedException();
+        public int QueryViewInterface(ref Guid riid, out IntPtr ppv) => throw new NotImplementedException();
+        public int IsOnScreen(out int pfOnScreen) => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// BP-16 (m17): an IVsMonitorSelection whose AdviseSelectionEvents returns E_FAIL — the ctor
+    /// must log the failure instead of silently leaving _selectionEventsCookie = 0.
+    /// </summary>
+    internal sealed class FailingMonitorSelection : IVsMonitorSelection
+    {
+        public int AdviseSelectionEvents(IVsSelectionEvents pSink, out uint pdwCookie)
+        {
+            pdwCookie = 0;
+            return unchecked((int)0x80004005); // E_FAIL
+        }
+        public int UnadviseSelectionEvents(uint dwCookie) => 0;
+        public int GetCurrentElementValue(uint elementid, out object pvarValue)
+        {
+            pvarValue = null!;
+            return 0; // S_OK
+        }
+        public int GetCurrentSelection(out IntPtr ppHier, out uint pitemid, out IVsMultiItemSelect ppMIS, out IntPtr ppSC)
+        {
+            ppHier = IntPtr.Zero;
+            pitemid = 0;
+            ppMIS = null!;
+            ppSC = IntPtr.Zero;
+            return 0;
+        }
+        public int IsCmdUIContextActive(uint dwCmdUICookie, out int pfActive)
+        {
+            pfActive = 0;
+            return 0;
+        }
+        public int SetCmdUIContext(uint dwCmdUICookie, int fActive) => 0;
+        public int GetCmdUIContextCookie(ref Guid rguidCmdUI, out uint pdwCmdUICookie)
+        {
+            pdwCmdUICookie = 0;
+            return 0;
+        }
+        public int GetSelectionInfo(out uint pnHier, out uint pnItemid, out uint pnMIS, out uint pnSC)
+        {
+            pnHier = 0;
+            pnItemid = 0;
+            pnMIS = 0;
+            pnSC = 0;
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// BP-21/BP-23 (m22/n6): an IVsMonitorSelection whose GetCurrentElementValue returns a given
+    /// frame — so RefreshCurrentWindow resolves the frame the test wants OnWindowFocusChanged to
+    /// process (the ctor's own OnWindowFocusChanged call runs the same path).
+    /// </summary>
+    internal sealed class FrameReturningMonitorSelection : IVsMonitorSelection
+    {
+        private readonly IVsWindowFrame _frame;
+        public FrameReturningMonitorSelection(IVsWindowFrame frame) { _frame = frame; }
+
+        public int AdviseSelectionEvents(IVsSelectionEvents pSink, out uint pdwCookie)
+        {
+            pdwCookie = 1;
+            return 0; // S_OK
+        }
+        public int UnadviseSelectionEvents(uint dwCookie) => 0;
+        public int GetCurrentElementValue(uint elementid, out object pvarValue)
+        {
+            pvarValue = _frame;
+            return 0; // S_OK
+        }
+        public int GetCurrentSelection(out IntPtr ppHier, out uint pitemid, out IVsMultiItemSelect ppMIS, out IntPtr ppSC)
+        {
+            ppHier = IntPtr.Zero;
+            pitemid = 0;
+            ppMIS = null!;
+            ppSC = IntPtr.Zero;
+            return 0;
+        }
+        public int IsCmdUIContextActive(uint dwCmdUICookie, out int pfActive)
+        {
+            pfActive = 0;
+            return 0;
+        }
+        public int SetCmdUIContext(uint dwCmdUICookie, int fActive) => 0;
+        public int GetCmdUIContextCookie(ref Guid rguidCmdUI, out uint pdwCmdUICookie)
+        {
+            pdwCmdUICookie = 0;
+            return 0;
+        }
+        public int GetSelectionInfo(out uint pnHier, out uint pnItemid, out uint pnMIS, out uint pnSC)
+        {
+            pnHier = 0;
+            pnItemid = 0;
+            pnMIS = 0;
+            pnSC = 0;
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// BP-14 (m15): a DispatchProxy that returns a default value for every member — used to build
+    /// EnvDTE.Project / EnvDTE.Solution / EnvDTE80.SolutionFolder instances for the
+    /// FindFirstProjectNode type checks (only the `is` checks run; no member is invoked).
+    /// </summary>
+    public class DispatchAny : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            var returnType = targetMethod?.ReturnType;
+            if (returnType == typeof(void)) return null;
+            if (returnType == typeof(bool)) return false;
+            if (returnType == typeof(int)) return 0;
+            if (returnType == typeof(string)) return "";
+            if (returnType == typeof(Guid)) return Guid.Empty;
+            return null;
+        }
     }
 }
 

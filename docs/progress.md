@@ -7,10 +7,11 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** ACTIVE (the 106-findings code-review fixes plan reached GREEN 2026-10-06; the
+> **Status:** ACTIVE (the 107-findings code-review fixes plan reached GREEN 2026-10-07; the
 > next pending item is Gap 5)
-· **Updated:** 2026-10-06 · **Last item:** the 106-findings code-review fixes (2026-10-06,
-GREEN in the unit-only lane, e2e DEFERRED — E2E-CR77-1..6 QUEUED); the next pending item is
+· **Updated:** 2026-10-07 · **Last item:** the Code review fixes (107 findings, incl. nits) +
+Telescope generalization (2026-10-07, GREEN in the unit-only lane, e2e DEFERRED —
+E2E-CR107-1..7 QUEUED); the next pending item is
 Gap 5 (the LSP symbols finder)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
@@ -112,11 +113,12 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **the Code review fixes (106 findings, incl. nits) reached GREEN
-  2026-10-06** in the unit-only lane (e2e DEFERRED — the gates E2E-CR77-1..6 stay QUEUED in
-  `docs/e2e-queue.md`); see the Done section. The build loop is PAUSED after this item — the
-  user's 2026-10-05 instruction was to execute the first pending item in the unit-only lane
-  and stop.)
+- **In progress:** (none — **the Code review fixes (107 findings, incl. nits) + Telescope
+  generalization plan reached GREEN 2026-10-07** (feature lane, **unit-only, e2e DEFERRED** —
+  the gates E2E-CR107-1..7 stay QUEUED in `docs/e2e-queue.md`); see the Done section. The
+  build loop is PAUSED after the 107-findings item — the user's
+  2026-10-05 instruction was to execute the first pending item in the unit-only lane and
+  stop.)
 - **Next up:** **Gap 5 — the LSP symbols finder** (the next planning
   batch — NOT yet planned; triage=BUILD 2026-09-28). Then the remaining "smallest first"
   order: gap 10 (hover/signature) → gap 9 (search/replace) → feature 8 (+gap 8, the
@@ -125,7 +127,8 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
   in the 20261004-143017 session — all five now GREEN). The FEATURE-TRIAGE gate (LOOP step
   1f) applies to each new feature item. The pane host (Feature 7) is the lazygit overlay's
   foundation (deferred — a bonus when the core is finished).
-  The goto commands (Gap 6 core: `gd`/`gI`/`gr` →
+  The Code review fixes (107 findings) plan is **DONE** (GREEN 2026-10-07; see the Done
+  section). The goto commands (Gap 6 core: `gd`/`gI`/`gr` →
   `MyExtension.GotoDefinition/GotoReferences/GotoImplementation`, 1-hit direct / multi-hit
   overlay, the new DefinitionFinder + GotoDispatcher) are **DONE** (GREEN 2026-10-04; see
   the Done section). The Telescope results columns + preview-as-editor item is **DONE**
@@ -250,8 +253,9 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Baseline (as of last full verification)
 
-- Offline units: `tests/Telescope.Tests` **297 passed**; `tests/NeoVisual.Tests`
-  **212 passed** (after the 34-findings code-review fixes, 2026-10-06).
+- Offline units: `tests/Telescope.Tests` **366 passed**; `tests/NeoVisual.Tests`
+  **264 passed** (verified by the 2026-10-07 final gate of the Code review fixes
+  (107 findings) plan — the plan grew the suites from 319/236).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **44 scenarios** — ALL executed GREEN
   (full-suite fresh boot with `-TimeoutSec 2400`, run 185, 2026-10-05; Gap 4's final gate —
   `telescope-recent` verified end-to-end, `telescope-goto` GREEN outright after its in-item
@@ -328,9 +332,9 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## In-progress
 
-- (none — the Code review fixes (34 findings, incl. nits) reached GREEN 2026-10-06
-  (unit-only lane, e2e deferred); see the Done section. The 106-findings plan is the
-  next pending item. No known-RED remains.)
+- (none — the Code review fixes (107 findings, incl. nits) + Telescope generalization plan
+  reached GREEN 2026-10-07 (feature lane, unit-only lane, e2e deferred); the next pending
+  item is Gap 5. No known-RED remains.)
 
 ## F45 status (Item 1 — log-prefix centralization)
 
@@ -375,6 +379,26 @@ were known-backlog assertion bugs, not regressions).
 ## Pending queue (next items to pick)
 
 Top of the queue, in priority order:
+
+> ~~**FIRST ITEM (2026-10-07, gate-APPROVED, handed off):** the **Code review fixes (107
+> findings, incl. nits) + Telescope generalization** plan~~ — **DONE** (GREEN 2026-10-07,
+> feature lane, **unit-only, e2e DEFERRED**; see the Done section). Source: `docs/reviews/code-review.md` (2026-10-07
+> refresh — 107 findings: 0 critical, 6 major, 76 minor, 25 nit; the summary's 79/22
+> minor/nit split is internally inconsistent with the table's 76/25 — the plan covers ALL
+> 107 table rows and fixes the summary split via the Phase 8 doc refresh). 9 phases, 109 BP
+> steps, 107/107 finding coverage + the user-requested Telescope generalization work
+> (QueryDrivenFinderBase, shared column builders, dead-code deletion; the DEFER/DON'T
+> analysis documented in the plan). **DEFER e2e tests (unit-only lane):** the user's
+> 2026-10-06 instruction — "we are not on e2e capable machine so defer those to queue for
+> later" — the e2e gates are queued in `e2e-queue.md` (E2E-CR107-1..7, status QUEUED) and
+> run on a capable machine after this plan is GREEN. RED was proven at the unit level only.
+> Baseline: Telescope.Tests **319**; NeoVisual.Tests **236**; both lints PASS; the harness
+> `-SelfCheck` PASS; `-List` 44. The plan is diagnostic-NEUTRAL except the flagged
+> diagnostic-behavior changes (M3 fzf failure, M1 sentinel active, m15 select-file, m16
+> keeper timing, m18 text-motion caret, m28 List-pane shift, m30 Ctrl guard, m43 sanitized
+> filter-failed, m46 boxText, m9 no spurious cancel log) + two harness-INDEPENDENT
+> failure-path literals (m17 `selection events advise failed: 0x{hr:X8}`, m32
+> `preview failed: {msg}`).
 
 > ~~**FIRST ITEM (2026-10-06, gate-APPROVED, handed off):** the **Code review fixes (106
 > findings, incl. nits)** plan~~ — **DONE** (GREEN 2026-10-06, feature lane, **unit-only,
@@ -852,6 +876,59 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-07 — Code review fixes (107 findings, incl. nits) + Telescope generalization**
+  (Lane: `feature`, unit-only, e2e DEFERRED; 27 delegations, 0 VS boots, 0 iterations). All
+  107 findings from `docs/reviews/code-review.md` (2026-10-07 refresh — the summary split
+  fixed 79/22 → 76/25 via m76) fixed across 9 phases / 4 sections: Section A (Phases 0-1 —
+  `FzfFilter` M3 null-return on timeout/crash, the async gatherers M4, the public
+  `QueryDrivenFinderBase<THit>` + `FzfFinder` refactor m33, the TOCTOU `FileContentCache`
+  m38, `GlobalKeyboardHook` deleted n14/n15, the `FzfLineMapper`/`LiteralLineScanner`/
+  `HierarchyWalker` merges m10/m11/m12/m13, `WindowRect` mirrors deleted n4), Section B
+  (Phases 2-4 — `VimBufferSubscriptions`/`VimModeSource` m1/m6, the `StaleToolWindowSentinel`
+  M1, the modifier-VK set m2, single controller resolution m3/m21, the shift-aware
+  `KeyNames.ToString` m5, the bounded caches m7/m8, `FocusChanged` m14, `select-file` m15,
+  `editorFocused` ticks m16, the HRESULT log m17, the single-sourced slice m18, the shared
+  `StartFocusKeeper` m19, the frozen brushes m20, the COM-callback guard m22, the merged
+  walk + `_findFocusedTextBox` seam n5/n6, the J/K/D0/D4 text-input keys n7/n8), Section C
+  (Phase 5 — the dead-code deletions, the shared `FinderColumns` builders + data-driven
+  columns, `OverlayKeyMapper`, the single `FileFinder` seam, the `RecentFileHit` merge, the
+  `FilterFailureLog` prefix seam, the single-list `FocusTargetModel` + `ChordDirection`,
+  `DelegatePane`, the `PreviewCaretMap`/`LineIndex` merge, the instance `VisibilityByFinder`,
+  `ShowOverlayAsync`, the List-pane shift m28, the `EnterInsert` a/A/i/I distinction m28,
+  the Ctrl guard m30, `OverlayCentering`, the `ShowPreview` try/catch m32, the no-alloc
+  `UsesNoAllocSelection` seam), Section D (Phases 6-8 — the `TestRunner` `Assert.Equal`/
+  `Assert.NotEqual` message param + `Assert.Throws<T>`, the internal test seams, the
+  reflection reduction m60, the malformed-JSON merge m61, the `Assert.Equal` dispose m62,
+  the `InjectedKeyGuard.Reset` m63, the `InvokeTick` m64, the exact action-key sets n23/n24,
+  the tracking-disposable n25, the harness `Wait-ActiveDocumentMatch` m66/m67, the bootstrap
+  polls m68, the git-bindings retry re-assert m69, the empty-box guard m70, the
+  `Reset-LogBaseline` discipline m71, the docs/lint refresh m72-m76 + the 4 doc-ref refs).
+  Telescope.Tests 319 → **366**; NeoVisual.Tests 236 → **264**; `dotnet build` 0 errors;
+  both lints PASS; `-SelfCheck` PASS; `-List` 44. The flagged diagnostic-BEHAVIOR changes
+  (M3 fzf failure, M1 sentinel active, m15 select-file, m16 keeper timing, m18 text-motion
+  caret, m28 List-pane shift, m30 Ctrl guard, m43 sanitized filter-failed, m46 boxText, m9
+  no spurious cancel log) + the two harness-INDEPENDENT failure-path literals (m17
+  `selection events advise failed: 0x{hr:X8}`, m32 `preview failed: {msg}`) are documented
+  plan changes pinned at the unit level; the e2e gates **E2E-CR107-1..7** stay QUEUED in
+  `docs/e2e-queue.md` (run on a capable machine).
+  **Change summary:** created `Telescope/Finders/Utils/QueryDrivenFinderBase.cs`,
+  `Telescope/Overlay/Utils/OverlayCentering.cs`, `Telescope/Overlay/Utils/OverlayKeyMapper.cs`,
+  `Telescope/Overlay/Utils/Panes/DelegatePane.cs`; modified the finders (Grep/Fzf/Files/
+  Recent/Issues), the overlay (`TelescopeOverlay`, `FocusTargetModel`, `OverlayKeyHandler`,
+  `FinderColumns`, `ListPane`, `PreviewPane`, `PromptPane`, `ResultMapper`,
+  `ResultsFormatter`, `TextMotionDispatcher`), `FzfFilter`, the tool-window controllers
+  (`SolutionExplorerController`, `TextInputToolWindowController`, `WindowManager`,
+  `FocusKeeper`, `TextMotionHelper`), `InputHandler`/`KeyNames`/`KeybindingConfig`/
+  `LeaderSequenceMatcher`/`VimModeSource`/`VimModeTracker`, the harness (`test-e2e.ps1`,
+  `iterate-telescope.ps1`, `dte-command.ps1`), `tests/TestRunner.cs`, both test projects,
+  and the docs (spec/AGENTS/SKILL/progress/e2e-queue/code-review + both agent files).
+  Key diagnostics: the two new failure-path literals (m17/m32) + the flagged behavior
+  changes (deferred to E2E-CR107-1..7). **Look first if this regresses:** the
+  `QueryDrivenFinderBase` refactor (BP-6/m33 — a wrong base contract breaks
+  `Run_QueryDrivenFinderBase_Shared`), the `FocusTargetModel.ChordDirection` rename
+  (BP-7/n11 — `Run_FocusTargetModel_MapKeyRemoved`), and the `OverlayKeyHandler` a/A/i/I
+  shift distinction (BP-25/m28 — `Run_KeyHandler_IAEnterInsertWithCaret`).
 
 - **2026-10-06 — Code review fixes (106 findings, incl. nits)** (Lane: `feature`, unit-only,
   e2e DEFERRED; 46 delegations, 0 VS boots, 0 iterations). All 106 findings from

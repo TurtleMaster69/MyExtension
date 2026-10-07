@@ -13,6 +13,6 @@ namespace Telescope.Filter
     {
         Task<bool> IsAvailableAsync();
 
-        Task<IReadOnlyList<string>> FilterAsync(IEnumerable<string> candidates, string query, CancellationToken ct);
+        Task<IReadOnlyList<string>?> FilterAsync(IEnumerable<string> candidates, string query, CancellationToken ct);
     }
 }

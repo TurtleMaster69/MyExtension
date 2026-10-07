@@ -230,10 +230,22 @@ $env:NEOVISUAL_LOG_INDEX = $runIndex
 
 # Pre-spawn cleanup (M36/m18): kill ONLY the devenv PIDs this run spawned/tracked — never a
 # title-scoped `Get-Process devenv` kill, which could terminate the user's unrelated VS instances.
-# (Nothing is tracked yet at this point, so this is a no-op; the tracked main VS is killed only by
-# the final Stop-SpawnedVs teardown.)
+# m68 (BP-D26): capture the tracked PIDs BEFORE the cleanup clears them, then poll for their exit
+# (bounded, with a failure message) instead of a fixed 3s sleep — a killed VS instance must be
+# fully gone before the new one spawns.
+$preCleanupPids = @($script:SpawnedVsPids)
 Stop-HarnessVs
-Start-Sleep -Seconds 3
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$stillAlive = @($preCleanupPids)
+while ($sw.Elapsed.TotalSeconds -lt 30) {
+    $stillAlive = @($preCleanupPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($stillAlive.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+}
+if ($stillAlive.Count -gt 0) {
+    Write-Fail "previous VS instances did not exit within 30s: $($stillAlive -join ', ')"
+    exit 1
+}
 
 Write-Info "opening main VS with the solution..."
 Start-Process $devenv -ArgumentList "`"$(Join-Path $root 'MyExtension.slnx')`"" -ErrorAction Stop
@@ -247,9 +259,22 @@ while ($sw.Elapsed.TotalSeconds -lt 60) {
 if (-not $mainVs) { Write-Fail 'Main VS did not open the solution'; exit 1 }
 Add-SpawnedVs $mainVs
 Write-Pass "main VS open (PID $($mainVs.Id))"
-Start-Sleep -Seconds 10   # let the solution finish loading before DTE build
-
-Start-Sleep -Seconds 2
+# m68 (BP-D26): poll for the main-VS solution-loaded state (DTE Solution.IsOpen) instead of the
+# fixed 10s + 2s bootstrap sleeps — the DTE build (Debug.Start) must not run before the solution
+# is open and DTE is responsive (the poll itself proves DTE answers, folding the old 2s settle
+# sleep into it).
+$dteCmd = Join-Path $PSScriptRoot 'dte-command.ps1'
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$solutionOpen = $false
+while ($sw.Elapsed.TotalSeconds -lt 60) {
+    try {
+        $out = & $dteCmd -DevenvPid $mainVs.Id -Command 'GetSolutionOpen' 2>$null
+        if ($out -and ([string]($out | Select-Object -Last 1)).Trim() -eq 'True') { $solutionOpen = $true; break }
+    } catch { }
+    Start-Sleep -Milliseconds 500
+}
+if (-not $solutionOpen) { Write-Fail 'main VS did not finish loading the solution'; exit 1 }
+Write-Pass "main VS solution loaded"
 
 # Clear the trace oracle for this run (fresh log) before Debug.Start launches the exp instance.
 if (Test-Path $logPath) { Remove-Item $logPath -Force }
@@ -300,6 +325,10 @@ Assert-Budget
 # ---------------------------------------------------------------------------
 Write-Step "Open Telescope (Space -> F -> T)"
 
+# m71 (BP-D29): fixed-log-baseline discipline — reset the baseline before the overlay-open attempt
+# so the mode=insert assertion below can only be satisfied by THIS run's Focus line, never a stale
+# line from an earlier scenario.
+Reset-LogBaseline $logPath
 $telOpen = $false
 for ($attempt = 1; $attempt -le 3 -and -not $telOpen; $attempt++) {
     Write-Info "attempt $attempt/3"
@@ -362,9 +391,12 @@ Write-Info ("------------------------------")
 
 $failures = New-Object System.Collections.Generic.List[string]
 
-# Insert mode is the initial mode; the log's Focus line reports mode=insert.
-if (-not ($log -match 'mode=insert')) {
-    $failures.Add('never saw "mode=insert" in log (prompt may not be in insert mode)')
+# Insert mode is the initial mode; the log's Focus line reports mode=insert. m71 (BP-D29):
+# Wait-NewLogLine on the SPECIFIC 'Focus prompt => True, mode=insert' line (baseline-disciplined)
+# — a stale '[NeoVisual] vim-mode=Insert' line case-insensitively matches 'mode=insert' and must
+# not satisfy the assertion.
+if (-not (Wait-NewLogLine $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 15000)) {
+    $failures.Add('never saw "Focus prompt => True, mode=insert" in log (prompt may not be in insert mode)')
 }
 $querySeen = $false
 foreach ($line in $log) {

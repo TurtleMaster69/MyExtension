@@ -20,6 +20,8 @@ namespace Telescope.Overlay
         ShiftG, // 'G' (move to last)
         I,
         A,
+        ShiftA, // 'A' (shift+a) — insert at end (m28/BP-25)
+        ShiftI, // 'I' (shift+i) — insert at start (m28/BP-25)
     }
 
     /// <summary>
@@ -176,7 +178,11 @@ namespace Telescope.Overlay
 
                 case OverlayKey.I:
                     return EnterInsertMode(CaretPlacement.Current);
+                case OverlayKey.ShiftI:
+                    return EnterInsertMode(CaretPlacement.Start);
                 case OverlayKey.A:
+                    return EnterInsertMode(CaretPlacement.AfterCaret);
+                case OverlayKey.ShiftA:
                     return EnterInsertMode(CaretPlacement.End);
 
                 default:

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Telescope.Logging;
 
@@ -33,7 +34,7 @@ namespace Telescope.Finders
         private readonly Func<IReadOnlyList<string>>? _testFileSource;
         private readonly Action<CodeIssue>? _testOpener;
 
-        private ProjectFileCache _fileCache;
+        private readonly ProjectFileCache _fileCache;
         private string? _cachedSolutionName;
 
         // m15: shared mtime-keyed content cache — CollectTodos reads through it so a second scan
@@ -67,18 +68,31 @@ namespace Telescope.Finders
 
         protected override IReadOnlyList<CodeIssue> GatherHits()
         {
+            // M4c (BP-4): the sync entry delegates to the async path so the existing sync callers
+            // (the overlay's sync GetCandidates() at overlay-open + the tests) keep working.
+            return GatherHitsAsync().GetAwaiter().GetResult();
+        }
+
+        public override async Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "", CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<CodeIssue> issues = await GatherHitsAsync();
+            return issues.Select(ToEntry).ToList();
+        }
+
+        private async Task<IReadOnlyList<CodeIssue>> GatherHitsAsync()
+        {
             var issues = new List<CodeIssue>();
 
             if (_testFileSource != null)
             {
                 // Hermetic test path: the TODO scan is pure file I/O — run it off-thread (m4/BP-6).
-                Task.Run(() =>
+                await Task.Run(() =>
                 {
                     foreach (string path in _testFileSource())
                     {
                         CollectTodos(path, issues);
                     }
-                }).GetAwaiter().GetResult();
+                });
                 return issues;
             }
 
@@ -92,13 +106,13 @@ namespace Telescope.Finders
                 // enumeration stays on the UI thread; CollectErrorList (the COM ErrorItems walk)
                 // MUST stay on the UI thread (it asserts ThrowIfNotOnUIThread).
                 IReadOnlyList<string> files = _fileCache.Get(() => ProjectFiles.Enumerate(dte));
-                Task.Run(() =>
+                await Task.Run(() =>
                 {
                     foreach (string path in files)
                     {
                         CollectTodos(path, issues);
                     }
-                }).GetAwaiter().GetResult();
+                });
                 CollectErrorList(dte, issues);
             }
 

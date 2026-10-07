@@ -44,12 +44,11 @@ namespace Telescope.Overlay
 
         // ImplementationHit.Kind is a STRING (ImplementationHit.cs:19-20) produced at exactly
         // one production site (RoslynGatherers.cs:141-144): impl is INamedTypeSymbol
-        // ? TypeKind.ToString() : SymbolKind.ToString(). The map covers the FULL union of the
-        // Roslyn TypeKind + SymbolKind names (30 distinct values) so no raw long form can
-        // leak into the narrow column; the fallback rule covers any value a future Roslyn
-        // adds. All outputs for the 30 real union values are pairwise distinct within the
-        // column (inf vs info is a CROSS-FINDER collision — different finders, different
-        // columns — and harmless).
+        // ? TypeKind.ToString() : SymbolKind.ToString(). The map covers the 7 realistically
+        // reachable kinds (via SymbolFinder.FindImplementationsAsync) + the 2 user-literal
+        // entries; any other value falls back to the lowercase ≤4-char rule (m42/BP-5 — the
+        // ~20 defensive Roslyn TypeKind/SymbolKind entries are unreachable in production and
+        // are dropped; the Fallback renders them).
         private static readonly Dictionary<string, string> ImplMap =
             new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -61,31 +60,6 @@ namespace Telescope.Overlay
             ["Method"] = "func",            // user-specified ("function=func") — Method is the function-like kind
             ["Property"] = "prop",
             ["Event"] = "evt",
-            // Defensive: the remaining Roslyn TypeKind / SymbolKind names (unreachable via
-            // FindImplementationsAsync today, mapped so the table is complete):
-            ["Delegate"] = "del",
-            ["ErrorType"] = "errt",
-            ["TypeParameter"] = "typ",
-            ["Unknown"] = "unk",
-            ["Array"] = "arr",
-            ["ArrayType"] = "arrt",
-            ["Dynamic"] = "dyn",
-            ["DynamicType"] = "dynt",
-            ["Module"] = "mod",
-            ["NetModule"] = "nmod",
-            ["Pointer"] = "ptr",
-            ["PointerType"] = "ptrt",
-            ["Submission"] = "sub",
-            ["FunctionPointer"] = "fnptr",
-            ["FunctionPointerType"] = "fnpt",
-            ["Field"] = "fld",
-            ["Local"] = "loc",
-            ["NamedType"] = "ntyp",
-            ["Namespace"] = "ns",
-            ["Assembly"] = "asm",
-            ["Label"] = "lbl",
-            ["Parameter"] = "par",
-            ["RangeVariable"] = "rng",
             // User-literal defensive entries (the user's words carried verbatim; no
             // production path produces these values today):
             ["Implementation"] = "imp",     // user-specified

@@ -166,7 +166,6 @@ namespace MyExtension.ToolWindows
                 case ToolWindowType.FindReplace:
                 case ToolWindowType.FindAdvanced:
                 case ToolWindowType.ObjectSearchWindow:
-                case ToolWindowType.ObjectSearchResultsWindow:
                 case ToolWindowType.ImmediateWindow:
                 case ToolWindowType.CommandWindow:
                 case ToolWindowType.ConsoleIO:

@@ -5,22 +5,6 @@ using System.Linq;
 namespace Telescope.Overlay
 {
     /// <summary>
-    /// How a results column is sized (the Telescope.nvim <c>entry_display</c> pattern): a
-    /// fixed character width, or the single flexible column that absorbs the remaining width.
-    /// </summary>
-    internal enum ResultColumnWidth
-    {
-        /// <summary>Fixed character width (<see cref="ResultColumn.WidthChars"/> is meaningful).</summary>
-        Fixed,
-
-        /// <summary>
-        /// Flexible: absorbs the remaining width (Telescope.nvim's <c>remaining = true</c>).
-        /// <see cref="ResultColumn.WidthChars"/> is 0 and ignored.
-        /// </summary>
-        Flexible,
-    }
-
-    /// <summary>
     /// How a column's cell text shortens at its max width (plan D4): Tail removes the FRONT
     /// (path-like columns — the end folder + file name survive), End removes the END (text
     /// columns — the start of the line is the important part).
@@ -48,12 +32,6 @@ namespace Telescope.Overlay
         /// <summary>Human header shown in the GridView (e.g. <c>Access</c>, <c>Line text</c>).</summary>
         internal string Header { get; }
 
-        /// <summary>Fixed-chars vs flexible-remaining (Telescope.nvim entry_display pattern).</summary>
-        internal ResultColumnWidth Width { get; }
-
-        /// <summary>Fixed width in characters; 0 and ignored when <see cref="Width"/> is Flexible.</summary>
-        internal int WidthChars { get; }
-
         /// <summary>Floor in characters — a column is never narrower than this.</summary>
         internal int MinWidth { get; }
 
@@ -76,8 +54,6 @@ namespace Telescope.Overlay
         internal ResultColumn(
             string id,
             string header,
-            ResultColumnWidth width,
-            int widthChars,
             int minWidth,
             int maxWidth,
             ResultColumnTruncation truncation,
@@ -86,8 +62,6 @@ namespace Telescope.Overlay
         {
             Id = id ?? string.Empty;
             Header = header ?? string.Empty;
-            Width = width;
-            WidthChars = width == ResultColumnWidth.Flexible ? 0 : widthChars;
             MinWidth = Math.Max(0, minWidth);
             MaxWidth = Math.Max(MinWidth, maxWidth);   // defensive: max >= min, always
             Truncation = truncation;
@@ -122,10 +96,6 @@ namespace Telescope.Overlay
                 _catalog.Where(c => c.DefaultVisible).Select(c => c.Id),
                 StringComparer.Ordinal);
         }
-
-        /// <summary>The visible columns in catalog order — Section B builds the GridView from this.</summary>
-        internal IReadOnlyList<ResultColumn> VisibleColumns =>
-            _catalog.Where(c => _visible.Contains(c.Id)).ToList();
 
         /// <summary>The visible column ids in catalog order — the <c>results columns=</c> payload.</summary>
         internal IReadOnlyList<string> VisibleIds =>

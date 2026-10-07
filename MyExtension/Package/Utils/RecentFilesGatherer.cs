@@ -98,6 +98,16 @@ namespace MyExtension.Package
             return merged;
         }
 
+        /// <summary>
+        /// m60 (BP-D13): test-only seam — the DocumentEvents subscription the ctor would hook on a
+        /// live DTE (the ctor no-ops on a null DTE). No production behavior change.
+        /// </summary>
+        internal DocumentEvents? DocumentEventsForTest
+        {
+            get => _documentEvents;
+            set => _documentEvents = value;
+        }
+
         private IReadOnlyList<string> ProbeRecentFiles()
         {
             DTE? dte = _dteFactory();

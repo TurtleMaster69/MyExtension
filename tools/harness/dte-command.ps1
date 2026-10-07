@@ -145,6 +145,19 @@ if ($Command -eq 'GetActiveDocument') {
     exit 0
 }
 
+# 'GetSolutionOpen' is a HARNESS-ONLY QUERY (m68/BP-D26): prints 'True' when the DTE solution is
+# open, 'False' otherwise — the main-VS solution-loaded poll replaces the fixed 10s bootstrap
+# sleep in iterate-telescope.ps1. A missing/unresponsive DTE prints 'False' (the poll retries).
+# No product code or diagnostic is touched.
+if ($Command -eq 'GetSolutionOpen') {
+    $open = $false
+    try {
+        $open = [bool](Invoke-DteWithTimeout { param($dte) $dte.Solution.IsOpen } $QueryTimeoutSec 'GetSolutionOpen' @($dte))
+    } catch { $open = $false }
+    Write-Output $open
+    exit 0
+}
+
 # 'GetSolutionExplorerVisible' is a HARNESS-ONLY QUERY (m16/BP-26): prints 'True' when the
 # Solution Explorer tool window is visible, 'False' otherwise — the same check the
 # SolutionExplorerController's IsSolutionExplorerVisible uses

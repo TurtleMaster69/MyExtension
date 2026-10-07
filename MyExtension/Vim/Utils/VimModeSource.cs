@@ -139,6 +139,11 @@ namespace MyExtension.Vim
         public void Detach(ITextView view)
         {
             object? buffer = _subscriptions.BufferFor(view);
+            // m6: read the cached text buffer BEFORE the subscriptions map decrements the refcount
+            // (which removes the buffer->textBuffer entry at 0) — no reflection re-read on a
+            // possibly-closing buffer (a reflection failure would leak the SwitchedMode
+            // subscription). Mirrors the m13-fixed OnBufferClosed path.
+            _subscriptions.TryGetTextBuffer(buffer, out object? textBuffer);
             // R3: the subscriptions map coordinates the refcount decrement + Closed-subscription
             // removal (no double-decrement with OnBufferClosed) and reports whether this was the
             // last view sharing the text buffer.
@@ -146,7 +151,7 @@ namespace MyExtension.Vim
             if (buffer != null && lastView)
             {
                 // Last view sharing this text buffer: unsubscribe its SwitchedMode + Closed events.
-                UnsubscribeBuffer(buffer);
+                UnsubscribeBuffer(buffer, textBuffer);
             }
         }
 
@@ -261,11 +266,11 @@ namespace MyExtension.Vim
         /// Unsubscribes a buffer's SwitchedMode (on its text buffer) + Closed (on the buffer)
         /// events. R3: the Closed subscription is on the <c>IVimBuffer</c>, not the text buffer, so
         /// the buffer is threaded through the pure subscriptions map (which also removes the Closed
-        /// subscription + decrements the refcount).
+        /// subscription + decrements the refcount). m6: the text buffer is the CACHED value read
+        /// before the refcount decrement — no reflection re-read on a possibly-closing buffer.
         /// </summary>
-        private void UnsubscribeBuffer(object buffer)
+        private void UnsubscribeBuffer(object buffer, object? textBuffer)
         {
-            object? textBuffer = GetTextBuffer(buffer);
             if (textBuffer != null)
             {
                 RemoveSwitchedMode(textBuffer);
@@ -276,11 +281,15 @@ namespace MyExtension.Vim
 
         private void RemoveSwitchedMode(object textBuffer)
         {
+            // m6 (BP-2): the set entry is removed UNCONDITIONALLY — even when the delegate is null
+            // (a subscribe that failed to build the delegate still added the entry in
+            // SubscribeBuffer), the Detach/OnBufferClosed teardown must not leak it. The delegate
+            // removal below is skipped only when there is nothing to unsubscribe.
+            _subscribedTextBuffers.Remove(textBuffer);
             if (_switchedModeDelegate == null)
             {
                 return;
             }
-            _subscribedTextBuffers.Remove(textBuffer);
             try
             {
                 _removeSwitchedModeMethod ??= GetInterfaceMethod(textBuffer, IVimTextBufferFullName, "remove_SwitchedMode");

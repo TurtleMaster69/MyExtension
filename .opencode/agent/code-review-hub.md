@@ -311,7 +311,6 @@ missed 12 files):
 - **D** `Telescope/` (enumerate the whole folder): `Controller/TelescopeController.cs`,
   `Overlay/TelescopeOverlay.cs`, `Finders/TelescopeFinder.cs`,
   `Overlay/Utils/OverlayKeyHandler.cs`, `Overlay/Utils/TextMotionNavigator.cs`,
-  `Overlay/Utils/SyntaxHighlighter.cs`,
   `Overlay/Utils/ResultsFormatter.cs`, `Filter/FzfFilter.cs`, `Finders/FileFinder.cs`,
   `Finders/CodeIssuesFinder.cs`,
   `Finders/Utils/CodeIssue.cs`, `Finders/GrepFinder.cs`, `Finders/Utils/GrepHit.cs`,

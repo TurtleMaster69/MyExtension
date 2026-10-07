@@ -142,41 +142,38 @@ namespace Telescope.Logging
 
         private static void EnsurePane()
         {
+            // n19 (BP-11): hold PaneSync across the pane creation so two threads cannot both
+            // create the pane (the old double-checked locking released the lock between the
+            // null-check and the creation — a benign race that could create two panes).
             lock (PaneSync)
             {
                 if (_pane != null)
                 {
                     return;
                 }
-            }
 
-            // Creating the pane requires the UI thread; if we're not on it yet, skip the pane
-            // for this write (the file still gets the line) and let a later UI-thread call retry.
-            if (!ThreadHelper.CheckAccess())
-            {
-                return;
-            }
-
-            try
-            {
-                var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
-                if (outputWindow == null)
+                // Creating the pane requires the UI thread; if we're not on it yet, skip the pane
+                // for this write (the file still gets the line) and let a later UI-thread call retry.
+                if (!ThreadHelper.CheckAccess())
                 {
-                    // M12: a null GetGlobalService result (pre-package-init) must not permanently
-                    // disable the pane — a later UI-thread call retries.
                     return;
                 }
-                Guid paneGuid = PaneGuid;
-                outputWindow.CreatePane(ref paneGuid, "NeoVisual", fInitVisible: 1, fClearWithSolution: 1);
-                outputWindow.GetPane(ref paneGuid, out IVsOutputWindowPane? pane);
-                lock (PaneSync)
+
+                try
                 {
+                    var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
+                    if (outputWindow == null)
+                    {
+                        // M12: a null GetGlobalService result (pre-package-init) must not permanently
+                        // disable the pane — a later UI-thread call retries.
+                        return;
+                    }
+                    Guid paneGuid = PaneGuid;
+                    outputWindow.CreatePane(ref paneGuid, "NeoVisual", fInitVisible: 1, fClearWithSolution: 1);
+                    outputWindow.GetPane(ref paneGuid, out IVsOutputWindowPane? pane);
                     _pane = pane;
                 }
-            }
-            catch
-            {
-                lock (PaneSync)
+                catch
                 {
                     _pane = null;
                 }

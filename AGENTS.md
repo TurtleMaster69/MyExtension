@@ -103,8 +103,8 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    goto dispatcher (`GotoDispatcher`) + the definition finder (`DefinitionFinder`).
    `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- RecentFilesFinder`,
    `-- TextMotionDispatcher`,
-   `-- LineIndex`, `-- FocusTarget`, `-- Pane`, `-- ListKeyMap` run subsets.
-   Currently **319 tests, all passing**.
+    `-- LineIndex`, `-- FocusTarget`, `-- Pane`, `-- ListKeyMap` run subsets.
+    Currently **366 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -120,8 +120,8 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    (`DiagnosticNavigator`).
    `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
    `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
-   `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-   run subsets. Currently **236 tests, all passing**.
+    `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
+    run subsets. Currently **264 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled
@@ -250,8 +250,8 @@ Key facts that make this reliable:
    back to the standalone content-type buffer. NOTE: the count is read synchronously at view
    creation — BEFORE async classification lands — so it reads **0 for BOTH buffer sources**
    (runs 168/169/170 all-0) and cannot discriminate engagement; the semantic coloring is
-   verified by the manual visual pass, not by this line; the harness regex is presence-only
-   `tokens=\d+`),
+   verified by the manual visual pass, not by this line (the harness no longer asserts on
+   `tokens=` — m62 dropped the presence-only assertion)),
   `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...` (code-issues finder),
   `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
   (references finder — read/write access from Roslyn FindReferences),

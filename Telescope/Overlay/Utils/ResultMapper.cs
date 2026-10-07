@@ -20,7 +20,8 @@ namespace Telescope.Overlay
         // per snapshot (reference-keyed single entry — the snapshot is the overlay's candidate list,
         // which does not change while filtering). Rebuilt only when a different snapshot arrives.
         // R40: the cache is INSTANCE-scoped (not static) so a closed overlay's candidate list is
-        // not pinned in memory and the mapper is safe to use off the UI thread.
+        // not pinned in memory. The cache is NOT synchronized — the mapper is only safe on the
+        // UI thread (the overlay's whole lifecycle is UI-thread-only; n20/BP-12).
         private IReadOnlyList<FinderEntry>? _cachedSnapshot;
         private Dictionary<string, List<(FinderEntry entry, int index)>>? _cachedByDisplay;
 

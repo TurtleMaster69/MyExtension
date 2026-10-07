@@ -7,9 +7,9 @@ namespace Telescope.Overlay
     /// dependencies) so it can be unit-tested hermetically by <c>tests/Telescope.Tests</c>. The
     /// results host is a ListView (the old read-only TextBox was replaced by the columned list),
     /// so the legacy <c>&gt; </c>-marked text render (<c>ToText</c>) is gone; this class now owns
-    /// the two pure seams the overlay's diagnostics need: the byte-stable <c>boxText=</c> length
-    /// (the rendered row-text length of the visible cells) and the <c>results columns=</c> id-list
-    /// format.
+    /// the single pure seam the overlay's diagnostics need: the byte-stable <c>boxText=</c> length
+    /// (the rendered row-text length of the visible cells). The <c>results columns=</c> id-list
+    /// format is inlined at the call site (<c>string.Join(",", ids)</c> — n16/BP-9).
     /// </summary>
     internal static class ResultsFormatter
     {
@@ -32,17 +32,6 @@ namespace Telescope.Overlay
                 }
             }
             return total;
-        }
-
-        /// <summary>
-        /// The <c>results columns=</c> id list: the visible column ids, comma-separated, no
-        /// spaces, in catalog order. Empty set → empty string (the line reads
-        /// <c>results columns=</c>).
-        /// </summary>
-        internal static string ColumnsIdList(IReadOnlyList<string> visibleIds)
-        {
-            if (visibleIds == null || visibleIds.Count == 0) return string.Empty;
-            return string.Join(",", visibleIds);
         }
     }
 }

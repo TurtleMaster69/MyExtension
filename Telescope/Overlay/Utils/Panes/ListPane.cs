@@ -60,20 +60,8 @@ namespace Telescope.Overlay
     /// </summary>
     internal static class ListKeyMap
     {
-        public static OverlayKey Map(Key key, bool shift)
-        {
-            switch (key)
-            {
-                case Key.Escape: return OverlayKey.Escape;
-                case Key.Q: return OverlayKey.Q;
-                case Key.Enter: return OverlayKey.Enter;
-                case Key.J: return OverlayKey.J;
-                case Key.K: return OverlayKey.K;
-                case Key.G: return shift ? OverlayKey.ShiftG : OverlayKey.G;
-                case Key.I: return OverlayKey.I;
-                case Key.A: return OverlayKey.A;
-                default: return OverlayKey.Other;   // Up/Down/h/l/w/b/e/0/$/...: NOT claimed
-            }
-        }
+        // m24 (BP-13): the shared WPF Key -> OverlayKey table (OverlayKeyMapper) — the List pane's
+        // Up/Down -> Other pin (the native arrows stay live) is the mapper's default (mapArrows:false).
+        public static OverlayKey Map(Key key, bool shift) => OverlayKeyMapper.Map(key, shift);
     }
 }

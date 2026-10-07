@@ -28,36 +28,42 @@ namespace MyExtension.ToolWindows
             // Monotonic clock (m8): Environment.TickCount (int) wraps every ~24.9 days; net472 has
             // no TickCount64, so use a Stopwatch (high-resolution monotonic counter) instead.
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            keeper.Tick += (_, _) =>
-            {
-                // m21: a superseded keeper's queued tick is a no-op — the tick handler must not
-                // call tick(...) for a keeper that was already stopped by a newer Run (the race:
-                // a tick queued in the dispatcher before _current?.Stop() at the top of Run).
-                if (!ReferenceEquals(_current, keeper))
-                {
-                    return;
-                }
-                bool keepRunning = true;
-                try
-                {
-                    keepRunning = tick((int)stopwatch.ElapsedMilliseconds);
-                }
-                catch
-                {
-                    // selection/focus re-assert must never break the handler
-                }
-                if (!keepRunning || stopwatch.ElapsedMilliseconds >= durationMs)
-                {
-                    keeper.Stop();
-                    if (ReferenceEquals(_current, keeper))
-                    {
-                        _current = null;
-                    }
-                }
-            };
+            keeper.Tick += (_, _) => InvokeTick(keeper, durationMs, stopwatch, tick);
             _current = keeper;
             keeper.Start();
             return new KeeperHandle(this, keeper);
+        }
+
+        /// <summary>
+        /// m64 (BP-D17): the shared tick body — the timer's Tick handler and the test seam both
+        /// call it. A superseded keeper's queued tick is a no-op (the ReferenceEquals guard): the
+        /// tick handler must not call <c>tick(...)</c> for a keeper that was already stopped by a
+        /// newer Run (the race: a tick queued in the dispatcher before <c>_current?.Stop()</c> at
+        /// the top of <see cref="Run"/>).
+        /// </summary>
+        internal void InvokeTick(DispatcherTimer keeper, int durationMs, System.Diagnostics.Stopwatch stopwatch, Func<int, bool> tick)
+        {
+            if (!ReferenceEquals(_current, keeper))
+            {
+                return;
+            }
+            bool keepRunning = true;
+            try
+            {
+                keepRunning = tick((int)stopwatch.ElapsedMilliseconds);
+            }
+            catch
+            {
+                // selection/focus re-assert must never break the handler
+            }
+            if (!keepRunning || stopwatch.ElapsedMilliseconds >= durationMs)
+            {
+                keeper.Stop();
+                if (ReferenceEquals(_current, keeper))
+                {
+                    _current = null;
+                }
+            }
         }
 
         private sealed class KeeperHandle : IDisposable
@@ -104,8 +110,14 @@ namespace MyExtension.ToolWindows
             Stop,
         }
 
-        public static Decision Decide(bool searchBoxFocused, int elapsedMs, int escapeAttempts, int durationMs)
+        public static Decision Decide(bool searchBoxFocused, int elapsedMs, int escapeAttempts, int durationMs, bool editorFocused)
         {
+            // m16 (BP-15): the user moved to the editor — stop re-asserting (keys typed in that
+            // window must not be routed to the tree and lost). Editor focus wins over the escape loop.
+            if (editorFocused)
+            {
+                return Decision.Stop;
+            }
             if (elapsedMs >= durationMs)
             {
                 return Decision.Stop;

@@ -61,16 +61,24 @@ namespace MyExtension.Input
             //    using prefix detection to keep waiting for multi-key sequences like "f f".
             if (_active)
             {
-                // Modifier keys (Shift/Ctrl/Alt/Win — down AND up) are TRANSPARENT while a
-                // sequence is in progress: consumed without being appended and without
-                // aborting. Typing a shifted sequence member (e.g. '|' = Shift+0xDC for the
-                // "w,|" binding) sends the Shift key-down while the prefix is pending; appending
-                // it built "w,Shift" and aborted, so the shifted key could never complete the
-                // binding. The hook dispatches only key-downs, but the matcher treats key-ups
+                // m4 (BP-6): only Shift (ShiftKey/LShiftKey/RShiftKey) is TRANSPARENT while a
+                // sequence is in progress — consumed without being appended and without aborting.
+                // Typing a shifted sequence member (e.g. '|' = Shift+0xDC for the "w,|" binding)
+                // sends the Shift key-down while the prefix is pending; appending it built
+                // "w,Shift" and aborted, so the shifted key could never complete the binding.
+                // A Ctrl/Alt/Win key-down ABORTS the sequence (clears it) so the modifier passes
+                // through to VS — a Ctrl+chord/Alt+Tab in that window must not have its modifier
+                // swallowed. The hook dispatches only key-downs, but the matcher treats key-ups
                 // the same so the pure machine stays coherent for any caller.
-                if (IsModifierKey(key))
+                if (IsShiftKey(key))
                 {
                     return LeaderResult.Consume;
+                }
+                if (IsModifierKey(key))
+                {
+                    _active = false;
+                    _sequenceBuilder.Clear();
+                    return LeaderResult.Abort;
                 }
 
                 if (_sequenceBuilder.Length > 0)
@@ -114,14 +122,16 @@ namespace MyExtension.Input
         /// <summary>
         /// True for the physical modifier virtual-keys (Shift/Ctrl/Alt/Win, left and right
         /// variants) — the bare key-downs the hook delivers while a chord is being typed
-        /// (e.g. Shift+0xDC types '|'). These are never sequence members.
+        /// (e.g. Shift+0xDC types '|'). These are never sequence members. m2 (BP-4): delegates to
+        /// the single-source <see cref="KeyNames.IsPhysicalModifierKey"/>.
         /// </summary>
-        private static bool IsModifierKey(Keys key)
+        private static bool IsModifierKey(Keys key) => KeyNames.IsPhysicalModifierKey(key);
+
+        /// <summary>True for the Shift physical virtual-keys (the only transparent modifier while a
+        /// sequence is pending — m4/BP-6).</summary>
+        private static bool IsShiftKey(Keys key)
         {
-            return key == Keys.ShiftKey || key == Keys.LShiftKey || key == Keys.RShiftKey
-                || key == Keys.ControlKey || key == Keys.LControlKey || key == Keys.RControlKey
-                || key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu
-                || key == Keys.LWin || key == Keys.RWin;
+            return key == Keys.ShiftKey || key == Keys.LShiftKey || key == Keys.RShiftKey;
         }
 
         /// <summary>Clears any in-progress sequence.</summary>

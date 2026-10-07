@@ -11,7 +11,7 @@ namespace Telescope.Finders
     /// </summary>
     internal static class LiteralLineScanner
     {
-        public static IReadOnlyList<int> Scan(string[] lines, string query, int cap)
+        public static IReadOnlyList<int> Scan(IReadOnlyList<string> lines, string query, int cap)
         {
             var result = new List<int>();
             if (lines == null || string.IsNullOrEmpty(query) || cap <= 0)
@@ -19,7 +19,7 @@ namespace Telescope.Finders
                 return result;
             }
 
-            for (int i = 0; i < lines.Length; i++)
+            for (int i = 0; i < lines.Count; i++)
             {
                 if (result.Count >= cap)
                 {

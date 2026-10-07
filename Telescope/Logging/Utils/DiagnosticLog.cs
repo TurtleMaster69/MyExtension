@@ -12,7 +12,6 @@ namespace Telescope.Logging
         public const string Telescope = "[Telescope] ";
         public const string Hook = "[Hook] ";
         public const string MyExtension = "[MyExtension] ";
-        public const string GlobalKeyboard = "[GlobalKeyboard] ";
 
         /// <summary>
         /// Replaces control characters (newlines, tabs, ...) with spaces so user-controlled text

@@ -12,6 +12,8 @@ namespace Telescope.Logging
     /// </summary>
     internal static class FilterFailureLog
     {
-        public static string Format(Exception ex) => DiagnosticLog.Telescope + "filter failed: " + ex.Message;
+        // m43 (BP-30): sanitize ex.Message (control chars -> spaces) so a newline can never split
+        // the [Telescope] filter failed: {msg} line.
+        public static string Format(Exception ex) => DiagnosticLog.Telescope + "filter failed: " + DiagnosticLog.SanitizeText(ex.Message);
     }
 }

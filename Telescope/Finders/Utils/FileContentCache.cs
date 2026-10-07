@@ -46,14 +46,18 @@ namespace Telescope.Finders
         /// <summary>
         /// Returns the cached lines when the file's <c>LastWriteTimeUtc</c> is unchanged, else
         /// re-reads and caches them. m7 (BP-8): when the entry holds the full content but no lines,
-        /// the lines are derived from the cached content (no disk read).
+        /// the lines are derived from the cached content (no disk read). m38 (BP-8): the timestamp
+        /// is captured BEFORE the outside-lock read and re-read after it — if the file changed
+        /// during the read, the stale lines are NEVER cached under the fresh timestamp (a TOCTOU);
+        /// they are returned uncached and the next read re-reads.
         /// </summary>
         public string[] GetLines(string path)
         {
+            DateTime stampBefore;
             lock (_gate)
             {
-                DateTime stamp = _timestamp(path);
-                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stamp)
+                stampBefore = _timestamp(path);
+                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stampBefore)
                 {
                     if (entry.Lines != null)
                     {
@@ -73,13 +77,20 @@ namespace Telescope.Finders
 
             lock (_gate)
             {
-                DateTime stamp = _timestamp(path);
-                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stamp && entry.Lines != null)
+                DateTime stampAfter = _timestamp(path);
+                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stampAfter && entry.Lines != null)
                 {
                     Touch(entry);
                     return entry.Lines;
                 }
-                Put(path, stamp, lines, null);
+                if (stampAfter != stampBefore)
+                {
+                    // m38 (BP-8): the file changed during the outside-lock read — the lines are
+                    // stale. Skip caching (never cache stale lines under a fresh timestamp); the
+                    // next read re-reads.
+                    return lines;
+                }
+                Put(path, stampAfter, lines, null);
                 return lines;
             }
         }
@@ -91,14 +102,16 @@ namespace Telescope.Finders
         /// (BP-8): the entry is shared with <see cref="GetLines"/> — when the entry holds the
         /// content, it is returned as-is; when it holds only lines, the content is re-read via the
         /// content reader (deriving by joining lines would normalize line endings and violate the
-        /// exact-content contract).
+        /// exact-content contract). m38 (BP-8): the same TOCTOU guard as <see cref="GetLines"/> —
+        /// stale content is never cached under a fresh timestamp.
         /// </summary>
         public string GetContent(string path)
         {
+            DateTime stampBefore;
             lock (_gate)
             {
-                DateTime stamp = _timestamp(path);
-                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stamp)
+                stampBefore = _timestamp(path);
+                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stampBefore)
                 {
                     if (entry.Content != null)
                     {
@@ -112,13 +125,18 @@ namespace Telescope.Finders
 
             lock (_gate)
             {
-                DateTime stamp = _timestamp(path);
-                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stamp && entry.Content != null)
+                DateTime stampAfter = _timestamp(path);
+                if (_entries.TryGetValue(path, out CacheEntry entry) && entry.Timestamp == stampAfter && entry.Content != null)
                 {
                     Touch(entry);
                     return entry.Content;
                 }
-                Put(path, stamp, null, content);
+                if (stampAfter != stampBefore)
+                {
+                    // m38 (BP-8): the file changed during the outside-lock read — skip caching.
+                    return content;
+                }
+                Put(path, stampAfter, null, content);
                 return content;
             }
         }

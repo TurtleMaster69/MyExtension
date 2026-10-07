@@ -33,6 +33,14 @@ namespace MyExtension.Adornments
         private readonly Rectangle _white;
         private readonly TextBlock _glyph;
 
+        // m20 (BP-19): the last glyph char rendered — the per-keystroke Update() only sets
+        // _glyph.Text when it changed (no per-caret/layout string churn).
+        private char _lastGlyphChar;
+
+        // m20 (BP-19): the glyph FontSize is computed once (on the first layout) and frozen — not
+        // recomputed per caret/layout change.
+        private double? _glyphFontSize;
+
         // m57 (BP-D6): the desired/rendered state model is delegated to the pure BlockCaretState
         // (the OverlayKeyHandler/TextMotionNavigator pattern) so the focus-loss/regain contract is
         // unit-testable without a view or an adornment layer.
@@ -48,17 +56,19 @@ namespace MyExtension.Adornments
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
 
-            _white = new Rectangle { Fill = new SolidColorBrush(Telescope.Overlay.BlockCaretStyle.WhiteFill) };
+            // m20 (BP-19): the shared frozen brushes (never a per-instance unfrozen brush).
+            _white = new Rectangle { Fill = Telescope.Overlay.BlockCaretStyle.WhiteBrush };
             _glyph = new TextBlock
             {
-                Foreground = new SolidColorBrush(Telescope.Overlay.BlockCaretStyle.GlyphColor),
+                Foreground = Telescope.Overlay.BlockCaretStyle.GlyphBrush,
                 TextAlignment = TextAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 12,
             };
-            _block = new Grid { Width = 2, Height = 2 };
+            // m20 (BP-19): the block must not intercept clicks that should place the editor caret.
+            _block = new Grid { Width = 2, Height = 2, IsHitTestVisible = false };
             _block.Children.Add(_white);
             _block.Children.Add(_glyph);
 
@@ -173,8 +183,19 @@ namespace MyExtension.Adornments
                 Canvas.SetLeft(_block, bounds.Left);
                 Canvas.SetTop(_block, bounds.Top);
 
-                _glyph.Text = GetCaretChar(caret).ToString();
-                _glyph.FontSize = Math.Max(8, _block.Height * 0.8);
+                // m20 (BP-19): only set _glyph.Text when the caret's character changed, and compute
+                // the FontSize once (frozen) instead of per caret/layout change.
+                char glyphChar = GetCaretChar(caret);
+                if (glyphChar != _lastGlyphChar)
+                {
+                    _lastGlyphChar = glyphChar;
+                    _glyph.Text = glyphChar.ToString();
+                }
+                if (_glyphFontSize == null)
+                {
+                    _glyphFontSize = Math.Max(8, _block.Height * 0.8);
+                    _glyph.FontSize = _glyphFontSize.Value;
+                }
 
                 _layer.AddAdornment(AdornmentPositioningBehavior.OwnerControlled, null, AdornmentTag, _block, null);
             }

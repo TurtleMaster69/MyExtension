@@ -82,41 +82,30 @@ namespace Telescope.Overlay
         public int Bottom => Y + Height;
 
         public bool IsEmpty => Width == 0 && Height == 0;
-
-        /// <summary>The overlap length with <paramref name="other"/> on <paramref name="axis"/>
-        /// (0-floor) — mirrors WindowRect.Adjacency.</summary>
-        public int Adjacency(PaneRect other, PaneAxis axis)
-        {
-            if (axis == PaneAxis.X)
-            {
-                int start = Math.Max(X, other.X);
-                int end = Math.Min(Right, other.Right);
-                return Math.Max(0, end - start);
-            }
-            int yStart = Math.Max(Y, other.Y);
-            int yEnd = Math.Min(Bottom, other.Bottom);
-            return Math.Max(0, yEnd - yStart);
-        }
-
-        /// <summary>The distance from this rect to <paramref name="other"/> along
-        /// <paramref name="direction"/> (NEGATIVE = overlapping/behind) — mirrors
-        /// WindowRect.GapTo. Called ON THE CANDIDATE with the focused rect as other.</summary>
-        public int GapTo(PaneRect other, PaneFocusKey direction)
-        {
-            switch (direction)
-            {
-                case PaneFocusKey.Up: return other.Y - Bottom;
-                case PaneFocusKey.Down: return Y - other.Bottom;
-                case PaneFocusKey.Left: return other.X - Right;
-                case PaneFocusKey.Right: return X - other.Right;
-                default: throw new ArgumentOutOfRangeException(nameof(direction));
-            }
-        }
     }
 
-    /// <summary>The axis shared with the movement direction (the alignment/adjacency axis) —
-    /// mirrors MyExtension.Navigation's DirectionExtensions.PerpendicularAxis.</summary>
-    internal enum PaneAxis { X, Y }
+    /// <summary>
+    /// The merged layout entry (m48/BP-20): the pane's Id + its layout rect in ONE struct that
+    /// implements <see cref="IGeometricRect"/> so the shared <see cref="GeometricSelectionEngine"/>
+    /// iterates the single <c>_layout</c> list directly (the parallel <c>_rects</c> list is gone).
+    /// </summary>
+    internal readonly struct PaneEntry : IGeometricRect
+    {
+        public readonly FocusTarget Id;
+        public readonly PaneRect Rect;
+
+        public PaneEntry(FocusTarget id, PaneRect rect)
+        {
+            Id = id;
+            Rect = rect;
+        }
+
+        public int X => Rect.X;
+        public int Y => Rect.Y;
+        public int Right => Rect.Right;
+        public int Bottom => Rect.Bottom;
+        public bool IsEmpty => Rect.IsEmpty;
+    }
 
     /// <summary>
     /// Dependency-free state machine for the overlay's pane focus (Feature 7 rev 1 — the
@@ -135,12 +124,10 @@ namespace Telescope.Overlay
     /// </summary>
     internal sealed class FocusTargetModel
     {
-        private readonly List<KeyValuePair<FocusTarget, PaneRect>> _layout = new();
-
-        // M4 (BP-3/BP-4): the parallel rect list the shared GeometricSelectionEngine iterates —
-        // kept in sync with _layout in SetLayout so the delegation allocates nothing per move
-        // (n17: the per-move List<Candidate> is gone with the mirrored pipeline).
-        private readonly List<PaneRect> _rects = new();
+        // m48 (BP-20): the parallel _layout/_rects lists are merged into ONE list — a combined
+        // PaneEntry (Id + rect) that implements IGeometricRect so the shared GeometricSelectionEngine
+        // iterates it directly (no per-move allocation, no desync).
+        private readonly List<PaneEntry> _layout = new();
 
         public FocusTarget Current { get; private set; } = FocusTarget.Input;
 
@@ -153,11 +140,9 @@ namespace Telescope.Overlay
         public void SetLayout(IReadOnlyList<KeyValuePair<FocusTarget, PaneRect>> layout)
         {
             _layout.Clear();
-            _layout.AddRange(layout);
-            _rects.Clear();
             for (int i = 0; i < layout.Count; i++)
             {
-                _rects.Add(layout[i].Value);
+                _layout.Add(new PaneEntry(layout[i].Key, layout[i].Value));
             }
         }
 
@@ -182,7 +167,7 @@ namespace Telescope.Overlay
         /// (NO wrap — the focus stays put).</summary>
         private FocusTargetAction Move(PaneFocusKey direction)
         {
-            FocusTarget? target = ResolveTarget(_layout, Current, direction);
+            FocusTarget? target = ResolveTarget(Current, direction);
             if (target is null)
             {
                 return FocusTargetAction.NoOp;
@@ -219,15 +204,6 @@ namespace Telescope.Overlay
                 case Key.Escape: return PaneFocusKey.Escape;
                 default: return PaneFocusKey.None;
             }
-        }
-
-        /// <summary>WPF key → the normalized focus gesture. Only the Ctrl chords + Escape map;
-        /// plain h/j/k/l are NOT focus keys (they are pane keys). Pure — the caller reads
-        /// Keyboard.Modifiers once and passes the result. Resolves through
-        /// <see cref="ChordDirection"/> (the single chord map).</summary>
-        public static PaneFocusKey MapKey(Key key, bool hasCtrl)
-        {
-            return ChordDirection(key, hasCtrl);
         }
 
         /// <summary>The no-op reason's direction token (lowercase — the user's own words:
@@ -268,43 +244,43 @@ namespace Telescope.Overlay
         /// gone). Pinned by <c>Run_FocusTargetModel_DirectionTable</c>.</summary>
         internal static bool UsesSharedGeometricEngine => true;
 
-        /// <summary>(the pane rects, the focused pane, the direction) → the target pane, or
-        /// null when NO pane lies in that direction (the caller no-ops — no wrap).
-        /// <paramref name="panes"/> MUST be in registry order [Input, List, Preview] — the
-        /// tie-break iterates it and the LAST tie wins (the <c>&gt;=</c> comparison in the shared
-        /// engine). BP-12 (m6): the mirrored <c>SelectTarget</c> pipeline was renamed to this single
-        /// direction→target resolver (the method name <c>SelectTarget</c> is gone — the pinned
-        /// tie-break + no-op edges survive byte-identically).</summary>
-        private FocusTarget? ResolveTarget(
-            IReadOnlyList<KeyValuePair<FocusTarget, PaneRect>> panes,
-            FocusTarget current,
-            PaneFocusKey direction)
+        /// <summary>m48 (BP-20): the capability seam — the parallel <c>_layout</c>/<c>_rects</c>
+        /// lists are merged into ONE list. Pinned by <c>Run_FocusTargetModel_SingleList</c>.</summary>
+        internal static bool UsesSingleList => true;
+
+        /// <summary>(the focused pane, the direction) → the target pane, or null when NO pane lies
+        /// in that direction (the caller no-ops — no wrap). The layout MUST be in registry order
+        /// [Input, List, Preview] — the tie-break iterates it and the LAST tie wins (the <c>&gt;=</c>
+        /// comparison in the shared engine). BP-12 (m6): the mirrored <c>SelectTarget</c> pipeline
+        /// was renamed to this single direction→target resolver (the method name <c>SelectTarget</c>
+        /// is gone — the pinned tie-break + no-op edges survive byte-identically).</summary>
+        private FocusTarget? ResolveTarget(FocusTarget current, PaneFocusKey direction)
         {
-            PaneRect active = GetRect(panes, current);
-            if (active.IsEmpty)
+            PaneEntry? activeEntry = GetEntry(current);
+            if (activeEntry == null || activeEntry.Value.IsEmpty)
             {
                 return null;   // no layout yet (pre-RefreshLayout) — a safe no-op
             }
 
             int? index = GeometricSelectionEngine.SelectTarget(
-                active, _rects, DirectionOf(direction), allowNegativeGap: false, divide: 0, strictEdge: false);
+                activeEntry.Value, _layout, DirectionOf(direction), allowNegativeGap: false, divide: 0, strictEdge: false);
             if (index == null)
             {
                 return null;
             }
-            return panes[index.Value].Key;
+            return _layout[index.Value].Id;
         }
 
-        private static PaneRect GetRect(IReadOnlyList<KeyValuePair<FocusTarget, PaneRect>> panes, FocusTarget id)
+        private PaneEntry? GetEntry(FocusTarget id)
         {
-            for (int i = 0; i < panes.Count; i++)
+            for (int i = 0; i < _layout.Count; i++)
             {
-                if (panes[i].Key == id)
+                if (_layout[i].Id == id)
                 {
-                    return panes[i].Value;
+                    return _layout[i];
                 }
             }
-            return PaneRect.Empty;
+            return null;
         }
 
         private static int DirectionOf(PaneFocusKey d)

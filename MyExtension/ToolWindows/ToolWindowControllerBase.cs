@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
+using Telescope.Overlay;
 
 namespace MyExtension.ToolWindows
 {
@@ -92,5 +93,22 @@ namespace MyExtension.ToolWindows
         }
 
         public virtual IReadOnlyCollection<Keys> ActionKeys => _actions.Keys;
+
+        /// <summary>
+        /// n23 (BP-D21): internal seam — the TextMotion an action key applies (the shared
+        /// action-table → motion mapping). The action-table letter keys (A/I) are the SHIFTED
+        /// versions (capital A/I → InsertEnd/InsertStart); the other action keys (h/l/j/k/w/b/e/0/$)
+        /// are shift-insensitive, so shift=true yields the correct motion for every action-table
+        /// motion key. Returns null when the key is not an action key or maps to no motion.
+        /// No production behavior change (an internal accessor over the existing action table).
+        /// </summary>
+        internal TextMotion? MotionForActionKey(Keys key)
+        {
+            if (!_actions.ContainsKey(key))
+            {
+                return null;
+            }
+            return TextMotionHelper.MapMotion(key, shift: true);
+        }
     }
 }

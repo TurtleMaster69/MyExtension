@@ -9,5 +9,18 @@ namespace MyExtension.Package
     internal static class ErrorListCacheDecision
     {
         public static bool IsFresh(long ageMs, long ttlMs) => ageMs < ttlMs;
+
+        /// <summary>
+        /// m8 (BP-9): whether an event name invalidates the Error List cache — a build, a document
+        /// save/open, or a window activation can change the Error List contents; a selection change
+        /// cannot. The single source for which events force a fresh gather.
+        /// </summary>
+        internal static bool ShouldInvalidateOnEvent(string eventName)
+        {
+            return eventName == "build-done"
+                || eventName == "document-saved"
+                || eventName == "document-opened"
+                || eventName == "window-activated";
+        }
     }
 }

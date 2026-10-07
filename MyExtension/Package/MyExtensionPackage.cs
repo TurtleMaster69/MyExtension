@@ -52,6 +52,11 @@ namespace MyExtension.Package
         private TelescopeLauncher? _launcher;
         private IVsMonitorSelection? _monitorSelection;
 
+        // m14 (BP-13): the SolutionExplorerController reference (extracted from the inline
+        // RegisterController call) so the package can subscribe its focus-cache invalidation to
+        // WindowManager.FocusChanged (the CLICK case — a mode change alone never invalidates it).
+        private SolutionExplorerController? _solutionExplorerController;
+
         // m4 (BP-63): the Roslyn/VS-coupled gatherer logic (caret symbol resolution, references +
         // implementations gathering) lives in RoslynGatherers; the package supplies the DTE /
         // workspace / text-manager / editor-adapter factories.
@@ -135,7 +140,13 @@ namespace MyExtension.Package
                         // dispatch) before the hook so InputHandler can consume its cached state
                         // from the start.
                         _windowManager = new WindowManager(_monitorSelection);
-                        _windowManager.RegisterController(new SolutionExplorerController(() => VsServices.Dte(this)!));
+                        var solutionExplorerController = new SolutionExplorerController(() => VsServices.Dte(this)!);
+                        _solutionExplorerController = solutionExplorerController;
+                        _windowManager.RegisterController(solutionExplorerController);
+                        // m14 (BP-13): a focus change (e.g. a click on the tree) invalidates the
+                        // controller's cached focused box so hjkl are not swallowed through a stale
+                        // search-box cache.
+                        _windowManager.FocusChanged += () => solutionExplorerController.InvalidateFocusedBoxCache();
                         return Task.CompletedTask;
                     }),
                     ("shell-wait", () =>
@@ -574,16 +585,5 @@ namespace MyExtension.Package
 
             base.Dispose(disposing);
         }
-    }
-
-    /// <summary>The outcome of the goto single/multi-hit decision (n15 — the GotoDispatcher class
-    /// was inlined; the enum is kept as the documented contract).</summary>
-    internal enum GotoDecision
-    {
-        /// <summary>Exactly 1 hit: open it directly (no overlay).</summary>
-        DirectJump,
-
-        /// <summary>0 hits or multiple hits: open the Telescope overlay with the finder.</summary>
-        OpenOverlay,
     }
 }

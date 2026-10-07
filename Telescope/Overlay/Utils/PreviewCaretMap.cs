@@ -43,7 +43,19 @@ namespace Telescope.Overlay
             {
                 return 1;
             }
-            return new LineIndex(editorText).LineOf(Offset(editorText, navigatorCaret));
+            return Line(new LineIndex(editorText), navigatorCaret);
+        }
+
+        /// <summary>
+        /// m23 (BP-22): the <see cref="LineIndex"/>-based overload — the overlay passes the
+        /// navigator's CACHED LineIndex (built by <see cref="TextMotionNavigator.SetText"/>) so no
+        /// full LineIndex is rebuilt per preview load. <see cref="LineIndex.LineOf"/> clamps the
+        /// offset internally (negative → 0, beyond the end → the length), matching the string-based
+        /// <see cref="Line(string, int)"/>'s clamped-offset semantics.
+        /// </summary>
+        internal static int Line(LineIndex index, int navigatorCaret)
+        {
+            return index.LineOf(navigatorCaret);
         }
     }
 }

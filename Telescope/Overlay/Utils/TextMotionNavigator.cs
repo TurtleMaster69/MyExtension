@@ -37,6 +37,12 @@ namespace Telescope.Overlay
         /// <summary>Current 1-based line number (1 = first line).</summary>
         public int LineNumber => _lineIndex?.LineOf(_caret) ?? 1;
 
+        /// <summary>m23 (BP-22): the cached <see cref="LineIndex"/> (built by
+        /// <see cref="SetText"/>/<see cref="SetTextIfChanged"/>) — the overlay reuses it for the
+        /// preview caret line instead of rebuilding a full index per preview load. Null before the
+        /// first <see cref="SetText"/>.</summary>
+        internal LineIndex? LineIndex => _lineIndex;
+
         /// <summary>Replaces the text and resets the caret to the start.</summary>
         public void SetText(string text)
         {

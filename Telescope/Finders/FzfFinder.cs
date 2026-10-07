@@ -1,9 +1,6 @@
 using EnvDTE;
-using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Telescope.Filter;
@@ -25,18 +22,16 @@ namespace Telescope.Finders
     /// + the literal-fallback scan run off-thread (M3/BP-5); the fzf subprocess itself runs
     /// off-thread inside <see cref="IFzfEngine"/>. <see cref="OnSelected"/> touches DTE and
     /// therefore must run on the UI thread.
+    ///
+    /// <para/>
+    /// <b>m33 (BP-6):</b> inherits the shared <see cref="QueryDrivenFinderBase{THit}"/> — the
+    /// derived class provides ONLY <see cref="Name"/>, the async matcher hook
+    /// (<see cref="MatchAsync"/>), and the log literals. The ctor signature is byte-identical to
+    /// the pre-m33 6-arg form (the <see cref="IFzfEngine"/> is the only addition over GrepFinder).
     /// </summary>
-    public sealed class FzfFinder : FinderBase<FzfHit>
+    public sealed class FzfFinder : QueryDrivenFinderBase<FzfHit>
     {
-        private readonly Func<DTE> _dteFactory;
-        private readonly ProjectFileCache _fileCache;
-        private readonly FileContentCache _contentCache;
         private readonly IFzfEngine _fzf;
-        private string? _cachedSolutionName;
-
-        // Hermetic-test seams: when set, candidate gathering and opening bypass DTE entirely.
-        private readonly Func<IReadOnlyList<string>>? _testEnumerate;
-        private readonly Action<FzfHit>? _testOpener;
 
         public override string Name => "Fzf";
 
@@ -55,165 +50,95 @@ namespace Telescope.Finders
             FileContentCache contentCache,
             Func<IReadOnlyList<string>>? testEnumerate = null,
             Action<FzfHit>? testOpener = null)
+            : base(dteFactory, fileCache, contentCache, testEnumerate, testOpener)
         {
-            _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
-            _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
             _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
-            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
-            _testEnumerate = testEnumerate;
-            _testOpener = testOpener;
         }
 
-        /// <summary>BP-D3 (m53): the shared content cache (the reflection-free seam).</summary>
-        internal FileContentCache ContentCache => _contentCache;
+        protected override string HitsLiteral => "fzf hits=";
 
-        protected override IReadOnlyList<FzfHit> GatherHits() => throw new NotSupportedException("FzfFinder is query-driven; call GetCandidatesAsync(query)");
+        protected override string OpenLiteral => "opened fzf: file=";
 
-        public override IReadOnlyList<FinderEntry> GetCandidates(string query)
+        protected override string EnumerateFailureLiteral => "FzfFinder failed to enumerate: ";
+
+        protected override string LineTextOf(FzfHit hit) => hit.LineText;
+
+        protected override string OpenErrorNoun => "fzf";
+
+        /// <summary>
+        /// The async matcher hook (m33/BP-6): the ONLY behavioral difference from GrepFinder. Runs
+        /// inside the base's ONE <c>Task.Run</c> (M4a/BP-2) — the per-file content reads,
+        /// BuildCandidates, FilterAsync, MapBatched, AND the literal-fallback scan. M3 (BP-1): a
+        /// null FilterAsync result (timeout/crash) is treated as failure → the literal fallback
+        /// scan (never garbage).
+        /// </summary>
+        protected override async Task<IReadOnlyList<FzfHit>> MatchAsync(IReadOnlyList<string> files, string query, CancellationToken token)
         {
-            // The overlay-open path calls the SYNC GetCandidates("") with an empty query (D2b):
-            // it must return empty (no gather, no failure log), matching the async path's
-            // empty-query short-circuit. A non-empty sync call cannot await fzf, so it fails
-            // loudly instead of silently returning the wrong (unfiltered) list.
-            if (string.IsNullOrEmpty(query))
-            {
-                return Array.Empty<FinderEntry>();
-            }
-            throw new NotSupportedException("FzfFinder is query-driven; call GetCandidatesAsync(query)");
-        }
-
-        public override async Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "", CancellationToken cancellationToken = default)
-        {
-            // The overlay calls this on every prompt change, including a cleared prompt: an empty
-            // query must NOT spawn fzf. M3 (BP-3): the eager warm-up is dropped — the first gather
-            // populates the shared content cache lazily.
-            if (string.IsNullOrEmpty(query))
-            {
-                return Array.Empty<FinderEntry>();
-            }
-
-            var hits = new List<FzfHit>();
-
             bool available = await _fzf.IsAvailableAsync();
             if (!available)
             {
                 TelescopeLog.Log("fzf unavailable — literal fallback");
             }
 
-            IReadOnlyList<string> files = EnumerateFiles();
+            var result = new List<FzfHit>();
 
-            // M3 (BP-5): read every file's lines off-thread (the content reads are pure file I/O).
-            // The batched fzf path (BP-2) and the literal-fallback path share this block.
-            var filesLines = await Task.Run(() =>
+            var filesLines = new List<(string Path, IReadOnlyList<string> Lines)>();
+            foreach (string path in files)
             {
-                var result = new List<(string Path, IReadOnlyList<string> Lines)>();
-                foreach (string path in files)
+                if (token.IsCancellationRequested)
                 {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-                    string[] lines;
-                    try
-                    {
-                        lines = _contentCache.GetLines(path);
-                    }
-                    catch
-                    {
-                        // unreadable/binary file — skip
-                        continue;
-                    }
-                    result.Add((path, lines));
+                    break;
                 }
-                return result;
-            }, cancellationToken);
+                string[] lines;
+                try
+                {
+                    lines = Cache.GetLines(path);
+                }
+                catch
+                {
+                    // unreadable/binary file — skip
+                    continue;
+                }
+                filesLines.Add((path, lines));
+            }
 
-            if (available)
+            bool useFzf = available;
+            IReadOnlyList<string>? matched = null;
+            if (useFzf)
             {
                 // M2 (BP-2): ONE batched fzf --filter call across ALL files' lines (fzf ranks
                 // globally); the boundary-aware mapper maps the ranked output back to (file, line).
                 IReadOnlyList<string> candidates = FzfLineMapper.BuildCandidates(filesLines);
-                IReadOnlyList<string> matched = await _fzf.FilterAsync(candidates, query, cancellationToken);
-                foreach ((int fileIndex, int lineNumber) in FzfLineMapper.MapBatched(filesLines, matched))
+                matched = await _fzf.FilterAsync(candidates, query, token);
+                // M3 (BP-1): a null result (timeout/crash) is a failure signal — fall back to
+                // the literal scan, never map null back as matches.
+                useFzf = matched != null;
+            }
+
+            if (useFzf)
+            {
+                foreach ((int fileIndex, int lineNumber) in FzfLineMapper.MapBatched(filesLines, matched!))
                 {
-                    if (hits.Count >= FinderConstants.HitCap)
+                    if (result.Count >= FinderConstants.HitCap)
                     {
                         break;
                     }
                     string path = filesLines[fileIndex].Path;
-                    hits.Add(new FzfHit(path, lineNumber, filesLines[fileIndex].Lines[lineNumber - 1]));
+                    result.Add(new FzfHit(path, lineNumber, filesLines[fileIndex].Lines[lineNumber - 1]));
                 }
             }
             else
             {
                 foreach ((string path, IReadOnlyList<string> lines) in filesLines)
                 {
-                    foreach (int ln in LiteralLineScanner.Scan(lines.ToArray(), query, FinderConstants.HitCap - hits.Count))
+                    foreach (int ln in LiteralLineScanner.Scan(lines, query, FinderConstants.HitCap - result.Count))
                     {
-                        hits.Add(new FzfHit(path, ln, lines[ln - 1]));
+                        result.Add(new FzfHit(path, ln, lines[ln - 1]));
                     }
                 }
             }
 
-            TelescopeLog.Log($"fzf hits={hits.Count}");
-            return hits.Select(ToEntry).ToList();
+            return result;
         }
-
-        /// <summary>
-        /// Enumerates the solution's project files (test seam or DTE). Synchronous so the UI-thread
-        /// assert lives outside the async gather (VSTHRD109 forbids throwing in an async method).
-        /// </summary>
-        private IReadOnlyList<string> EnumerateFiles()
-        {
-            if (_testEnumerate != null)
-            {
-                // Hermetic test path: no VS thread affinity; the shared cache serves the enumerate
-                // delegate once across queries.
-                return _fileCache.Get(_testEnumerate);
-            }
-
-            ThreadHelper.ThrowIfNotOnUIThread();
-            try
-            {
-                DTE dte = _dteFactory();
-                if (dte?.Solution != null)
-                {
-                    // m7 (BP-13): the ONE shared solution-invalidation helper.
-                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
-                    return _fileCache.Get(() => ProjectFiles.Enumerate(dte));
-                }
-                return Array.Empty<string>();
-            }
-            catch (Exception ex)
-            {
-                TelescopeLog.Log($"FzfFinder failed to enumerate: {ex.Message}");
-                return Array.Empty<string>();
-            }
-        }
-
-        protected override FinderEntry ToEntry(FzfHit hit)
-        {
-            string display = $"{Path.GetFileName(hit.FilePath)}:{hit.LineNumber}: {hit.LineText}";
-            return new FinderEntry(display, hit);
-        }
-
-        protected override void OpenHit(FzfHit hit)
-        {
-            if (_testOpener != null)
-            {
-                // Hermetic test path: no VS thread affinity.
-                _testOpener(hit);
-                return;
-            }
-
-            HitOpener.OpenAtLine(hit, (path, line) =>
-            {
-                DTE dte = _dteFactory();
-                DteFileOpener.OpenAtLine(dte, path, line);
-                TelescopeLog.Log($"opened fzf: file={path} line={line}");
-            });
-        }
-
-        protected override string OpenErrorNoun => "fzf";
     }
 }

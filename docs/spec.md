@@ -200,7 +200,8 @@ contract + registering it; the reuse path for the deferred lazygit overlay). Eac
 is focusable with REAL WPF focus: **left-click focuses a pane**, and **Ctrl+H/J/K/L
 move focus GEOMETRICALLY — LEFT/DOWN/UP/RIGHT** (the Cardinal spatial mapping, the
 same keys as the window navigation one level down): the collapsed `FocusTargetModel`
-runs the `WindowNavigationEngine` pipeline (in-direction → aligned → closest gap →
+runs the shared `GeometricSelectionEngine` (the same engine `WindowNavigationEngine`
+delegates to — in-direction → aligned → closest gap →
 largest adjacency, ties → the last pane in registry order) over the pane rects the
 host measures. Layout: Input bottom (full width), List left, Preview right — so
 Ctrl+K from the Input focuses the Preview (larger adjacency; the last-in-list
@@ -293,7 +294,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 - `[NeoVisual] solution-explorer search-focus`
 - `[Telescope] opened file: ...`
 - `[Telescope] overlay closed`
-- `[Telescope] preview file=...` / `[Telescope] preview tokens=...` (the hosted editor view's classifier span count) — the buffer-source swap RESOLVED the highlighting mechanism (2026-10-04): the buffer is the file's LIVE `VisualStudioWorkspace` buffer for editor-OPEN solution files (the Peek model), so the FULL Roslyn classifier chain (syntactic + semantic) attaches; a CLOSED solution file or a non-solution file falls back to the standalone content-type buffer. NOTE: the count is read synchronously at view creation — BEFORE async classification lands — so it reads **0 for BOTH buffer sources** (runs 168/169/170 all-0) and cannot discriminate engagement; the semantic coloring is verified by the manual visual pass, not by this line (the harness regex is presence-only `tokens=\d+`)
+- `[Telescope] preview file=...` / `[Telescope] preview tokens=...` (the hosted editor view's classifier span count) — the buffer-source swap RESOLVED the highlighting mechanism (2026-10-04): the buffer is the file's LIVE `VisualStudioWorkspace` buffer for editor-OPEN solution files (the Peek model), so the FULL Roslyn classifier chain (syntactic + semantic) attaches; a CLOSED solution file or a non-solution file falls back to the standalone content-type buffer. NOTE: the count is read synchronously at view creation — BEFORE async classification lands — so it reads **0 for BOTH buffer sources** (runs 168/169/170 all-0) and cannot discriminate engagement; the semantic coloring is verified by the manual visual pass, not by this line (the harness no longer asserts on `tokens=` — m62 dropped the presence-only assertion)
 - `[Telescope] opened issue: ... line=...` / `[Telescope] goto line=...`
 - `[Telescope] references gathered reads=... writes=...` / `[Telescope] opened reference: file=... line=... col=... access=read|write`
 - `[Telescope] grep hits=...` / `[Telescope] opened grep: file=... line=...`
@@ -339,7 +340,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **319 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **366 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -360,7 +361,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
   results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`).
-- `dotnet run --project tests/NeoVisual.Tests` — **236 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **264 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key

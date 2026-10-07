@@ -29,6 +29,37 @@ namespace MyExtension.ToolWindows
         // O(n) GetText() copy + LineIndex build per motion key in a long console buffer.
         private const int MotionSliceRadius = 4096;
 
+        /// <summary>
+        /// m18 (BP-17): the single source for the caret-relative slice — <c>MotionSliceRadius</c>
+        /// (4096) BEFORE the caret and <c>MotionSliceRadius * 2</c> (8192) AFTER (the asymmetric
+        /// forward extension gives w/e/$/j/k room past the old boundary — the 4096-char slice hid
+        /// text beyond it, so those motions could no-op near the slice end), capped at the buffer
+        /// bounds. All three surface branches (WPF TextBox / editor view / WinForms) call it.
+        /// </summary>
+        internal static (int Start, int Length) ComputeSlice(int caret, int fullLength)
+        {
+            int start = Math.Max(0, caret - MotionSliceRadius);
+            int end = Math.Min(fullLength, caret + MotionSliceRadius * 2);
+            return (start, end - start);
+        }
+
+        /// <summary>
+        /// m16 (BP-15): true when a VS editor text view holds WPF keyboard focus — the focus-keeper
+        /// stops re-asserting when the user moves to the editor. Wrapped so it degrades to false on
+        /// non-STA threads (hermetic unit tests run on the MTA, where Keyboard.FocusedElement throws).
+        /// </summary>
+        internal static bool IsEditorFocused()
+        {
+            try
+            {
+                return Keyboard.FocusedElement is IWpfTextView;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         /// <summary>The WPF TextBox currently holding focus (walking the visual/logical tree), or null.
         /// Wrapped so it degrades to "no text box" on non-STA threads (hermetic unit tests run on
         /// the MTA, where <c>Keyboard.FocusedElement</c> throws).</summary>
@@ -109,8 +140,7 @@ namespace MyExtension.ToolWindows
                 string fullText = focusedBox.Text;
                 int caret = focusedBox.CaretIndex;
                 int fullLength = fullText.Length;
-                int start = Math.Max(0, caret - MotionSliceRadius);
-                int length = Math.Min(fullLength - start, MotionSliceRadius * 2);
+                var (start, length) = ComputeSlice(caret, fullLength);
                 string text = fullText.Substring(start, length);
                 return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(fullText),
                     c => focusedBox.CaretIndex = c,
@@ -129,8 +159,7 @@ namespace MyExtension.ToolWindows
                     // tool-window motions only need the text around the caret, so the O(n)
                     // GetText() copy + LineIndex build run over a bounded slice, not the full
                     // buffer.
-                    int start = Math.Max(0, caret - MotionSliceRadius);
-                    int length = Math.Min(fullLength - start, MotionSliceRadius * 2);
+                    var (start, length) = ComputeSlice(caret, fullLength);
                     string text = snapshot.GetText(start, length);
                     return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(snapshot),
                         c => view.Caret.MoveTo(new SnapshotPoint(snapshot, Math.Max(0, Math.Min(c, snapshot.Length)))),
@@ -146,12 +175,12 @@ namespace MyExtension.ToolWindows
 
             if (FindFocusedWinFormsTextBox() is System.Windows.Forms.TextBoxBase win)
             {
-                // N19: caret-relative slice for the WinForms path too.
+                // N19: caret-relative slice for the WinForms path too (m18/BP-17: the shared
+                // ComputeSlice — 4096 before, 8192 after, capped at the buffer bounds).
                 string fullText = win.Text;
                 int caret = win.SelectionStart;
                 int fullLength = fullText.Length;
-                int start = Math.Max(0, caret - MotionSliceRadius);
-                int length = Math.Min(fullLength - start, MotionSliceRadius * 2);
+                var (start, length) = ComputeSlice(caret, fullLength);
                 string text = fullText.Substring(start, length);
                 return ApplyMotionToBox(text, caret - start, fullLength, start, Sample(fullText),
                     c => { win.SelectionStart = c; win.SelectionLength = 0; },
@@ -293,17 +322,11 @@ namespace MyExtension.ToolWindows
         /// <summary>
         /// Applies the caret style to the currently focused surface: a WPF TextBox via
         /// <see cref="ApplyCaretStyle"/> and a VS editor text view via <see cref="ApplyEditorViewCaret"/>.
+        /// n5 (BP-22): delegates to the box overload (which resolves the focused box itself).
         /// </summary>
         public static void StyleFocusedSurface(bool isInputMode)
         {
-            if (FindFocusedTextBox() is System.Windows.Controls.TextBox box)
-            {
-                ApplyCaretStyle(box, isInputMode);
-            }
-            if (Keyboard.FocusedElement is IWpfTextView view)
-            {
-                ApplyEditorViewCaret(view, isInputMode);
-            }
+            StyleFocusedSurface(isInputMode, FindFocusedTextBox());
         }
 
         /// <summary>N71: styles the already-resolved WPF text box (no second visual-tree walk) plus

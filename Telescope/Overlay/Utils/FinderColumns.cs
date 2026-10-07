@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using Telescope.Finders;
-using FzfHit = Telescope.Finders.GrepHit;
 using ImplementationHit = Telescope.Finders.DefinitionHit;
 
 namespace Telescope.Overlay
@@ -29,98 +28,75 @@ namespace Telescope.Overlay
 
         private static string Line(FileLocation hit) => hit.LineNumber.ToString(CultureInfo.InvariantCulture);
 
-        /// <summary>
-        /// The Files <c>dir</c> cell: the containing directory; with a project root, the tail
-        /// after the root (ordinal-ignore-case); a file directly in the root yields ""; a file
-        /// outside the root yields the full directory.
-        /// </summary>
-        private static string DirCell(object? payload, string? projectRoot)
-        {
-            if (payload is not FileHit hit)
-            {
-                return string.Empty;
-            }
+        // ---- shared column builders (m41/BP-16) ------------------------------------
 
-            string dir = Path.GetDirectoryName(hit.FilePath) ?? string.Empty;
-            if (string.IsNullOrEmpty(projectRoot) || string.IsNullOrEmpty(dir))
-            {
-                return dir;
-            }
+        /// <summary>The shared <c>file</c> column builder (id/header/min/max/truncation/
+        /// defaultVisible + the cell getter). The width kind derives from max (max ==
+        /// int.MaxValue → the absorbing flexible column).</summary>
+        internal static ResultColumn FileColumn<THit>(string id, string header, int min, int max, ResultColumnTruncation truncation, bool defaultVisible, Func<THit, string> getter)
+            where THit : FileLocation
+            => new ResultColumn(id, header, min, max, truncation, defaultVisible, p => Cell<THit>(p, getter));
 
-            string root = projectRoot.TrimEnd('\\', '/');
-            if (root.Length == 0)
-            {
-                return dir;
-            }
+        /// <summary>The shared <c>line</c> column builder.</summary>
+        internal static ResultColumn LineColumn<THit>(string id, string header, int min, int max, ResultColumnTruncation truncation, bool defaultVisible, Func<THit, string> getter)
+            where THit : FileLocation
+            => new ResultColumn(id, header, min, max, truncation, defaultVisible, p => Cell<THit>(p, getter));
 
-            string prefix = root + "\\";
-            if (dir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return dir.Substring(prefix.Length);
-            }
+        /// <summary>The shared <c>text</c> column builder.</summary>
+        internal static ResultColumn TextColumn<THit>(string id, string header, int min, int max, ResultColumnTruncation truncation, bool defaultVisible, Func<THit, string> getter)
+            where THit : FileLocation
+            => new ResultColumn(id, header, min, max, truncation, defaultVisible, p => Cell<THit>(p, getter));
 
-            if (string.Equals(dir, root, StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            return dir;
-        }
+        /// <summary>The shared <c>kind</c> column builder.</summary>
+        internal static ResultColumn KindColumn<THit>(string id, string header, int min, int max, ResultColumnTruncation truncation, bool defaultVisible, Func<THit, string> getter)
+            where THit : FileLocation
+            => new ResultColumn(id, header, min, max, truncation, defaultVisible, p => Cell<THit>(p, getter));
 
         // ---- per-finder catalogs (catalog order = the plan's catalog table order) ----
 
-        internal static IReadOnlyList<ResultColumn> Files(string? projectRoot = null) =>
-            FileDirPathColumns<FileHit>(p => DirCell(p, projectRoot));
+        internal static IReadOnlyList<ResultColumn> Files() =>
+            // The Files shape (file+dir visible, path hidden); the dir cell is the FULL
+            // containing directory always (m47/BP-19 — the projectRoot root-trim is deleted).
+            FileDirPathColumns<FileHit>(h => Path.GetDirectoryName(h.FilePath) ?? string.Empty);
 
         internal static IReadOnlyList<ResultColumn> Recent() =>
             // The Files shape (file+dir visible, path hidden); the dir cell is the FULL
-            // directory always — a cross-solution MRU has no single root to trim (the overlay
-            // passes no projectRoot), so the getter is Recent-specific, not DirCell (typed to
-            // RecentFileHit — the type-disjointness guard).
-            FileDirPathColumns<RecentFileHit>(p => Cell<RecentFileHit>(p, h => Path.GetDirectoryName(h.FilePath) ?? string.Empty));
+            // directory always (m37/BP-15 — RecentFileHit is merged into FileHit, so both
+            // catalogs render FileHit and share the identical full-dir behavior).
+            FileDirPathColumns<FileHit>(h => Path.GetDirectoryName(h.FilePath) ?? string.Empty);
 
         /// <summary>
         /// The shared Files/Recent catalog shape (m28/BP-18): file+dir visible, path hidden.
-        /// Parameterized by BOTH the hit type and the dir-cell getter — the dir-cell semantic
-        /// diff is preserved (Files trims the project-root tail via <see cref="DirCell"/>;
-        /// Recent returns the full directory).
+        /// Parameterized by the hit type; the dir cell is the full containing directory for
+        /// BOTH catalogs (m47/BP-19 — no root trim remains). The dir column is a TRUE absorber
+        /// (MaxWidth == int.MaxValue, m46/BP-31) so the exact-total invariant holds at a wide list.
         /// </summary>
-        private static IReadOnlyList<ResultColumn> FileDirPathColumns<THit>(Func<object?, string> dirGetter) where THit : FileLocation => new[]
+        private static IReadOnlyList<ResultColumn> FileDirPathColumns<THit>(Func<THit, string> dirGetter) where THit : FileLocation => new[]
         {
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<THit>(p, h => BaseName(h))),
-            new ResultColumn("dir", "Directory", ResultColumnWidth.Flexible,     0,   6,  40, ResultColumnTruncation.Tail, true,
-                dirGetter),
-            new ResultColumn("path", "Path",     ResultColumnWidth.Fixed,       60,  10,  60, ResultColumnTruncation.Tail, false,
-                p => Cell<THit>(p, h => h.FilePath)),
+            FileColumn<THit>("file", "File", 6, 30, ResultColumnTruncation.Tail, true, h => BaseName(h)),
+            FileColumn<THit>("dir", "Directory", 6, int.MaxValue, ResultColumnTruncation.Tail, true, dirGetter),
+            FileColumn<THit>("path", "Path", 10, 60, ResultColumnTruncation.Tail, false, h => h.FilePath),
         };
 
         internal static IReadOnlyList<ResultColumn> Issues() => new[]
         {
-            new ResultColumn("kind", "Kind",     ResultColumnWidth.Fixed,        6,   3,   8, ResultColumnTruncation.End, true,
-                p => Cell<CodeIssue>(p, i => KindAbbreviations.Issue(i.Kind))),
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<CodeIssue>(p, i => BaseName(i))),
-            new ResultColumn("message", "Message", ResultColumnWidth.Flexible,   0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
-                p => Cell<CodeIssue>(p, i => i.Text)),
-            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, false,
-                p => Cell<CodeIssue>(p, i => Line(i))),
+            KindColumn<CodeIssue>("kind", "Kind", 3, 8, ResultColumnTruncation.End, true, i => KindAbbreviations.Issue(i.Kind)),
+            FileColumn<CodeIssue>("file", "File", 6, 30, ResultColumnTruncation.Tail, true, i => BaseName(i)),
+            TextColumn<CodeIssue>("message", "Message", 10, int.MaxValue, ResultColumnTruncation.End, true, i => i.Text),
+            LineColumn<CodeIssue>("line", "Line", 2, 5, ResultColumnTruncation.End, false, i => Line(i)),
         };
 
         internal static IReadOnlyList<ResultColumn> References() => new[]
         {
-            new ResultColumn("access", "Access", ResultColumnWidth.Fixed,        4,   2,   4, ResultColumnTruncation.End, true,
+            new ResultColumn("access", "Access", 2, 4, ResultColumnTruncation.End, true,
                 p => Cell<ReferenceHit>(p, r => KindAbbreviations.Access(r.IsWrite))),
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<ReferenceHit>(p, r => BaseName(r))),
-            new ResultColumn("symbol", "Symbol", ResultColumnWidth.Fixed,       24,   6,  24, ResultColumnTruncation.End, false,
+            FileColumn<ReferenceHit>("file", "File", 6, 30, ResultColumnTruncation.Tail, true, r => BaseName(r)),
+            new ResultColumn("symbol", "Symbol", 6, 24, ResultColumnTruncation.End, false,
                 p => Cell<ReferenceHit>(p, r => r.Symbol)),
-            new ResultColumn("column", "Column", ResultColumnWidth.Fixed,        8,   2,   8, ResultColumnTruncation.End, false,
+            new ResultColumn("column", "Column", 2, 8, ResultColumnTruncation.End, false,
                 p => Cell<ReferenceHit>(p, r => r.Column.ToString(CultureInfo.InvariantCulture))),
-            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, false,
-                p => Cell<ReferenceHit>(p, r => Line(r))),
-            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, false,
-                p => Cell<ReferenceHit>(p, r => r.LineText)),
+            LineColumn<ReferenceHit>("line", "Line", 2, 5, ResultColumnTruncation.End, false, r => Line(r)),
+            TextColumn<ReferenceHit>("text", "Line text", 10, int.MaxValue, ResultColumnTruncation.End, false, r => r.LineText),
         };
 
         internal static IReadOnlyList<ResultColumn> Grep() => GrepFzf();
@@ -130,44 +106,46 @@ namespace Telescope.Overlay
         /// <summary>The shared Grep/Fzf catalog (m27/BP-17 — byte-identical post-m25, both use GrepHit).</summary>
         private static IReadOnlyList<ResultColumn> GrepFzf() => new[]
         {
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<GrepHit>(p, h => BaseName(h))),
-            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, true,
-                p => Cell<GrepHit>(p, h => Line(h))),
-            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
-                p => Cell<GrepHit>(p, h => h.LineText)),
+            FileColumn<GrepHit>("file", "File", 6, 30, ResultColumnTruncation.Tail, true, h => BaseName(h)),
+            LineColumn<GrepHit>("line", "Line", 2, 5, ResultColumnTruncation.End, true, h => Line(h)),
+            TextColumn<GrepHit>("text", "Line text", 10, int.MaxValue, ResultColumnTruncation.End, true, h => h.LineText),
         };
 
         internal static IReadOnlyList<ResultColumn> Implementation() => new[]
         {
-            new ResultColumn("kind", "Kind",     ResultColumnWidth.Fixed,        6,   3,   8, ResultColumnTruncation.End, true,
-                p => Cell<ImplementationHit>(p, h => KindAbbreviations.Implementation(h.Kind))),
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<ImplementationHit>(p, h => BaseName(h))),
-            new ResultColumn("symbol", "Symbol", ResultColumnWidth.Flexible,     0,   6,  int.MaxValue, ResultColumnTruncation.End, false,
-                p => Cell<ImplementationHit>(p, h => h.SymbolName)),
-            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, false,
-                p => Cell<ImplementationHit>(p, h => Line(h))),
+            KindColumn<ImplementationHit>("kind", "Kind", 3, 8, ResultColumnTruncation.End, true, h => KindAbbreviations.Implementation(h.Kind)),
+            FileColumn<ImplementationHit>("file", "File", 6, 30, ResultColumnTruncation.Tail, true, h => BaseName(h)),
+            TextColumn<ImplementationHit>("symbol", "Symbol", 6, int.MaxValue, ResultColumnTruncation.End, false, h => h.SymbolName),
+            LineColumn<ImplementationHit>("line", "Line", 2, 5, ResultColumnTruncation.End, false, h => Line(h)),
         };
+
+        // ---- the data-driven lookup (m45/BP-18) -------------------------------------
+
+        /// <summary>m45 (BP-18): the capability seam — ForFinder is a Dictionary keyed by the
+        /// finder <c>Name</c> (ordinal), not a hardcoded switch.</summary>
+        internal static bool UsesDataDrivenLookup => true;
+
+        private static readonly Dictionary<string, Func<IReadOnlyList<ResultColumn>>> Catalog =
+            new Dictionary<string, Func<IReadOnlyList<ResultColumn>>>(StringComparer.Ordinal)
+            {
+                ["Files"] = Files,
+                ["Recent"] = Recent,
+                ["Issues"] = Issues,
+                ["References"] = References,
+                ["Grep"] = Grep,
+                ["Fzf"] = Fzf,
+                ["Implementation"] = Implementation,
+            };
 
         /// <summary>
         /// The column catalog for a finder, keyed by its <c>IFinder.Name</c> (ordinal,
-        /// case-sensitive). <paramref name="projectRoot"/> only affects the Files
-        /// <c>dir</c> column (root-tail trimming). An unknown name yields an empty catalog.
+        /// case-sensitive). An unknown name yields an empty catalog.
         /// </summary>
-        internal static IReadOnlyList<ResultColumn> ForFinder(string finderName, string? projectRoot = null)
+        internal static IReadOnlyList<ResultColumn> ForFinder(string finderName)
         {
-            switch (finderName)
-            {
-                case "Files": return Files(projectRoot);
-                case "Recent": return Recent();
-                case "Issues": return Issues();
-                case "References": return References();
-                case "Grep": return Grep();
-                case "Fzf": return Fzf();
-                case "Implementation": return Implementation();
-                default: return Array.Empty<ResultColumn>();
-            }
+            return Catalog.TryGetValue(finderName ?? string.Empty, out var factory)
+                ? factory()
+                : Array.Empty<ResultColumn>();
         }
     }
 }

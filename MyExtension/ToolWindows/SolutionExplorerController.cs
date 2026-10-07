@@ -173,10 +173,8 @@ namespace MyExtension.ToolWindows
                 // Hover-preview / async-focus robustness: re-assert tree focus + the matched selection
                 // on a ~100ms DispatcherTimer for ~1.5s, like SelectFirstSourceFile.
                 int escapeAttempts = 0;
-                // N22: dispose the prior keeper before starting a new one so a superseded keeper's
-                // queued tick cannot re-assert the old target. C6: reset the handle to null.
-                ResetFocusKeeper();
-                _focusKeeper = _keeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, elapsed =>
+                // m19 (BP-18): the shared keeper setup (resets the prior keeper + starts a fresh one).
+                _focusKeeper = StartFocusKeeper(elapsed =>
                 {
                     // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
                     // re-asserting (the user closed it — don't keep re-opening it).
@@ -184,8 +182,10 @@ namespace MyExtension.ToolWindows
                     {
                         return false;
                     }
+                    // m16 (BP-15): the user moved to the editor — stop re-asserting (editor focus
+                    // wins over the escape loop).
                     var decision = FocusKeeperSchedule.Decide(
-                        TextMotionHelper.FindFocusedTextBox() != null, elapsed, escapeAttempts, FocusKeeperDurationMs);
+                        TextMotionHelper.FindFocusedTextBox() != null, elapsed, escapeAttempts, FocusKeeperDurationMs, TextMotionHelper.IsEditorFocused());
                     if (decision == FocusKeeperSchedule.Decision.InjectEscape)
                     {
                         // Focus has NOT left the search box yet — Escape #2 is what actually moves
@@ -237,6 +237,46 @@ namespace MyExtension.ToolWindows
             _focusKeeper?.Dispose();
             _focusKeeper = null;
         }
+
+        /// <summary>
+        /// n25 (BP-D23) + m60 (BP-D13): test-only seam — the current focus-keeper handle (inject a
+        /// tracking IDisposable to prove <see cref="ResetFocusKeeper"/> disposes it). No production
+        /// behavior change.
+        /// </summary>
+        internal IDisposable? FocusKeeperForTest
+        {
+            get => _focusKeeper;
+            set => _focusKeeper = value;
+        }
+
+        /// <summary>
+        /// m60 (BP-D13): test-only seam — replaces the focused-box resolver (the m5/m47
+        /// counting-lambda tests). No production behavior change.
+        /// </summary>
+        internal void SetFindFocusedTextBoxForTest(Func<System.Windows.Controls.TextBox?> resolver)
+            => _findFocusedTextBox = resolver ?? throw new ArgumentNullException(nameof(resolver));
+
+        /// <summary>
+        /// m19 (BP-18): the shared FocusKeeper setup — resets the prior keeper and starts a fresh
+        /// one (100ms interval, <see cref="FocusKeeperDurationMs"/> duration). Each caller keeps its
+        /// own tick body (the visibility guard + schedule decision stay in the tick).
+        /// </summary>
+        internal IDisposable StartFocusKeeper(Func<int, bool> tick)
+        {
+            ResetFocusKeeper();
+            // m19 (BP-18): the shared setup ARMS the _focusKeeper field (the callers' own
+            // `_focusKeeper = StartFocusKeeper(...)` assignments are then redundant but harmless).
+            _focusKeeper = _keeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, tick);
+            return _focusKeeper;
+        }
+
+        /// <summary>
+        /// m14 (BP-13): invalidates the cached focused box on a focus change (the CLICK case — the
+        /// Esc case is already handled by <see cref="OnModeChanged"/>). A click on the tree while in
+        /// normal mode would otherwise leave the stale search-box cached, so hjkl route through it
+        /// and are swallowed. Wired from <see cref="WindowManager.FocusChanged"/> in the package.
+        /// </summary>
+        internal void InvalidateFocusedBoxCache() => _cachedFocusedBox = null;
 
         private void OpenSelected()
         {
@@ -314,14 +354,18 @@ namespace MyExtension.ToolWindows
                 // `o` still reaches the controller. (No per-tick document open: that would spam
                 // editor-view-opened; we emitted exactly one above.)
                 EnvDTE.UIHierarchyItem keepItem = item!;
-                // N22: dispose the prior keeper before starting a new one.
-                // C6: reset the handle to null.
-                ResetFocusKeeper();
-                _focusKeeper = _keeper.Run(System.TimeSpan.FromMilliseconds(100), FocusKeeperDurationMs, _ =>
+                // m19 (BP-18): the shared keeper setup (resets the prior keeper + starts a fresh one).
+                _focusKeeper = StartFocusKeeper(_ =>
                 {
                     // m21 stop-on-close: if the Solution Explorer window is no longer visible, stop
                     // re-asserting (the user closed it — don't keep re-opening it).
                     if (!IsSolutionExplorerVisible(dte))
+                    {
+                        return false;
+                    }
+                    // m16 (BP-15): the user moved to the editor — stop re-asserting (keys typed in
+                    // that window must not be routed to the tree and lost).
+                    if (TextMotionHelper.IsEditorFocused())
                     {
                         return false;
                     }
@@ -362,8 +406,11 @@ namespace MyExtension.ToolWindows
 
         /// <summary>Finds the FIRST <see cref="EnvDTE.Project"/> node under the solution tree:
         /// descends the solution node's <c>UIHierarchyItems</c> through any
-        /// <see cref="EnvDTE80.SolutionFolder"/> objects; other node kinds are skipped.</summary>
-        private static EnvDTE.UIHierarchyItem? FindFirstProjectNode(EnvDTE.UIHierarchyItem node)
+        /// <see cref="EnvDTE80.SolutionFolder"/> objects; other node kinds are skipped. m15 (BP-14):
+        /// a SolutionFolder is EXPANDED before recursing (a collapsed folder's children are not
+        /// enumerated — <c>g</c> logged <c>select none</c> for a project inside a collapsed
+        /// solution folder).</summary>
+        internal static EnvDTE.UIHierarchyItem? FindFirstProjectNode(EnvDTE.UIHierarchyItem node)
         {
             if (node.Object is EnvDTE.Project)
             {
@@ -371,6 +418,8 @@ namespace MyExtension.ToolWindows
             }
             if (node.Object is EnvDTE.Solution || node.Object is EnvDTE80.SolutionFolder)
             {
+                // m15 (BP-14): expand the folder BEFORE recursing so its children are enumerated.
+                node.UIHierarchyItems.Expanded = true;
                 foreach (EnvDTE.UIHierarchyItem child in node.UIHierarchyItems)
                 {
                     EnvDTE.UIHierarchyItem? hit = FindFirstProjectNode(child);

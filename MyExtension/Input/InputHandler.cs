@@ -57,12 +57,14 @@ namespace MyExtension.Input
         private readonly ErrorListGatherer _errorListGatherer;
 
         // Leader-sequence state machine (pure, unit-tested): owns the leader key start, sequence
-        // building, binding match, prefix detection, and abort.
-        private readonly LeaderSequenceMatcher _leaderMatcher;
+        // building, binding match, prefix detection, and abort. n3 (BP-12): assigned by the shared
+        // InitMatchers (both ctors call it), so not readonly.
+        private LeaderSequenceMatcher _leaderMatcher;
 
         // Simple-shortcut matcher (pure, unit-tested): builds the canonical shortcut string
-        // (e.g. "Ctrl+H") from a key + modifiers and looks it up in the simple bindings.
-        private readonly SimpleShortcutMatcher _simpleMatcher;
+        // (e.g. "Ctrl+H") from a key + modifiers and looks it up in the simple bindings. n3
+        // (BP-12): assigned by the shared InitMatchers, so not readonly.
+        private SimpleShortcutMatcher _simpleMatcher;
 
         // n3 (BP-11) + m38 (BP-15): the SINGLE tool-window routing decision seam —
         // TryRouteToolWindowKey resolves CurrentController ONCE per key and passes it to this
@@ -164,35 +166,53 @@ namespace MyExtension.Input
             var config = KeybindingConfig.Load();
             _leaderKey = config.LeaderKey;
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
-            _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
-            _simpleMatcher = new SimpleShortcutMatcher(_simpleBindings);
-            // n3 (BP-11) + m38 (BP-15): the single routing decision — the controller overload (the
-            // 3-arg FocusGuard); TryRouteToolWindowKey resolves CurrentController once and passes
-            // it in.
-            _routeDecision = c => ShouldRouteToolWindowKey(c);
+            // n3 (BP-12): the shared matcher/seam init (both ctors call it so they cannot drift).
+            InitMatchers(_leaderKey, _leaderBindings, _simpleBindings);
+            // M1 (BP-3): arm the stale-toolwindow sentinel from the env var in production — the
+            // harness sets NEOVISUAL_LOG_DIR, so the per-key sentinel clock read only runs when the
+            // fault is actually configured.
+            _sentinelArmed = StaleToolWindowSentinel.IsConfigured;
         }
 
         /// <summary>
         /// m11 (BP-6): test-only ctor — skips the VS-coupled parts (ResolveVimModeTracker MEF +
         /// KeybindingConfig.Load) so IsKeyOfInterest / TryRouteToolWindowKey can be driven
         /// hermetically. Tolerates a NULL telescope (substitutes a fresh TelescopeController whose
-        /// IsOpen is false).
+        /// IsOpen is false). m60 (BP-D13): an optional <paramref name="vimModeTracker"/> lets the
+        /// tests drive the editor-focus flag via <see cref="VimModeTracker.SetEditorFocusedForTest"/>
+        /// instead of reflecting into the private <c>_vsVim</c> field.
         /// </summary>
-        internal InputHandler(TelescopeController telescope, WindowManager windowManager)
+        internal InputHandler(TelescopeController telescope, WindowManager windowManager, VimModeTracker? vimModeTracker = null)
         {
             _package = null!;
             _telescope = telescope ?? new TelescopeController();
             _launcher = null!;
             _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
             _errorListGatherer = null!;
-            _vsVim = new VimModeTracker();
+            _vsVim = vimModeTracker ?? new VimModeTracker();
             _popupNav = null!;
             _leaderKey = Keys.Space;
             _leaderBindings = new Dictionary<string, Action>(StringComparer.Ordinal);
             _simpleBindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
-            _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
-            _simpleMatcher = new SimpleShortcutMatcher(_simpleBindings);
+            // n3 (BP-12): the shared matcher/seam init (both ctors call it so they cannot drift).
+            InitMatchers(_leaderKey, _leaderBindings, _simpleBindings);
+            // M1 (BP-3): arm the stale-toolwindow sentinel from the env var (the test sets/unset
+            // NEOVISUAL_LOG_DIR around construction to prove the arming).
+            _sentinelArmed = StaleToolWindowSentinel.IsConfigured;
+        }
+
+        /// <summary>
+        /// n3 (BP-12): the shared matcher/seam init — both ctors call it so the test-only ctor
+        /// cannot drift from the main ctor's field state.
+        /// </summary>
+        private void InitMatchers(Keys leaderKey, IReadOnlyDictionary<string, Action> leaderBindings, IReadOnlyDictionary<string, Action> simpleBindings)
+        {
+            _leaderMatcher = new LeaderSequenceMatcher(leaderKey, leaderBindings);
+            _simpleMatcher = new SimpleShortcutMatcher(simpleBindings);
             _lastSentinelRefresh = DateTime.MinValue;
+            // n3 (BP-11) + m38 (BP-15): the single routing decision — the controller overload (the
+            // 3-arg FocusGuard); TryRouteToolWindowKey resolves CurrentController once and passes
+            // it in.
             _routeDecision = c => ShouldRouteToolWindowKey(c);
         }
 
@@ -201,6 +221,13 @@ namespace MyExtension.Input
         /// <see cref="Clock"/> read only happens when the sentinel is actually meaningful.
         /// </summary>
         internal void SetSentinelArmedForTest(bool armed) => _sentinelArmed = armed;
+
+        /// <summary>
+        /// m60 (BP-D13): test-only seam — replaces the single routing decision (the m38
+        /// counting-lambda tests). No production behavior change.
+        /// </summary>
+        internal void SetRouteDecisionForTest(Func<IToolWindowController?, bool> decision)
+            => _routeDecision = decision ?? throw new ArgumentNullException(nameof(decision));
 
         /// <summary>
         /// Retrieves the shared <see cref="VimModeTracker"/> from the VS MEF container. Falls back
@@ -420,8 +447,10 @@ namespace MyExtension.Input
         /// preserving). Returns true when the key was handled (swallow), false when the tool-window
         /// branch decided to pass it through (input mode / a controller exception), and null when
         /// the key is not a tool-window route and <see cref="HandleKey"/> should continue.
+        /// m60 (BP-D13): internal (was private) so the m38 single-resolution tests invoke it
+        /// directly instead of reflecting into it.
         /// </summary>
-        private bool? TryRouteToolWindowKey(Keys key, bool ctrl, bool shift, bool alt)
+        internal bool? TryRouteToolWindowKey(Keys key, bool ctrl, bool shift, bool alt)
         {
             try
             {
@@ -600,9 +629,11 @@ namespace MyExtension.Input
             // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
             // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
             // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
-            if (ShouldRouteToolWindowKey(_windowManager.CurrentController))
+            // m3 (BP-5): resolve CurrentController ONCE and route through the single _routeDecision
+            // seam (the m38 pattern) — no double resolution per Escape.
+            var controller = _windowManager.CurrentController;
+            if (_routeDecision(controller))
             {
-                var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)
                 {
                     NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}toolwindow-exit-input");

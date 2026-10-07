@@ -134,22 +134,48 @@ namespace TestHarness
 
     internal static class Assert
     {
-        public static void Equal<T>(T expected, T actual)
+        // m59 (BP-D12): the optional message parameter — a failing Equal prints the message (plus
+        // the expected/actual) so a multi-assert test names which assertion failed.
+        public static void Equal<T>(T expected, T actual, string message = null)
         {
             if (!EqualityComparer<T>.Default.Equals(expected, actual))
             {
-                throw new Exception($"Expected [{expected}] but got [{actual}]");
+                throw new Exception(message == null
+                    ? $"Expected [{expected}] but got [{actual}]"
+                    : $"{message}: Expected [{expected}] but got [{actual}]");
             }
         }
 
         // n8 (BP-30): the inverse of Equal — throws when the values are equal, passes when they
         // differ. Replaces the Assert.False(a == b, ...) workaround for "must NOT be X" pins.
-        public static void NotEqual<T>(T notExpected, T actual)
+        // m59 (BP-D12): the optional message parameter (same contract as Equal).
+        public static void NotEqual<T>(T notExpected, T actual, string message = null)
         {
             if (EqualityComparer<T>.Default.Equals(notExpected, actual))
             {
-                throw new Exception($"Expected a value different from [{notExpected}] but got [{actual}]");
+                throw new Exception(message == null
+                    ? $"Expected a value different from [{notExpected}] but got [{actual}]"
+                    : $"{message}: Expected a value different from [{notExpected}] but got [{actual}]");
             }
+        }
+
+        // m65 (BP-D18): asserts the EXACT exception type (a derived type fails) and returns the
+        // exception instance. A non-throwing action fails.
+        public static T Throws<T>(Action action) where T : Exception
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                if (ex.GetType() == typeof(T))
+                {
+                    return (T)ex;
+                }
+                throw new Exception($"Expected exception of type {typeof(T).Name} but got {ex.GetType().Name}: {ex.Message}");
+            }
+            throw new Exception($"Expected exception of type {typeof(T).Name} but no exception was thrown");
         }
 
         public static void True(bool condition)

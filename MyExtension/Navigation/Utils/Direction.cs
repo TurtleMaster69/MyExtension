@@ -2,12 +2,13 @@ using System;
 
 namespace MyExtension.Navigation
 {
-    enum Axis { X, Y }
     enum Direction { Up, Down, Left, Right }
 
     static class DirectionExtensions
     {
-        public static Axis PerpendicularAxis(this Direction d) => (d == Direction.Up || d == Direction.Down) ? Axis.X : Axis.Y;
+        // m10 (BP-13): PerpendicularAxis + the Axis enum are DELETED — they only fed the dead
+        // WindowRect.Adjacency mirror; the shared GeometricSelectionEngine owns the formulas now.
+        // ToChar is LIVE (the navigate direction= diagnostic).
 
         public static char ToChar(this Direction d)
         {

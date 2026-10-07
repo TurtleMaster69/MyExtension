@@ -33,18 +33,6 @@ namespace Telescope.Finders
             return paths;
         }
 
-        public static string? FirstFileEndingWith(IEnumerable<IHierarchyNode> roots, string extension)
-        {
-            foreach (string path in EnumerateFiles(roots))
-            {
-                if (path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                {
-                    return path;
-                }
-            }
-            return null;
-        }
-
         /// <summary>
         /// Returns the first path ending with <paramref name="extension"/> in tree order, WITHOUT
         /// the on-disk existence filter (R19 — <c>HierarchyResolver.FirstSourceFilePath</c> delegates

@@ -21,8 +21,17 @@ namespace Telescope.Overlay
         /// selection navigation; the PREVIEW surface (<paramref name="previewSurface"/> true) keeps
         /// the full set (j/k/g/G navigate the code).
         /// </summary>
-        public static bool ShouldConsume(Key key, bool shift, out TextMotion? motion, out CaretPlacement? insertPlacement, bool previewSurface = false)
+        public static bool ShouldConsume(Key key, bool shift, out TextMotion? motion, out CaretPlacement? insertPlacement, bool previewSurface = false, bool hasCtrl = false)
         {
+            // m30 (BP-27): a Ctrl chord is NEVER a motion — the Ctrl+H/J/K/L window-navigation
+            // chords (and Ctrl+W/B/E/A/I) must not be treated as vim motions.
+            if (hasCtrl)
+            {
+                motion = null;
+                insertPlacement = null;
+                return false;
+            }
+
             motion = TextMotionDispatcher.MapKey(key, shift);
             if (motion == null)
             {

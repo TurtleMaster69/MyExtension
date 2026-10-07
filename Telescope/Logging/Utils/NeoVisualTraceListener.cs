@@ -19,10 +19,12 @@ namespace Telescope.Logging
         {
             if (!string.IsNullOrEmpty(message))
             {
-                LogFileWriter.WriteDebug(message);
+                // n17 (BP-10): Write is an UNSTAMPED fragment — no timestamp, no newline (the
+                // caller may write a partial line across multiple Write calls).
+                LogFileWriter.WriteDebugRaw(message);
             }
         }
 
-        public override void WriteLine(string? message) => Write(message);
+        public override void WriteLine(string? message) => LogFileWriter.WriteDebug(message);
     }
 }

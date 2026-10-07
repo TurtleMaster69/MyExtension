@@ -165,7 +165,7 @@ namespace Telescope.Filter
         /// returns the matching lines in fzf's rank order. An empty query returns all candidates
         /// in their original order. Cancellation aborts the running process.
         /// </summary>
-        public async Task<IReadOnlyList<string>> FilterAsync(
+        public async Task<IReadOnlyList<string>?> FilterAsync(
             IEnumerable<string> candidates,
             string query,
             CancellationToken cancellationToken)
@@ -305,7 +305,9 @@ namespace Telescope.Filter
                         // M7 (BP-60): record that both pipe-read tasks were arranged to be observed
                         // (the deterministic seam the timeout test asserts on).
                         AwaitedReadCount += 2;
-                        return lines;
+                        // M3 (BP-1): a genuine timeout signals failure distinctly — return null (never
+                        // the full candidate list). FzfFinder treats null as the literal fallback.
+                        return null;
                     }
                     // Fast path: all completed first — cancel the dedicated timeout timer.
                     timeoutCts.Cancel();
@@ -324,9 +326,10 @@ namespace Telescope.Filter
             }
             catch (Exception ex)
             {
-                // fzf missing/crashed: fall back to the full candidate list.
+                // fzf missing/crashed: M3 (BP-1) — signal failure distinctly (return null, never the
+                // full candidate list). FzfFinder treats null as the literal fallback.
                 TelescopeLog.Log($"fzf filter failed: {ex.Message}");
-                return lines;
+                return null;
             }
         }
 

@@ -181,7 +181,7 @@ including all three new finders and the `IFinder`/`IsQueryDriven` seams):
   `Utils/TextMotionHelper.cs`
 - **D** `Telescope/` (enumerate the whole folder): `Controller/TelescopeController.cs`, `Overlay/TelescopeOverlay.cs`,
   `Finders/TelescopeFinder.cs`, `Overlay/Utils/OverlayKeyHandler.cs`, `Overlay/Utils/TextMotionNavigator.cs`,
-  `Overlay/Utils/SyntaxHighlighter.cs`, `Overlay/Utils/ResultsFormatter.cs`, `Filter/FzfFilter.cs`, `Finders/FileFinder.cs`,
+  `Overlay/Utils/ResultsFormatter.cs`, `Filter/FzfFilter.cs`, `Finders/FileFinder.cs`,
   `Finders/CodeIssuesFinder.cs`, `Finders/Utils/CodeIssue.cs`, `Finders/GrepFinder.cs`, `Finders/Utils/GrepHit.cs`,
   `Finders/ReferencesFinder.cs`, `Finders/Utils/ReferenceHit.cs`, `Finders/ImplementationFinder.cs`,
   `Finders/Utils/DefinitionHit.cs`, `Finders/Utils/ProjectFiles.cs`, `Logging/Utils/DiagnosticLog.cs`,

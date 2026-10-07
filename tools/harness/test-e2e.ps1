@@ -1162,6 +1162,9 @@ Register-Scenario 'neovisual-git-bindings' {
                 Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
                 Send-Tap $script:VkG; Start-Sleep -Milliseconds 150        # g (prefix)
                 Send-Text $letter; Start-Sleep -Milliseconds 800           # re-fire ONCE (bounded)
+                # m69 (BP-D27): re-assert the leader-binding contract after the retry re-fire — a
+                # retry that succeeds must still be verified against the leader-binding line.
+                Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: g,$letter" "retry re-fired the $cmd binding"
             }
         }
     }
@@ -1504,7 +1507,11 @@ Register-Scenario 'explorer-open-searchbox' {
     Assert-VsFocused $vs 'explorer search box (o)'
     Send-Tap $script:VkO; Start-Sleep -Milliseconds 800   # o -> open the filtered result
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*[\\/]GrepProbe\.cs" 'o opened the filtered result (GrepProbe.cs)'
+    # m66 (BP-D24): assert the opened file is the ACTIVE document (order-independent — activating
+    # an already-open view raises no TextViewCreated, so the editor-view-opened log line is not
+    # reliable here) instead of the editor-view-opened assert.
+    $active = Wait-ActiveDocumentMatch $vs.Id 'GrepProbe\.cs$' 5000
+    if (-not $active) { throw 'o did not open the filtered result (GrepProbe.cs)' }
     Assert-NoEnterStorm $logPath 'explorer-open-searchbox'
 }
 
@@ -1526,6 +1533,12 @@ Register-Scenario 'explorer-searchbox-motions' {
     # independent of the Ctrl+; keybinding) — the same command the controller's `i` action runs.
     Focus-SolutionExplorerSearchBox $vs.Id
     Start-Sleep -Milliseconds 500
+
+    # m70 (BP-D28): explicit empty-box guard — clear any stale query from the search box (Ctrl+A
+    # select-all + Delete) so the caret=3 assertions below can only be satisfied by the 'xyz'
+    # typed here, never by a non-empty box from a prior scenario.
+    Send-Ctrl 0x41; Start-Sleep -Milliseconds 200   # Ctrl+A -> select all
+    Send-Tap 0x2E; Start-Sleep -Milliseconds 200    # Delete -> clear
 
     # Type unmapped chars (x/y/z are not action keys) -> they fall through and land in the box.
     Send-Text 'xyz'; Start-Sleep -Milliseconds 300
@@ -1631,7 +1644,11 @@ Register-Scenario 'neovisual-editor-insert' {
     Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*Beta\.cs" 'preview shows the Beta.cs match'
     Send-Tap $script:VkEnter; Start-Sleep -Milliseconds 800
     Assert-NewLogLine $logPath "$($script:PfxTel)opened file: .*Beta\.cs" 'Enter opened Beta.cs'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*Beta\.cs" 'editor view for Beta.cs created'
+    # m67 (BP-D25): assert the opened file is the ACTIVE document (order-independent — activating
+    # an already-open view raises no TextViewCreated, so the editor-view-opened log line is not
+    # reliable here) instead of the editor-view-opened assert.
+    $active = Wait-ActiveDocumentMatch $vs.Id 'Beta\.cs$' 5000
+    if (-not $active) { throw 'Enter did not open Beta.cs' }
     Close-Telescope $vs $logPath
 
     # The editor has Beta.cs focused. Get VsVim into NORMAL mode, then press i to enter INSERT.

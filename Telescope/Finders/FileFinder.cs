@@ -23,7 +23,7 @@ namespace Telescope.Finders
 
         // Hermetic-test seam: when set, candidate enumeration and file opening go through these
         // instead of DTE, so the finder's logic can be unit-tested without Visual Studio.
-        private readonly Func<IReadOnlyList<string>>? _testCandidateSource;
+        // m36 (BP-14): the single _testEnumerate seam (the dual _testCandidateSource is gone).
         private readonly Func<IReadOnlyList<string>>? _testEnumerate;
         private readonly Action<string>? _testOpener;
 
@@ -41,19 +41,16 @@ namespace Telescope.Finders
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see above).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (N37/BP-50: amortizes the per-open solution walk).</param>
-        /// <param name="testCandidateSource">Hermetic-test seam: drives candidate enumeration without DTE.</param>
         /// <param name="testEnumerate">Hermetic-test seam: routes the enumerate delegate through the shared cache (m34).</param>
         /// <param name="testOpener">Hermetic-test seam: drives opening without DTE.</param>
         internal FileFinder(
             Func<DTE> dteFactory,
             ProjectFileCache? fileCache,
-            Func<IReadOnlyList<string>>? testCandidateSource = null,
             Func<IReadOnlyList<string>>? testEnumerate = null,
             Action<string>? testOpener = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache;
-            _testCandidateSource = testCandidateSource;
             _testEnumerate = testEnumerate;
             _testOpener = testOpener;
         }
@@ -63,20 +60,10 @@ namespace Telescope.Finders
             if (_testEnumerate != null)
             {
                 // Hermetic test path: no VS thread affinity; the shared cache serves the enumerate
-                // delegate once across gathers.
+                // delegate once across gathers. n14 (BP-10): the cache may be legitimately null
+                // (a test enumerate with no cache) — degrade to empty instead of a latent NPE.
                 var testHits = new List<FileHit>();
-                foreach (string path in _fileCache!.Get(_testEnumerate))
-                {
-                    testHits.Add(new FileHit(path, 0));
-                }
-                return testHits;
-            }
-
-            if (_testCandidateSource != null)
-            {
-                // Hermetic test path: no VS thread affinity.
-                var testHits = new List<FileHit>();
-                foreach (string path in _testCandidateSource())
+                foreach (string path in _fileCache?.Get(_testEnumerate) ?? Array.Empty<string>())
                 {
                     testHits.Add(new FileHit(path, 0));
                 }

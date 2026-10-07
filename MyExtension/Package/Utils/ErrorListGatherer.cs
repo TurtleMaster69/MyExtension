@@ -45,9 +45,12 @@ namespace MyExtension.Package
         // m1 (BP-7): the build-done/document-saved invalidation subscription (the m2 COM-event
         // lifecycle pattern — held references so the connection points are not GC'd, unhooked in
         // Dispose). Build events live on BuildEvents (via dte.Events.BuildEvents), NOT
-        // SolutionEvents (plan correction, 2026-10-06).
+        // SolutionEvents (plan correction, 2026-10-06). m8 (BP-9): document-opened +
+        // window-activated are added so a build/save/open/activate that changes the Error List
+        // never serves a stale TTL cache.
         private BuildEvents? _buildEvents;
         private DocumentEvents? _documentEvents;
+        private WindowEvents? _windowEvents;
         private bool _eventsHooked;
 
         public ErrorListGatherer()
@@ -56,9 +59,10 @@ namespace MyExtension.Package
 
         /// <summary>
         /// Subscribes to <c>SolutionEvents.OnBuildDone</c> + <c>DocumentEvents.DocumentSaved</c>
-        /// and invalidates the cache on each (a build or a save can change the Error List). The m2
-        /// pattern: idempotent, best-effort (a failure leaves the TTL cache serving), and the
-        /// subscription is unhooked in <see cref="Dispose"/>. UI thread only.
+        /// (m8/BP-9: + <c>DocumentEvents.DocumentOpened</c> + <c>WindowEvents.WindowActivated</c>)
+        /// and invalidates the cache on each (a build/save/open/activate can change the Error
+        /// List). The m2 pattern: idempotent, best-effort (a failure leaves the TTL cache serving),
+        /// and the subscription is unhooked in <see cref="Dispose"/>. UI thread only.
         /// </summary>
         public void HookEvents(Func<DTE?> dteFactory)
         {
@@ -78,6 +82,9 @@ namespace MyExtension.Package
                 _buildEvents.OnBuildDone += OnBuildDone;
                 _documentEvents = dte.Events.DocumentEvents;
                 _documentEvents.DocumentSaved += OnDocumentSaved;
+                _documentEvents.DocumentOpened += OnDocumentOpened;
+                _windowEvents = dte.Events.WindowEvents;
+                _windowEvents.WindowActivated += OnWindowActivated;
                 _eventsHooked = true;
             }
             catch
@@ -93,6 +100,16 @@ namespace MyExtension.Package
             _cache = null;
             _cacheKey = null;
             _cacheStampMs = 0;
+        }
+
+        /// <summary>
+        /// m60 (BP-D13): test-only seam — the instance cache (null when empty). No production
+        /// behavior change.
+        /// </summary>
+        internal List<DiagnosticEntry>? CacheForTest
+        {
+            get => _cache;
+            set => _cache = value;
         }
 
         public List<DiagnosticEntry> Gather(DTE dte, string filePath, bool severityError)
@@ -162,13 +179,35 @@ namespace MyExtension.Package
             if (_documentEvents != null)
             {
                 try { _documentEvents.DocumentSaved -= OnDocumentSaved; } catch { /* already unhooked */ }
+                try { _documentEvents.DocumentOpened -= OnDocumentOpened; } catch { /* already unhooked */ }
                 _documentEvents = null;
+            }
+            if (_windowEvents != null)
+            {
+                try { _windowEvents.WindowActivated -= OnWindowActivated; } catch { /* already unhooked */ }
+                _windowEvents = null;
             }
             _eventsHooked = false;
         }
 
-        private void OnBuildDone(vsBuildScope scope, vsBuildAction action) => Invalidate();
+        private void OnBuildDone(vsBuildScope scope, vsBuildAction action)
+            => InvalidateIf(ErrorListCacheDecision.ShouldInvalidateOnEvent("build-done"));
 
-        private void OnDocumentSaved(Document document) => Invalidate();
+        private void OnDocumentSaved(Document document)
+            => InvalidateIf(ErrorListCacheDecision.ShouldInvalidateOnEvent("document-saved"));
+
+        private void OnDocumentOpened(Document document)
+            => InvalidateIf(ErrorListCacheDecision.ShouldInvalidateOnEvent("document-opened"));
+
+        private void OnWindowActivated(Window gotFocus, Window lostFocus)
+            => InvalidateIf(ErrorListCacheDecision.ShouldInvalidateOnEvent("window-activated"));
+
+        private void InvalidateIf(bool shouldInvalidate)
+        {
+            if (shouldInvalidate)
+            {
+                Invalidate();
+            }
+        }
     }
 }

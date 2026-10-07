@@ -32,7 +32,6 @@ namespace Telescope.Overlay
 
         public FocusTarget Id => FocusTarget.Preview;
         public FrameworkElement Content => _chrome;
-        public bool IsFocusable => false;   // the editor's VisualElement takes focus (Activate routes there)
 
         public void Activate()
         {

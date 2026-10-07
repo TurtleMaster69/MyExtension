@@ -93,7 +93,7 @@ namespace MyExtension.Input
                     {
                         return LeaderResult.Failed(sequence, ex.Message);
                     }
-                    return LeaderResult.Execute(action, sequence);
+                    return LeaderResult.Execute(sequence);
                 }
 
                 if (!_prefixSet.Contains(sequence))
@@ -163,27 +163,25 @@ namespace MyExtension.Input
 
     /// <summary>
     /// The result of a <see cref="LeaderSequenceMatcher.HandleKey"/> call: how the key should be
-    /// treated, plus the matched action and sequence when a binding executed.
+    /// treated, plus the matched sequence when a binding executed.
     /// </summary>
     internal readonly struct LeaderResult
     {
         public LeaderResultKind Kind { get; }
-        public Action? Action { get; }
         public string? Sequence { get; }
         public string? ErrorMessage { get; }
 
-        private LeaderResult(LeaderResultKind kind, Action? action, string? sequence, string? errorMessage)
+        private LeaderResult(LeaderResultKind kind, string? sequence, string? errorMessage)
         {
             Kind = kind;
-            Action = action;
             Sequence = sequence;
             ErrorMessage = errorMessage;
         }
 
-        public static LeaderResult PassThrough => new(LeaderResultKind.PassThrough, null, null, null);
-        public static LeaderResult Consume => new(LeaderResultKind.Consume, null, null, null);
-        public static LeaderResult Execute(Action action, string sequence) => new(LeaderResultKind.Execute, action, sequence, null);
-        public static LeaderResult Failed(string sequence, string errorMessage) => new(LeaderResultKind.Failed, null, sequence, errorMessage);
-        public static LeaderResult Abort => new(LeaderResultKind.Abort, null, null, null);
+        public static LeaderResult PassThrough => new(LeaderResultKind.PassThrough, null, null);
+        public static LeaderResult Consume => new(LeaderResultKind.Consume, null, null);
+        public static LeaderResult Execute(string sequence) => new(LeaderResultKind.Execute, sequence, null);
+        public static LeaderResult Failed(string sequence, string errorMessage) => new(LeaderResultKind.Failed, sequence, errorMessage);
+        public static LeaderResult Abort => new(LeaderResultKind.Abort, null, null);
     }
 }

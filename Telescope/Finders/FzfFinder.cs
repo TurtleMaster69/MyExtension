@@ -8,26 +8,26 @@ using System.Threading;
 using System.Threading.Tasks;
 using Telescope.Filter;
 using Telescope.Logging;
+using FzfHit = Telescope.Finders.GrepHit;
 
 namespace Telescope.Finders
 {
     /// <summary>
     /// A Telescope finder that fuzzy-matches the solution's project-file <b>contents</b> for the
-    /// typed query using fzf (query-driven, per-file <c>fzf --filter</c>). Each row shows
-    /// <c>{fileName}:{line}: {lineText}</c>. Selecting an entry opens the hit file in the editor
-    /// and jumps the caret to the hit line. When fzf is unavailable the finder falls back to a
-    /// literal case-insensitive substring scan (never the full unfiltered list).
+    /// typed query using fzf (query-driven, ONE batched <c>fzf --filter</c> call across ALL files'
+    /// lines — M2/BP-2). Each row shows <c>{fileName}:{line}: {lineText}</c>. Selecting an entry
+    /// opens the hit file in the editor and jumps the caret to the hit line. When fzf is
+    /// unavailable the finder falls back to a literal case-insensitive substring scan (never the
+    /// full unfiltered list).
     ///
     /// <para/>
-    /// <b>Threading:</b> the DTE enumeration path asserts the UI thread; the fzf subprocess itself
-    /// runs off-thread inside <see cref="IFzfEngine"/>. <see cref="OnSelected"/> touches DTE and
+    /// <b>Threading:</b> the DTE enumeration path asserts the UI thread; the per-file content reads
+    /// + the literal-fallback scan run off-thread (M3/BP-5); the fzf subprocess itself runs
+    /// off-thread inside <see cref="IFzfEngine"/>. <see cref="OnSelected"/> touches DTE and
     /// therefore must run on the UI thread.
     /// </summary>
     public sealed class FzfFinder : FinderBase<FzfHit>
     {
-        /// <summary>Total-hit cap: a query that matches everything must not stall the UI.</summary>
-        private const int HitCap = 200;
-
         private readonly Func<DTE> _dteFactory;
         private readonly ProjectFileCache _fileCache;
         private readonly FileContentCache _contentCache;
@@ -46,70 +46,50 @@ namespace Telescope.Finders
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
         /// <param name="fzf">The fzf availability + filter engine.</param>
         /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller; m8/BP-14 makes it a REQUIRED param so a finder can never silently revert to its own cache).</param>
-        internal FzfFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, IFzfEngine fzf, FileContentCache contentCache)
+        /// <param name="testEnumerate">Hermetic-test seam: when set, candidate gathering bypasses DTE entirely (the shared cache serves the delegate once across queries).</param>
+        /// <param name="testOpener">Hermetic-test seam: when set, opening bypasses DTE entirely.</param>
+        internal FzfFinder(
+            Func<DTE> dteFactory,
+            ProjectFileCache fileCache,
+            IFzfEngine fzf,
+            FileContentCache contentCache,
+            Func<IReadOnlyList<string>>? testEnumerate = null,
+            Action<FzfHit>? testOpener = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
             _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
             _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
+            _testEnumerate = testEnumerate;
+            _testOpener = testOpener;
         }
 
-        /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
-        internal FzfFinder(Func<IReadOnlyList<string>> fileSource, Action<FzfHit> opener, IFzfEngine fzf)
-            : this(new ProjectFileCache(), fileSource, opener, fzf)
-        {
-        }
-
-        /// <summary>Test-only constructor: routes the enumerate delegate through the shared cache.</summary>
-        internal FzfFinder(ProjectFileCache cache, Func<IReadOnlyList<string>> enumerate, Action<FzfHit> opener, IFzfEngine fzf)
-        {
-            _fileCache = cache ?? throw new ArgumentNullException(nameof(cache));
-            _testEnumerate = enumerate;
-            _testOpener = opener;
-            _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
-            _dteFactory = () => null!;
-            _contentCache = new FileContentCache(500);
-        }
-
-        /// <summary>Test-only constructor: routes the enumerate delegate through the shared content cache (D7/BP-14).</summary>
-        internal FzfFinder(FileContentCache contentCache, Func<IReadOnlyList<string>> enumerate, Action<FzfHit> opener, IFzfEngine fzf)
-        {
-            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
-            _testEnumerate = enumerate;
-            _testOpener = opener;
-            _fzf = fzf ?? throw new ArgumentNullException(nameof(fzf));
-            _dteFactory = () => null!;
-            _fileCache = new ProjectFileCache();
-        }
+        /// <summary>BP-D3 (m53): the shared content cache (the reflection-free seam).</summary>
+        internal FileContentCache ContentCache => _contentCache;
 
         protected override IReadOnlyList<FzfHit> GatherHits() => throw new NotSupportedException("FzfFinder is query-driven; call GetCandidatesAsync(query)");
 
         public override IReadOnlyList<FinderEntry> GetCandidates(string query)
         {
-            // Empty query -> deterministic empty initial state (NO gather log, so the finder-open
-            // line emits only the generic "open finder=Fzf candidates=0"). This is also the
-            // overlay-open path, so warm the shared content cache once here so the per-query
-            // gather hits a warm cache instead of re-reading every file on the UI thread.
+            // The overlay-open path calls the SYNC GetCandidates("") with an empty query (D2b):
+            // it must return empty (no gather, no failure log), matching the async path's
+            // empty-query short-circuit. A non-empty sync call cannot await fzf, so it fails
+            // loudly instead of silently returning the wrong (unfiltered) list.
             if (string.IsNullOrEmpty(query))
             {
-                WarmContentCache();
                 return Array.Empty<FinderEntry>();
             }
-
-            // A sync method cannot await fzf; the overlay-open path always passes an empty query,
-            // so this branch is dead at open and exists only to fail loudly on a future non-empty
-            // sync call instead of silently returning the wrong (unfiltered) list.
             throw new NotSupportedException("FzfFinder is query-driven; call GetCandidatesAsync(query)");
         }
 
         public override async Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "", CancellationToken cancellationToken = default)
         {
             // The overlay calls this on every prompt change, including a cleared prompt: an empty
-            // query must NOT spawn fzf. Delegate to the sync short-circuit (warm cache + empty
-            // list, no gather log, no fzf spawn).
+            // query must NOT spawn fzf. M3 (BP-3): the eager warm-up is dropped — the first gather
+            // populates the shared content cache lazily.
             if (string.IsNullOrEmpty(query))
             {
-                return GetCandidates(query);
+                return Array.Empty<FinderEntry>();
             }
 
             var hits = new List<FzfHit>();
@@ -122,45 +102,53 @@ namespace Telescope.Finders
 
             IReadOnlyList<string> files = EnumerateFiles();
 
-            foreach (string path in files)
+            // M3 (BP-5): read every file's lines off-thread (the content reads are pure file I/O).
+            // The batched fzf path (BP-2) and the literal-fallback path share this block.
+            var filesLines = await Task.Run(() =>
             {
-                // M2 (BP-3): a cancelled gather stops spawning fzf subprocesses (the overlay's
-                // _filterCts is cancelled on every query change + close).
-                if (cancellationToken.IsCancellationRequested)
+                var result = new List<(string Path, IReadOnlyList<string> Lines)>();
+                foreach (string path in files)
                 {
-                    break;
-                }
-                if (hits.Count >= HitCap)
-                {
-                    break;
-                }
-
-                string[] lines;
-                try
-                {
-                    lines = _contentCache.GetLines(path);
-                }
-                catch
-                {
-                    // unreadable/binary file — skip
-                    continue;
-                }
-
-                if (available)
-                {
-                    IReadOnlyList<string> matched = await _fzf.FilterAsync(lines, query, cancellationToken);
-                    foreach (int ln in FzfLineMapper.Map(lines, matched))
+                    if (cancellationToken.IsCancellationRequested)
                     {
-                        if (hits.Count >= HitCap)
-                        {
-                            break;
-                        }
-                        hits.Add(new FzfHit(path, ln, lines[ln - 1]));
+                        break;
                     }
+                    string[] lines;
+                    try
+                    {
+                        lines = _contentCache.GetLines(path);
+                    }
+                    catch
+                    {
+                        // unreadable/binary file — skip
+                        continue;
+                    }
+                    result.Add((path, lines));
                 }
-                else
+                return result;
+            }, cancellationToken);
+
+            if (available)
+            {
+                // M2 (BP-2): ONE batched fzf --filter call across ALL files' lines (fzf ranks
+                // globally); the boundary-aware mapper maps the ranked output back to (file, line).
+                IReadOnlyList<string> candidates = FzfLineMapper.BuildCandidates(filesLines);
+                IReadOnlyList<string> matched = await _fzf.FilterAsync(candidates, query, cancellationToken);
+                foreach ((int fileIndex, int lineNumber) in FzfLineMapper.MapBatched(filesLines, matched))
                 {
-                    foreach (int ln in LiteralLineScanner.Scan(lines, query, HitCap - hits.Count))
+                    if (hits.Count >= FinderConstants.HitCap)
+                    {
+                        break;
+                    }
+                    string path = filesLines[fileIndex].Path;
+                    hits.Add(new FzfHit(path, lineNumber, filesLines[fileIndex].Lines[lineNumber - 1]));
+                }
+            }
+            else
+            {
+                foreach ((string path, IReadOnlyList<string> lines) in filesLines)
+                {
+                    foreach (int ln in LiteralLineScanner.Scan(lines.ToArray(), query, FinderConstants.HitCap - hits.Count))
                     {
                         hits.Add(new FzfHit(path, ln, lines[ln - 1]));
                     }
@@ -200,55 +188,6 @@ namespace Telescope.Finders
             {
                 TelescopeLog.Log($"FzfFinder failed to enumerate: {ex.Message}");
                 return Array.Empty<string>();
-            }
-        }
-
-        /// <summary>
-        /// One-time pre-read of the solution's project files into the shared content cache when the
-        /// Fzf overlay opens, so the per-query gather hits a warm cache. Best-effort: unreadable
-        /// files are skipped. Runs on the UI thread (the overlay-open path).
-        /// </summary>
-        private void WarmContentCache()
-        {
-            if (_testEnumerate != null)
-            {
-                foreach (string path in _fileCache.Get(_testEnumerate))
-                {
-                    WarmFile(path);
-                }
-                return;
-            }
-
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            try
-            {
-                DTE dte = _dteFactory();
-                if (dte?.Solution != null)
-                {
-                    // m7 (BP-13): the ONE shared solution-invalidation helper.
-                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
-                    foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
-                    {
-                        WarmFile(path);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                TelescopeLog.Log($"FzfFinder failed to enumerate: {ex.Message}");
-            }
-        }
-
-        private void WarmFile(string path)
-        {
-            try
-            {
-                _contentCache.GetLines(path);
-            }
-            catch
-            {
-                // unreadable/binary file — skip
             }
         }
 

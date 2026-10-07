@@ -236,15 +236,28 @@ namespace MyExtension.Input
         {
             if (!string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, true, out Keys key))
             {
-                // N70: reject modifier keys (Ctrl/Shift/Alt/Win) and non-single keys — a modifier
-                // leader silently disables the leader key. A real physical key (e.g. ControlKey)
-                // is still honored.
-                if ((key & Keys.Modifiers) == Keys.None && key != Keys.LWin && key != Keys.RWin)
+                // N70 + m14: reject modifier keys (Ctrl/Shift/Alt/Win) and the physical modifier
+                // virtual-keys (LControlKey/RControlKey/LShiftKey/RShiftKey/LMenu/RMenu) — a lone
+                // modifier key can never be a leader. A real physical key (e.g. F1) is still honored.
+                if ((key & Keys.Modifiers) == Keys.None
+                    && key != Keys.LWin && key != Keys.RWin
+                    && !IsPhysicalModifierKey(key))
                 {
                     return key;
                 }
             }
             return Keys.Space;
+        }
+
+        private static bool IsPhysicalModifierKey(Keys key)
+        {
+            // m14 (BP-9): a physical modifier key can never be a leader — reject BOTH the bare
+            // generic modifier keys (ControlKey/ShiftKey/Menu — no modifier-flag bit set, so the
+            // `(key & Keys.Modifiers) == Keys.None` check above passes them) AND the L/R-prefixed
+            // virtual-keys (LControlKey/RControlKey/LShiftKey/RShiftKey/LMenu/RMenu).
+            return key == Keys.ControlKey || key == Keys.LControlKey || key == Keys.RControlKey
+                || key == Keys.ShiftKey || key == Keys.LShiftKey || key == Keys.RShiftKey
+                || key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu;
         }
     }
 }

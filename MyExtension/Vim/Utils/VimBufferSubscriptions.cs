@@ -89,6 +89,15 @@ namespace MyExtension.Vim
             return _map.TryGetValue(view, out var buffer) ? buffer : null;
         }
 
+        /// <summary>
+        /// m13: returns the CACHED text buffer for a Vim buffer (the value recorded when the
+        /// subscription was created) — the close path must use this instead of re-resolving via
+        /// reflection on a closing buffer. Must be read BEFORE <see cref="OnBufferClosed"/> /
+        /// <see cref="UnsubscribeBuffer"/> (which remove the entry at refcount 0).
+        /// </summary>
+        public bool TryGetTextBuffer(object buffer, out object? textBuffer)
+            => _bufferToTextBuffer.TryGetValue(buffer, out textBuffer);
+
         /// <summary>R3: records that the buffer's Closed event is subscribed. Returns false when it
         /// was already subscribed (guards double-subscribing).</summary>
         public bool MarkClosedSubscribed(object buffer) => _closedSubscribed.Add(buffer);

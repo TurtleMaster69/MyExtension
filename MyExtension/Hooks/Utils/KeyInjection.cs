@@ -14,8 +14,9 @@ namespace MyExtension.Hooks
     ///
     /// <para/>
     /// <b>How it interacts with our own hook:</b> an injected key re-enters the low-level hook.
-    /// This is safe because we only ever inject *arrows*, never the vim keys we translate — so the
-    /// hook sees the arrow, does nothing with it, and passes it to the focused window. No recursion.
+    /// This is safe because we only ever inject the navigation/action VKs we translate — the arrow
+    /// keys plus VK_RETURN/VK_F2/VK_ESCAPE — never the vim keys themselves, so the hook sees the
+    /// injected key, does nothing with it, and passes it to the focused window. No recursion.
     ///
     /// <para/>
     /// <b>keybd_event vs SendInput:</b> <c>keybd_event</c> is the older API; <c>SendInput</c> is the

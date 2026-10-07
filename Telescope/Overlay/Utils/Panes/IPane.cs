@@ -27,11 +27,6 @@ namespace Telescope.Overlay
         /// the overlay's layout tree and the click-tunneling target.</summary>
         FrameworkElement Content { get; }
 
-        /// <summary>Whether the pane's own Content can take WPF keyboard focus directly
-        /// (Prompt/List: true). The Preview pane is false — its hosted editor's VisualElement
-        /// takes focus instead (Activate routes there).</summary>
-        bool IsFocusable { get; }
-
         /// <summary>Focus-entry: take keyboard focus (per-pane semantics) + the active visuals.
         /// Never logs (the overlay's FocusPane logs the one focus target= line per change).</summary>
         void Activate();

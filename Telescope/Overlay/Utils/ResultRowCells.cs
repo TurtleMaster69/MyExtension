@@ -12,23 +12,6 @@ namespace Telescope.Overlay
     internal static class ResultRowCells
     {
         /// <summary>
-        /// The ordered cell texts for one row: one string per visible column, same order.
-        /// A null entry or a null/foreign payload yields empty cells (the getters never
-        /// throw) — the row count stays aligned with the visible column count.
-        /// </summary>
-        internal static IReadOnlyList<string> Compute(FinderEntry? entry, IReadOnlyList<ResultColumn> visibleColumns)
-        {
-            object? payload = entry?.Payload;
-            var cells = new string[visibleColumns.Count];
-            for (int i = 0; i < visibleColumns.Count; i++)
-            {
-                cells[i] = visibleColumns[i].Getter(payload);
-            }
-
-            return cells;
-        }
-
-        /// <summary>
         /// The truncating overload (plan D4): the raw cells, then each cell shortened to its
         /// column's computed char width by the column's truncation kind. <paramref name="charWidths"/>
         /// is aligned with <paramref name="visibleColumns"/> (the ColumnWidths.Compute px widths

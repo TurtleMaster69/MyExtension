@@ -42,6 +42,7 @@
          the internal ctor), so pull the Workspaces.Common runtime asset in here for resolution in
          the test process. -->
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="4.14.0" ExcludeAssets="build;analyzers" />
+    <PackageReference Include="System.Reflection.DispatchProxy" Version="4.8.2" />
   </ItemGroup>
 
   <ItemGroup>
@@ -52,6 +53,9 @@
          (the focused-box seam's return type). TextBox lives in PresentationFramework, which is not
          pulled in by the VS SDK packages above. -->
     <Reference Include="PresentationFramework" />
+    <!-- BP-1 (M5): FakeTextView implements IWpfTextView, whose Background member is a
+         System.Windows.Media.Brush (PresentationCore). -->
+    <Reference Include="PresentationCore" />
   </ItemGroup>
 
 </Project>

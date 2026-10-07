@@ -64,16 +64,26 @@ namespace MyExtension.Input
         // (e.g. "Ctrl+H") from a key + modifiers and looks it up in the simple bindings.
         private readonly SimpleShortcutMatcher _simpleMatcher;
 
-        // n3 (BP-11): the SINGLE tool-window routing decision seam — TryRouteToolWindowKey computes
-        // the decision ONCE per key through this Func<bool> (the test replaces it with a counting
-        // lambda to prove the single computation). The shift-sensitive gate (R10) is folded into
-        // the branch, not a second FocusGuard call.
-        private Func<bool> _routeDecision;
+        // n3 (BP-11) + m38 (BP-15): the SINGLE tool-window routing decision seam —
+        // TryRouteToolWindowKey resolves CurrentController ONCE per key and passes it to this
+        // Func<IToolWindowController?, bool> (the test replaces it with a counting lambda to prove
+        // the single resolution). The shift-sensitive gate (R10) is applied separately through the
+        // pure FocusGuard overload, not a second call here.
+        private Func<IToolWindowController?, bool> _routeDecision;
 
         // M2: the stale-toolwindow sentinel file is re-stat'd at most once per bounded interval
         // (not on every key-down) so IsKeyOfInterest stays cheap when NEOVISUAL_LOG_DIR is set.
         private DateTime _lastSentinelRefresh = DateTime.MinValue;
         private static readonly TimeSpan SentinelRefreshInterval = TimeSpan.FromMilliseconds(250);
+
+        // m11 (BP-6): the sentinel interval is only meaningful in tests (the stale-toolwindow
+        // fault is injected by the harness), so the DateTime.UtcNow read is guarded behind this
+        // flag — a disarmed sentinel never touches the clock on the per-key path.
+        private bool _sentinelArmed;
+
+        // m11 (BP-6): the clock seam — production reads DateTime.UtcNow; tests inject a counting
+        // clock to prove the sentinel read is guarded.
+        internal Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
 
         /// <summary>
         /// Snapshot of whether a leader sequence is in progress. Read only by the hook thread's
@@ -106,17 +116,6 @@ namespace MyExtension.Input
                 _windowManager.CurrentController?.IsInputMode == true,
                 _windowManager.IsTextInputType,
                 _windowManager.TextInputSurfaceFocused);
-
-        /// <summary>
-        /// m7: the single tool-window routing decision, hoisted from the three identical
-        /// <c>FocusGuard.ShouldRouteToolWindowKey</c> call sites (HandleKey, IsKeyOfInterest,
-        /// ExitToolWindowInputMode).
-        /// </summary>
-        private bool ShouldRouteToolWindowKey()
-            => FocusGuard.ShouldRouteToolWindowKey(
-                _windowManager.IsToolWindow,
-                _vsVim.IsEditorFocused,
-                OwnsKeyboard);
 
         /// <summary>
         /// m7: the single tool-window routing decision, hoisted from the three identical
@@ -156,6 +155,10 @@ namespace MyExtension.Input
             // here so its event-driven cached mode is what gates the leader key.
             _vsVim = ResolveVimModeTracker();
 
+            // M5 (BP-2): a MAIN-EDITOR focus invalidates the cached text-input-surface flag so a
+            // stale Command Window frame can never claim keyboard ownership over a focused editor.
+            _vsVim.MainEditorFocused += () => _windowManager.InvalidateTextInputSurfaceFocused();
+
             _popupNav = new PopupNavigation(_windowManager);
 
             var config = KeybindingConfig.Load();
@@ -163,10 +166,41 @@ namespace MyExtension.Input
             (_leaderBindings, _simpleBindings) = BuildBindings(config.Bindings);
             _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
             _simpleMatcher = new SimpleShortcutMatcher(_simpleBindings);
-            // n3 (BP-11): the single routing decision — the controller overload (the 3-arg
-            // FocusGuard) resolved once per key.
-            _routeDecision = () => ShouldRouteToolWindowKey(_windowManager.CurrentController);
+            // n3 (BP-11) + m38 (BP-15): the single routing decision — the controller overload (the
+            // 3-arg FocusGuard); TryRouteToolWindowKey resolves CurrentController once and passes
+            // it in.
+            _routeDecision = c => ShouldRouteToolWindowKey(c);
         }
+
+        /// <summary>
+        /// m11 (BP-6): test-only ctor — skips the VS-coupled parts (ResolveVimModeTracker MEF +
+        /// KeybindingConfig.Load) so IsKeyOfInterest / TryRouteToolWindowKey can be driven
+        /// hermetically. Tolerates a NULL telescope (substitutes a fresh TelescopeController whose
+        /// IsOpen is false).
+        /// </summary>
+        internal InputHandler(TelescopeController telescope, WindowManager windowManager)
+        {
+            _package = null!;
+            _telescope = telescope ?? new TelescopeController();
+            _launcher = null!;
+            _windowManager = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
+            _errorListGatherer = null!;
+            _vsVim = new VimModeTracker();
+            _popupNav = null!;
+            _leaderKey = Keys.Space;
+            _leaderBindings = new Dictionary<string, Action>(StringComparer.Ordinal);
+            _simpleBindings = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
+            _leaderMatcher = new LeaderSequenceMatcher(_leaderKey, _leaderBindings);
+            _simpleMatcher = new SimpleShortcutMatcher(_simpleBindings);
+            _lastSentinelRefresh = DateTime.MinValue;
+            _routeDecision = c => ShouldRouteToolWindowKey(c);
+        }
+
+        /// <summary>
+        /// m11 (BP-6): test seam — arms/disarms the sentinel interval so the per-key
+        /// <see cref="Clock"/> read only happens when the sentinel is actually meaningful.
+        /// </summary>
+        internal void SetSentinelArmedForTest(bool armed) => _sentinelArmed = armed;
 
         /// <summary>
         /// Retrieves the shared <see cref="VimModeTracker"/> from the VS MEF container. Falls back
@@ -391,16 +425,14 @@ namespace MyExtension.Input
         {
             try
             {
-                // n3 (BP-11): the routing decision is computed ONCE per key through the single
-                // _routeDecision seam (the test replaces it with a counting lambda). The
-                // shift-sensitive gate (R10 — shift must not fire non-text-input tree actions) is
-                // folded into the branch below, NOT a second FocusGuard call.
-                if (!_routeDecision())
+                // m38 (BP-15): resolve CurrentController ONCE at the top and pass it to both the
+                // routing decision and the controller variable (no double resolution per key-down).
+                var controller = _windowManager.CurrentController;
+                if (!_routeDecision(controller))
                 {
                     return null;
                 }
 
-                var controller = _windowManager.CurrentController;
                 if (controller == null)
                 {
                     return null;
@@ -415,11 +447,20 @@ namespace MyExtension.Input
                 // Normal mode: i/I enter input mode (the controller may position the caret
                 // first, e.g. I = insert at line start in text-input windows); hjkl move the
                 // focused surface; the controller's action keys (e.g. Solution Explorer
-                // o/r/m/a, text-input w/b/e) act on it. R10: shift is gated for NON-text-input
-                // controllers (Shift+O/R/M/A/G in Solution Explorer must not fire tree actions
-                // and swallow the key); text-input controllers still need shift to tell I/i and
-                // A/a apart, so they are exempt from the shift gate.
-                if (!ctrl && !alt && !(shift && !_windowManager.IsTextInputType && !_windowManager.IsFocusedTextBoxInCurrentToolWindow()))
+                // o/r/m/a, text-input w/b/e) act on it. m36 (BP-13): the R10 shift gate routes
+                // through the pure 7-arg FocusGuard overload (single-sourced — the inlined copy
+                // is gone). Shift is gated for NON-text-input controllers (Shift+O/R/M/A/G in
+                // Solution Explorer must not fire tree actions and swallow the key); text-input
+                // controllers still need shift to tell I/i and A/a apart, so they are exempt.
+                if (!ctrl && !alt &&
+                    FocusGuard.ShouldRouteToolWindowKey(
+                        _windowManager.IsToolWindow,
+                        _vsVim.IsEditorFocused,
+                        controller.IsInputMode == true,
+                        _windowManager.IsTextInputType,
+                        _windowManager.TextInputSurfaceFocused,
+                        shift,
+                        _windowManager.IsFocusedTextBoxInCurrentToolWindow()))
                 {
                     // A controller-specific insert key (text-input I = insert at line start) is
                     // handled by TryMove first; the generic 'i' below is the plain-insert
@@ -477,12 +518,17 @@ namespace MyExtension.Input
             // test-only fault toggles without a focus change, so the harness creates/removes the
             // sentinel file between scenarios — but the file must not be File.Exists-stat'd on
             // every key-down). HandleKey is always preceded by this, so it is NOT refreshed there
-            // too (that would double the syscall).
-            DateTime now = DateTime.UtcNow;
-            if (now - _lastSentinelRefresh >= SentinelRefreshInterval)
+            // too (that would double the syscall). m11 (BP-6): the interval is only meaningful in
+            // tests, so the DateTime.UtcNow read is guarded behind the _sentinelArmed flag — a
+            // disarmed sentinel never touches the clock.
+            if (_sentinelArmed)
             {
-                _lastSentinelRefresh = now;
-                _windowManager.RefreshStaleSentinel();
+                DateTime now = Clock();
+                if (now - _lastSentinelRefresh >= SentinelRefreshInterval)
+                {
+                    _lastSentinelRefresh = now;
+                    _windowManager.RefreshStaleSentinel();
+                }
             }
 
             // Any modifier chord is a candidate simple shortcut (Ctrl+H, ...), and while a leader
@@ -518,9 +564,19 @@ namespace MyExtension.Input
 
             // Tool-window normal mode: hjkl + the controller's action keys must reach the handler.
             // A11: resolve CurrentController once and reuse it for both the routing decision and
-            // the action-key check (no double resolution per key-down).
+            // the action-key check (no double resolution per key-down). m36 (BP-13): the routing
+            // decision routes the shift gate through the pure 7-arg FocusGuard overload
+            // (single-sourced — the 3-arg overload has no shift gate).
             var c = _windowManager.CurrentController;
-            if (c != null && !c.IsInputMode && ShouldRouteToolWindowKey(c) &&
+            if (c != null && !c.IsInputMode &&
+                FocusGuard.ShouldRouteToolWindowKey(
+                    _windowManager.IsToolWindow,
+                    _vsVim.IsEditorFocused,
+                    c.IsInputMode == true,
+                    _windowManager.IsTextInputType,
+                    _windowManager.TextInputSurfaceFocused,
+                    shift,
+                    _windowManager.IsFocusedTextBoxInCurrentToolWindow()) &&
                 (DefaultControllerKeys.Contains(key) || c.ActionKeys.Contains(key)))
             {
                 return true;
@@ -544,7 +600,7 @@ namespace MyExtension.Input
             // gated on the raw IsEditorFocused flag — a non-code text tool window (Command Window)
             // can hold focus without ever changing it. EditorFocusedVeto already excludes trusted
             // tool-window surfaces, so Escape still reaches a controller that genuinely owns focus.
-            if (ShouldRouteToolWindowKey())
+            if (ShouldRouteToolWindowKey(_windowManager.CurrentController))
             {
                 var controller = _windowManager.CurrentController;
                 if (controller?.IsInputMode == true)

@@ -97,6 +97,19 @@ namespace MyExtension.ToolWindows
         /// text-input surface as focused.
         /// </summary>
         public bool TextInputSurfaceFocused => IsTestStaleInjected() ? false : _textInputSurfaceFocused;
+
+        /// <summary>
+        /// M5 (BP-2): invalidates the cached text-input-surface flag when the main editor gains
+        /// focus. The flag is cached on focus-change events only (M1), so a stale Command Window
+        /// frame could otherwise claim keyboard ownership over a focused editor; the
+        /// <see cref="VimModeTracker.MainEditorFocused"/> event (keyed on the focused view's
+        /// document identity) drives this invalidation.
+        /// </summary>
+        internal void InvalidateTextInputSurfaceFocused()
+        {
+            _textInputSurfaceFocused = false;
+            _focusedTextBoxInCurrentToolWindow = false;
+        }
     
         /// <summary>
         /// The COM/visual-tree walk that computes whether the current tool window's WPF content holds
@@ -263,10 +276,13 @@ namespace MyExtension.ToolWindows
         public static IToolWindowController? ResolveController(
             IReadOnlyDictionary<ToolWindowType, IToolWindowController> registered, ToolWindowType type)
         {
-            // N16: delegate to the single resolution path (GetController) so the registered→default
-            // logic exists in exactly one place. The throwaway defaults dictionary keeps this
-            // test-only seam stateless (each call resolves a fresh per-type default).
-            return GetController(registered, new Dictionary<ToolWindowType, IToolWindowController>(), type);
+            // n13: inline the registered→default logic without the throwaway defaults dictionary —
+            // each call resolves a fresh per-type default (stateless, no caching).
+            if (registered.TryGetValue(type, out var c))
+            {
+                return c;
+            }
+            return DefaultControllerFor(type);
         }
 
         internal IToolWindowController? GetController(ToolWindowType type)
@@ -307,7 +323,7 @@ namespace MyExtension.ToolWindows
             {
                 return null;
             }
-            return GeneralToolWindowController.IsTextInputType(type)
+            return ToolWindowTypeResolver.IsTextInputType(type)
                 ? new TextInputToolWindowController(type)
                 : new GeneralToolWindowController(type);
         }
@@ -366,8 +382,9 @@ namespace MyExtension.ToolWindows
                         out Guid guid);
                 // C7: the GetGuidProperty HRESULT was discarded -> silent _type = Unknown on COM
                 // failure. Check it and log the failure (the n19 `window rect unavailable`
-                // precedent) instead of silently defaulting.
-                if (WindowTypeProbe.ShouldLogFailure(guidHr))
+                // precedent) instead of silently defaulting. n14: the one-line ShouldLogFailure
+                // wrapper is inlined — any negative HRESULT is a failure (the Win32 FAILED macro).
+                if (guidHr < 0)
                 {
                     Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}window type probe failed: 0x{guidHr:X8}");
                     _type = ToolWindowType.Unknown;
@@ -380,7 +397,7 @@ namespace MyExtension.ToolWindows
                 {
                     _type = ToolWindowType.Unknown;
                 }
-                _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
+                _isTextInputType = ToolWindowTypeResolver.IsTextInputType(_type);
                 _textInputSurfaceFocused = ComputeTextInputSurfaceFocused();
                 _focusedTextBoxInCurrentToolWindow = ComputeFocusedTextBoxInCurrentToolWindow();
 
@@ -389,7 +406,7 @@ namespace MyExtension.ToolWindows
             {
                 _isToolWindow = false;
                 _type = ToolWindowType.Unknown;
-                _isTextInputType = GeneralToolWindowController.IsTextInputType(_type);
+                _isTextInputType = ToolWindowTypeResolver.IsTextInputType(_type);
                 // n9: not a tool window — ComputeTextInputSurfaceFocused() would return false
                 // immediately (its first guard is !IsToolWindow), so skip the COM/visual-tree walk.
                 _textInputSurfaceFocused = false;
@@ -398,6 +415,7 @@ namespace MyExtension.ToolWindows
         }
         public void Dispose()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_selectionEventsCookie != 0)
             {
                 _monitorSelection.UnadviseSelectionEvents(

@@ -330,12 +330,21 @@ Assert-Budget
 # 5. Type the query as virtual-key presses (VsVim/editor process KeyDown; the prompt is a
 #    TextBox so it accepts these directly).
 # ---------------------------------------------------------------------------
-Start-Sleep -Milliseconds 1200   # allow focus + initial render
+# n9 (BP-D22): poll for the prompt-focused state instead of a fixed sleep (the overlay-open poll
+# above already confirms the overlay; this confirms the prompt owns focus in insert mode).
+if (-not (Wait-LogContains $logPath "$($script:PfxTel)Focus prompt => True, mode=insert" 15000)) {
+    Write-Fail 'prompt did not reach insert focus'
+    exit 1
+}
 $vsProc.Refresh()
 Bring-ToForeground $vsProc.MainWindowHandle
 Start-Sleep -Milliseconds 300
 Send-Text $Query
-Start-Sleep -Milliseconds 1200   # allow fzf to run
+# n9 (BP-D22): poll for the results render instead of a fixed sleep (bounded ~15s).
+if (-not (Wait-LogContains $logPath "$($script:PfxTel)results count=" 15000)) {
+    Write-Fail 'results did not render after the query'
+    exit 1
+}
 
 # ---------------------------------------------------------------------------
 # 6. Assert on the trace oracle.

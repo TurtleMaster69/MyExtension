@@ -5,10 +5,12 @@
 > build, e2e VERIFY at the gate); the queued gates below are drained as the loop reaches them.
 > Never boot the harness concurrently with the build loop's own VS usage.
 
-**Status: EMPTY (2026-10-04).** Every queued e2e gate has been run GREEN and removed from
-the active queue — the Gap 1 gates (E2E-GAP1-1..5) and the Gap 3 gates (E2E-GAP3-1..2)
-were all discharged by the **Gap 3 VERIFY's full 39-scenario fresh-boot suite run
-(2026-10-04, GREEN; 1 flaky pass-on-retry)** — see "What ran GREEN" below.
+**Status: 8 gates QUEUED (2026-10-06).** The historical gates are discharged (see "What ran
+GREEN" below), but **8 gates are QUEUED** — the Code review fixes (45 findings) gates
+**E2E-CR45-1..4** and the Code review fixes (34 findings) gates **E2E-CR34-1..4** — the
+unit-only-lane plans are GREEN but their e2e was deferred to a capable machine, so the gates
+drain when that run happens. This plan's own deferred gates (**E2E-CR77-1..6**, the Code
+review fixes (106 findings)) are queued below.
 
 ## What was removed and why
 
@@ -133,14 +135,19 @@ Plan: `docs/implementation_plan.md` — **Telescope results columns + preview-as
 (the FIRST pending item; feature lane, **e2e ENABLED** — the gates run at VERIFY, nothing is
 deferred). Two gates:
 
-- **E2E-RC-1** — the NEW `telescope-results-columns` scenario (created + proven RED by
+- ~~**E2E-RC-1** — the NEW `telescope-results-columns` scenario (created + proven RED by
   `e2e-test-builder` before the build). Asserts the columned render; `results columns=file,dir`
   (the Files default) + the per-finder default columns lines; the byte-stable
   `results count=/selected=`; j→`selected=1`. The chooser toggle is unit-pinned + manual
-  (the harness injects keys, not mouse).
-- **E2E-RC-2** — full-suite regression re-run at VERIFY (40 registered scenarios): no
+  (the harness injects keys, not mouse).~~ — **DISCHARGED GREEN 2026-10-04** (the columns+preview
+  final gates: the full 41-scenario fresh-boot suite, runs 169/170; `telescope-results-columns`
+  first-try, the diagnostics byte-stable at source-diff + live-log level; see the What ran
+  GREEN section).
+- ~~**E2E-RC-2** — full-suite regression re-run at VERIFY (40 registered scenarios): no
   regression across all telescope-* scenarios (36/37 preview sites byte-stable; the 1
-  `preview tokens=` site updated per the plan's BP-D10).
+  `preview tokens=` site updated per the plan's BP-D10).~~ — **DISCHARGED GREEN 2026-10-04**
+  (the columns+preview final gates: the full 41-scenario fresh-boot suite, runs 169/170; see
+  the What ran GREEN section).
 
 ## Queued gates — Gap 6 goto (2026-10-04)
 
@@ -150,7 +157,7 @@ lane, **e2e ENABLED** — the deferral is lifted; the scenario is created + prov
 RED before the build and executed at VERIFY, so these gates are DRAINED at
 VERIFY, not deferred). Two gates:
 
-- **E2E-GOTO-1** — the NEW `telescope-goto` scenario (created by this plan's
+- ~~**E2E-GOTO-1** — the NEW `telescope-goto` scenario (created by this plan's
   Phase 1; first live run at VERIFY). Asserts: goto-definition single-hit →
   `[Telescope] goto-direct finder=… file=…\Models\Shared.cs line=1` +
   `[Telescope] goto line=1` + the active document becomes Models/Shared.cs;
@@ -159,12 +166,16 @@ VERIFY, not deferred). Two gates:
   goto-references multi-hit → `[Telescope] open finder=References candidates=…`
   (≥2) + `references gathered reads=… writes=…`; goto-implementation single-hit →
   `[Telescope] goto-direct … file=…Shape.cs line=2` + `[Telescope] goto line=2` +
-  the active document becomes Shape.cs. Covers AC1–AC6.
-- **E2E-GOTO-2** — full-suite regression re-run (all 41 registered scenarios):
+  the active document becomes Shape.cs. Covers AC1–AC6.~~ — **DISCHARGED GREEN 2026-10-04**
+  (the `telescope-goto` scenario, GREEN via the Gap-4 run 185 + the in-item 3rd-strike fix —
+  the gg normalization + the bounded re-walk; see the What ran GREEN section).
+- ~~**E2E-GOTO-2** — full-suite regression re-run (all 41 registered scenarios):
   no regression from the 2 new seed files (the `GotoProbe` partial pair) or the
   new scenario; the exact-count queries stay exact and `seed-leak` stays GREEN.
   The two registered-unexecuted scenarios (`neovisual-window-management`,
-  `neovisual-diagnostic-nav`) are E2E-GAP1-1/E2E-GAP3-1's gates, not this one's.
+  `neovisual-diagnostic-nav`) are E2E-GAP1-1/E2E-GAP3-1's gates, not this one's.~~ —
+  **DISCHARGED GREEN 2026-10-04** (the full 44-scenario fresh-boot suite, run 185; see the
+  What ran GREEN section).
 
 ## Queued gates - the planning hub's five plans (2026-10-04)
 
@@ -199,3 +210,20 @@ e2e is ENABLED - the gates drain at each plan's VERIFY.
   top-match preview proof, the Step-3 tightened `results count=1 selected=0`, the Step-4
   open; see the What ran GREEN section). The `telescope-goto` 3rd-strike regression was also
   fixed in-item (BP-B7 — GREEN outright, the re-walk never fired).
+
+## Queued gates — Code review fixes (106 findings, incl. nits) (2026-10-06)
+
+Plan: `docs/implementation_plan.md` — **Code review fixes (106 findings, incl. nits)**
+(the FIRST pending item; feature lane, **unit-only, e2e DEFERRED** — the user's 2026-10-06
+instruction: "we are not on e2e capable machine so defer those to queue for later"). The six
+gates below are QUEUED at handoff (never created/executed now); they become READY when the
+plan is GREEN and are created/executed on a capable machine.
+
+| ID | plan | finding(s) | scenario(s) | assertion | diagnostic | status | notes |
+|----|------|-----------|-------------|-----------|------------|--------|-------|
+| E2E-CR77-1 | Code review fixes (106 findings, incl. nits) (2026-10-06) - docs/implementation_plan.md (FIRST pending item) | the query-driven finder core (M1/M2/M3/m2/m3/m4) | `telescope-grep` + `telescope-fzf` stay GREEN (re-run) | the async Grep scan + the batched fzf + the lazy warm must not change the finder behavior; the `fzf hits=`/`grep hits=` contract; the fzf hit ORDER may change per M2's global ranking — the `opened fzf:` open-hit assertion may need updating | `[Telescope] grep hits=...` / `[Telescope] fzf hits=...` UNCHANGED (the fzf hit ORDER may change); the spurious `fzf filter failed: timeout` no longer fires (m8) | QUEUED | e2e DEFERRED (user 2026-10-06) — READY when the plan is GREEN |
+| E2E-CR77-2 | Code review fixes (106 findings, incl. nits) (2026-10-06) - docs/implementation_plan.md (FIRST pending item) | the navigation/interop bugs (M6/M7) | `neovisual-window-nav` stays GREEN (re-run) | the per-window try/catch + the Down direction fix must not change the navigation; `navigate direction=`/`navigate activated index=` unchanged; the overlapping-window TARGET may change (M7) | `[NeoVisual] navigate direction=...` / `navigate activated index=...` UNCHANGED | QUEUED | e2e DEFERRED (user 2026-10-06) — READY when the plan is GREEN |
+| E2E-CR77-3 | Code review fixes (106 findings, incl. nits) (2026-10-06) - docs/implementation_plan.md (FIRST pending item) | the text-input stale-frame leak (M5) + the placement drift (m46) | `neovisual-textinput-motions` + `neovisual-editor-insert` (re-run) | a stale text-input frame in normal mode while the main editor holds focus does NOT move the editor's caret (M5); the `a`/`A`/`I` placement caret reflects the fixed AfterCaret (m46) | `[NeoVisual] text-motion key=...` no longer fires for the main editor from a stale frame; `textinput-enter-input start\|end\|after caret=...` reflects AfterCaret | QUEUED | e2e DEFERRED (user 2026-10-06) — READY when the plan is GREEN |
+| E2E-CR77-4 | Code review fixes (106 findings, incl. nits) (2026-10-06) - docs/implementation_plan.md (FIRST pending item) | the shared geometric engine (M4) | `telescope-focus-panes` stays GREEN (re-run) | the shared engine must not change the focus behavior — the pinned tie-break (Ctrl+K Input->Preview) + the no-op edges byte-identical | `[Telescope] focus target=Input\|List\|Preview` + `[Telescope] focus no-op:` UNCHANGED | QUEUED | e2e DEFERRED (user 2026-10-06) — READY when the plan is GREEN |
+| E2E-CR77-5 | Code review fixes (106 findings, incl. nits) (2026-10-06) - docs/implementation_plan.md (FIRST pending item) | the preview SetText guard (m1) + the results-log-on-change (m5) | `telescope-preview` + `telescope-results-columns` stay GREEN (re-run) | the SetText guard + the results-log-on-change must not change the preview/results behavior; the `results columns=`/`results count=`/`preview caret=` contract | `[Telescope] results columns={ids}` / `results count={n} selected={m} boxText={len}` fire on change only (m5); `[Telescope] preview file=...` / `preview caret=... line=...` UNCHANGED | QUEUED | e2e DEFERRED (user 2026-10-06) — READY when the plan is GREEN |
+| E2E-CR77-6 | Code review fixes (106 findings, incl. nits) (2026-10-06) - docs/implementation_plan.md (FIRST pending item) | the full-suite regression re-run (M9/M10/m62/m63/m64/n9 + everything) | none (full 44-scenario fresh-boot re-run) | no regression from the finder/overlay/tool-window/navigation/harness/test-infra/doc changes; the `telescope-goto` re-walk trigger assert fixed (M9); the fzf timeout race deterministic (M10); `preview tokens=` dropped (m62); the severity-nav assertions unconditional (m63); `explorer-open-navigation` order-independent (m64) | all existing `[Telescope]`/`[NeoVisual]` lines UNCHANGED except the flagged diagnostic-behavior changes (M2/M5/M7/m5/m8/m46) | QUEUED | e2e DEFERRED (user 2026-10-06) — READY when the plan is GREEN |

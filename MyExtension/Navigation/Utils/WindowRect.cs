@@ -1,9 +1,10 @@
 
 using System;
+using Telescope.Overlay;
 
 namespace MyExtension.Navigation
 {
-    readonly struct WindowRect
+    readonly struct WindowRect : IGeometricRect
     {
         public static readonly WindowRect Empty = new WindowRect(0, 0, 0, 0);
 
@@ -25,6 +26,11 @@ namespace MyExtension.Navigation
         public int Bottom => Y + Height;
 
         public bool IsEmpty => X == 0 && Y == 0 && Width == 0 && Height == 0;
+
+        // M4 (BP-5): the shared IGeometricRect contract — the public readonly FIELDS X/Y need
+        // explicit interface properties (Right/Bottom/IsEmpty are already public properties).
+        int IGeometricRect.X => X;
+        int IGeometricRect.Y => Y;
 
         public int Adjacency(WindowRect other, Axis axis)
         {

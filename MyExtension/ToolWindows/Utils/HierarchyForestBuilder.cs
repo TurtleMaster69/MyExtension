@@ -1,13 +1,13 @@
-using System;
 using System.Collections.Generic;
 
 namespace MyExtension.ToolWindows
 {
     /// <summary>
-    /// Pure forest builder (M14): recurses physical folders and adds physical <c>.cs</c> files,
+    /// Pure forest builder (M14): recurses physical folders and adds physical files,
     /// reusing <see cref="HierarchyResolver.PhysicalFolderKind"/> / <see cref="HierarchyResolver.PhysicalFileKind"/>
-    /// and producing the existing <see cref="HierarchyNode"/>. The <c>.cs</c> filter lives here
-    /// (the DTE adapter passes all physical files through). N61: <see cref="HierarchyNode"/> is the
+    /// and producing the existing <see cref="HierarchyNode"/>. The forest is UNFILTERED (M8/m49) —
+    /// every physical item (.cs, .resx, .json, ...) is kept; the single <c>.cs</c> filter lives in
+    /// <see cref="HierarchyResolver.FirstSourceFilePath"/>. N61: <see cref="HierarchyNode"/> is the
     /// single DTO (the near-identical <c>HierarchyItemInfo</c> was merged into it).
     /// </summary>
     internal static class HierarchyForestBuilder
@@ -26,8 +26,7 @@ namespace MyExtension.ToolWindows
                     var children = Build(item.Children);
                     forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFolderKind, item.Name, "", children));
                 }
-                else if (item.Kind == HierarchyResolver.PhysicalFileKind &&
-                         item.Name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                else if (item.Kind == HierarchyResolver.PhysicalFileKind)
                 {
                     forest.Add(new HierarchyNode(HierarchyResolver.PhysicalFileKind, item.Name, item.FilePath, null));
                 }

@@ -24,7 +24,7 @@ namespace MyExtension.ToolWindows
             _type = type;
             // A window's initial mode comes from whether its type is a text-input surface (m23 —
             // the base/initial-mode flow owns this so every controller starts correctly).
-            _isInputMode = GeneralToolWindowController.IsTextInputType(type);
+            _isInputMode = ToolWindowTypeResolver.IsTextInputType(type);
         }
 
         public ToolWindowType Type => _type;

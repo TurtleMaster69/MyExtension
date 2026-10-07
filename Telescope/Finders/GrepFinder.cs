@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Telescope.Logging;
 
@@ -16,14 +17,12 @@ namespace Telescope.Finders
     /// and jumps the caret to the hit line.
     ///
     /// <para/>
-    /// <b>Threading:</b> <see cref="GetCandidates(string)"/> and <see cref="OnSelected"/> touch DTE
-    /// and therefore must run on the UI thread (the overlay's debounce resumes on the UI thread).
+    /// <b>Threading:</b> <see cref="GetCandidatesAsync"/> keeps the DTE enumeration on the UI
+    /// thread and runs the pure per-file scan off-thread (M1/BP-1); <see cref="OnSelected"/> touches
+    /// DTE and therefore must run on the UI thread.
     /// </summary>
     public sealed class GrepFinder : FinderBase<GrepHit>
     {
-        /// <summary>Total-hit cap: a query that matches everything must not stall the UI.</summary>
-        private const int HitCap = 200;
-
         private readonly Func<DTE> _dteFactory;
         private readonly ProjectFileCache _fileCache;
         private readonly FileContentCache _contentCache;
@@ -40,50 +39,42 @@ namespace Telescope.Finders
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
         /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller; m8/BP-14 makes it a REQUIRED param so a finder can never silently revert to its own cache).</param>
-        internal GrepFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache contentCache)
+        /// <param name="testEnumerate">Hermetic-test seam: when set, candidate gathering bypasses DTE entirely (the shared cache serves the delegate once across queries).</param>
+        /// <param name="testOpener">Hermetic-test seam: when set, opening bypasses DTE entirely.</param>
+        internal GrepFinder(
+            Func<DTE> dteFactory,
+            ProjectFileCache fileCache,
+            FileContentCache contentCache,
+            Func<IReadOnlyList<string>>? testEnumerate = null,
+            Action<GrepHit>? testOpener = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
             _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
+            _testEnumerate = testEnumerate;
+            _testOpener = testOpener;
         }
 
-        /// <summary>Test-only constructor: scans the given files' content for the query and reports opens without DTE.</summary>
-        internal GrepFinder(Func<IReadOnlyList<string>> fileSource, Action<GrepHit> opener)
-            : this(new ProjectFileCache(), fileSource, opener)
-        {
-        }
-
-        /// <summary>Test-only constructor: routes the enumerate delegate through the shared cache (BP-1/M5a).</summary>
-        internal GrepFinder(ProjectFileCache cache, Func<IReadOnlyList<string>> enumerate, Action<GrepHit> opener)
-        {
-            _fileCache = cache ?? throw new ArgumentNullException(nameof(cache));
-            _testEnumerate = enumerate;
-            _testOpener = opener;
-            _dteFactory = () => null!;
-            _contentCache = new FileContentCache(500);
-        }
-
-        /// <summary>Test-only constructor: routes the enumerate delegate through the shared content cache (D7/BP-14).</summary>
-        internal GrepFinder(FileContentCache contentCache, Func<IReadOnlyList<string>> enumerate, Action<GrepHit> opener)
-        {
-            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
-            _testEnumerate = enumerate;
-            _testOpener = opener;
-            _dteFactory = () => null!;
-            _fileCache = new ProjectFileCache();
-        }
+        /// <summary>BP-D3 (m53): the shared content cache (the reflection-free seam).</summary>
+        internal FileContentCache ContentCache => _contentCache;
 
         protected override IReadOnlyList<GrepHit> GatherHits() => throw new NotSupportedException("GrepFinder is query-driven; call GetCandidates(query)");
 
         public override IReadOnlyList<FinderEntry> GetCandidates(string query)
         {
+            // M1 (BP-1): the sync entry point delegates to the async override (test-only +
+            // empty-query path; never called on the UI thread in production — the overlay uses
+            // the async override).
+            return GetCandidatesAsync(query).GetAwaiter().GetResult();
+        }
+
+        public override async Task<IReadOnlyList<FinderEntry>> GetCandidatesAsync(string query = "", CancellationToken cancellationToken = default)
+        {
             // Empty query -> deterministic empty initial state (NO gather log, so the finder-open
-            // line emits only the generic "open finder=Grep candidates=0"). This is also the
-            // overlay-open path, so warm the shared content cache once here (N32/BP-45) so the
-            // per-query scan hits a warm cache instead of re-reading every file on the UI thread.
+            // line emits only the generic "open finder=Grep candidates=0"). M3 (BP-3): the eager
+            // warm-up is dropped — the first gather populates the shared content cache lazily.
             if (string.IsNullOrEmpty(query))
             {
-                WarmContentCache();
                 return Array.Empty<FinderEntry>();
             }
 
@@ -92,11 +83,15 @@ namespace Telescope.Finders
             if (_testEnumerate != null)
             {
                 // Hermetic test path: no VS thread affinity; the shared cache serves the enumerate
-                // delegate once across queries.
+                // delegate once across queries. The token is honored in the loop (BP-1).
                 foreach (string path in _fileCache.Get(_testEnumerate))
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
                     ScanFile(path, query, hits, _contentCache);
-                    if (hits.Count >= HitCap)
+                    if (hits.Count >= FinderConstants.HitCap)
                     {
                         break;
                     }
@@ -105,35 +100,30 @@ namespace Telescope.Finders
                 return hits.Select(ToEntry).ToList();
             }
 
-            ThreadHelper.ThrowIfNotOnUIThread();
+            // M1 (BP-1): the DTE enumeration + the solution-name compare stay on the UI thread
+            // (the sync helper asserts it); the per-file content scan is pure file I/O (no VS API)
+            // — run it on a background task so the UI thread is not blocked by the synchronous
+            // reads. The shared content cache is thread-safe (m10/BP-1), and the _queryGeneration
+            // marshal-back guard in TelescopeOverlay.RefreshQueryDrivenAsync discards stale results.
+            IReadOnlyList<string> files = EnumerateFiles();
 
             try
             {
-                DTE dte = _dteFactory();
-                if (dte?.Solution != null)
+                await Task.Run(() =>
                 {
-                    // m7 (BP-13): the ONE shared solution-invalidation helper (replaces the
-                    // duplicated compare + Invalidate block).
-                    ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
-                    // M1 (BP-2): the per-file content scan is pure file I/O (no VS API) — run it on
-                    // a background task so the UI thread is not blocked by the synchronous reads.
-                    // The DTE enumeration + _fileCache.Get + the solution-name compare stay on the
-                    // UI thread (ThreadHelper.ThrowIfNotOnUIThread above). The shared content cache
-                    // is thread-safe (m10/BP-1), and the _queryGeneration marshal-back guard in
-                    // TelescopeOverlay.RefreshQueryDrivenAsync discards stale results.
-                    IReadOnlyList<string> files = _fileCache.Get(() => ProjectFiles.Enumerate(dte));
-                    Task.Run(() =>
+                    foreach (string path in files)
                     {
-                        foreach (string path in files)
+                        if (cancellationToken.IsCancellationRequested)
                         {
-                            ScanFile(path, query, hits, _contentCache);
-                            if (hits.Count >= HitCap)
-                            {
-                                break;
-                            }
+                            break;
                         }
-                    }).GetAwaiter().GetResult();
-                }
+                        ScanFile(path, query, hits, _contentCache);
+                        if (hits.Count >= FinderConstants.HitCap)
+                        {
+                            break;
+                        }
+                    }
+                }, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -145,51 +135,28 @@ namespace Telescope.Finders
         }
 
         /// <summary>
-        /// One-time pre-read of the solution's project files into the shared content cache when the
-        /// Grep overlay opens (N32/BP-45), so the per-query scan hits a warm cache. Best-effort:
-        /// unreadable files are skipped. Runs on the UI thread (the overlay-open path).
+        /// Enumerates the solution's project files (test seam or DTE). Synchronous so the UI-thread
+        /// assert lives outside the async gather (VSTHRD109 forbids throwing in an async method).
         /// </summary>
-        private void WarmContentCache()
+        private IReadOnlyList<string> EnumerateFiles()
         {
-            if (_testEnumerate != null)
-            {
-                foreach (string path in _fileCache.Get(_testEnumerate))
-                {
-                    WarmFile(path);
-                }
-                return;
-            }
-
             ThreadHelper.ThrowIfNotOnUIThread();
-
             try
             {
                 DTE dte = _dteFactory();
                 if (dte?.Solution != null)
                 {
-                    // m7 (BP-13): the ONE shared solution-invalidation helper.
+                    // m7 (BP-13): the ONE shared solution-invalidation helper (replaces the
+                    // duplicated compare + Invalidate block).
                     ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
-                    foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
-                    {
-                        WarmFile(path);
-                    }
+                    return _fileCache.Get(() => ProjectFiles.Enumerate(dte));
                 }
+                return Array.Empty<string>();
             }
             catch (Exception ex)
             {
                 TelescopeLog.Log($"GrepFinder failed to enumerate: {ex.Message}");
-            }
-        }
-
-        private void WarmFile(string path)
-        {
-            try
-            {
-                _contentCache.GetLines(path);
-            }
-            catch
-            {
-                // unreadable/binary file — skip
+                return Array.Empty<string>();
             }
         }
 
@@ -228,7 +195,7 @@ namespace Telescope.Finders
             try
             {
                 string[] lines = cache.GetLines(path);
-                foreach (int ln in LiteralLineScanner.Scan(lines, query, HitCap - hits.Count))
+                foreach (int ln in LiteralLineScanner.Scan(lines, query, FinderConstants.HitCap - hits.Count))
                 {
                     hits.Add(new GrepHit(path, ln, lines[ln - 1]));
                 }

@@ -44,6 +44,11 @@ namespace MyExtension.ToolWindows
         // (no double visual-tree walk).
         private Func<System.Windows.Controls.TextBox?> _findFocusedTextBox = TextMotionHelper.FindFocusedTextBox;
 
+        // m47 (BP-19): the focused box resolved by TryMove is cached across consecutive routed keys
+        // (the visual-tree walk runs once, not per key), invalidated on mode change (EnterInputMode/
+        // ExitInputMode — the _pendingStyleBox pattern at :40 already caches across ExitInputMode).
+        private System.Windows.Controls.TextBox? _cachedFocusedBox;
+
         /// <summary>How long the focus-keeper re-asserts tree focus/selection (m9 — single source).</summary>
         private const int FocusKeeperDurationMs = 1500;
 
@@ -85,6 +90,9 @@ namespace MyExtension.ToolWindows
 
         protected override void OnModeChanged()
         {
+            // m47 (BP-19): a mode change invalidates the cached focused box — the next TryMove
+            // re-resolves it (the visual-tree walk is cached only across consecutive keys).
+            _cachedFocusedBox = null;
             // N71: reuse the box ExitInputMode already resolved (no second visual-tree walk).
             var box = _pendingStyleBox;
             _pendingStyleBox = null;
@@ -211,7 +219,9 @@ namespace MyExtension.ToolWindows
             // — it applies the motion + the N21 enteredInputMode → EnterInputMode() side effect.
             // m5 (BP-10): the box is resolved ONCE and passed to the TextMotion(key, box) overload —
             // no second visual-tree walk per routed key.
-            var box = _findFocusedTextBox();
+            // m47 (BP-19): the resolved box is cached across consecutive routed keys (the walk runs
+            // once, not per key), invalidated on mode change.
+            var box = _cachedFocusedBox ??= _findFocusedTextBox();
             if (box != null)
             {
                 return TextMotion(key, box)();
@@ -378,11 +388,14 @@ namespace MyExtension.ToolWindows
         /// DTOs plus a full-path → <see cref="EnvDTE.UIHierarchyItem"/> map. This is the ONLY place
         /// <c>pi.Kind</c> / <c>pi.Name</c> / <c>pi.FileNames[i]</c> are read. The caller
         /// must expand the node's <c>UIHierarchyItems</c> first (a collapsed node's children are
-        /// not enumerated). Physical folders recurse; physical files are passed through (the
-        /// <c>.cs</c> filter lives in <see cref="HierarchyForestBuilder"/>); everything else
-        /// (virtual folders, references, sub-projects) is skipped.
+        /// not enumerated). Physical folders recurse (each child folder is expanded BEFORE
+        /// recursing — M8/BP-2: a collapsed folder's <c>UIHierarchyItems</c> is empty, so
+        /// <c>g</c> (<c>SelectFirstSourceFile</c>) only sees top-level files + already-expanded
+        /// folders otherwise); physical files are passed through (the forest is unfiltered — the
+        /// single <c>.cs</c> filter lives in <see cref="HierarchyResolver.FirstSourceFilePath"/>);
+        /// everything else (virtual folders, references, sub-projects) is skipped.
         /// </summary>
-        private static System.Collections.Generic.List<HierarchyNode> MapChildren(
+        internal static System.Collections.Generic.List<HierarchyNode> MapChildren(
             EnvDTE.UIHierarchyItem item,
             System.Collections.Generic.Dictionary<string, EnvDTE.UIHierarchyItem> pathToItem)
         {
@@ -394,6 +407,9 @@ namespace MyExtension.ToolWindows
                     string kind = pi.Kind;
                     if (kind == HierarchyResolver.PhysicalFolderKind)
                     {
+                        // M8/BP-2: expand the child folder BEFORE recursing so its items are
+                        // enumerated (a collapsed folder's UIHierarchyItems is empty).
+                        child.UIHierarchyItems.Expanded = true;
                         var children = MapChildren(child, pathToItem);
                         result.Add(new HierarchyNode(kind, pi.Name, "", children));
                     }

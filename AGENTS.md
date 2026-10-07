@@ -104,7 +104,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    `-- KeyHandler`, `-- Preview`, `-- FileFinder`, `-- Fzf`, `-- RecentFilesFinder`,
    `-- TextMotionDispatcher`,
    `-- LineIndex`, `-- FocusTarget`, `-- Pane`, `-- ListKeyMap` run subsets.
-   Currently **297 tests, all passing**.
+   Currently **319 tests, all passing**.
 - `dotnet run --project tests/NeoVisual.Tests` — NeoVisual pure logic: keybinding
   parsing (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`, `SolutionExplorerController`),
@@ -121,7 +121,7 @@ Two hermetic test projects, both run with `dotnet run` and both supporting a
    `-- Keybinding`, `-- ToolWindow`, `-- SolutionExplorer`, `-- InjectedKeyGuard`,
    `-- SimpleShortcutMatcher`, `-- VimModeClassifier`, `-- InitSteps`,
    `-- NavigationSnapshot`, `-- FocusKeeperSchedule`, etc.
-   run subsets. Currently **212 tests, all passing**.
+   run subsets. Currently **236 tests, all passing**.
 
 `InternalsVisibleTo` is set in both `Telescope.csproj` and `MyExtension.csproj`
 for these test assemblies. If you extract pure logic out of a VS/WPF-coupled

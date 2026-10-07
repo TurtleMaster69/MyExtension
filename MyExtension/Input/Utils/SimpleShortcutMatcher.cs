@@ -18,27 +18,25 @@ namespace MyExtension.Input
 
     /// <summary>
     /// The result of a <see cref="SimpleShortcutMatcher.HandleKey"/> call: how the key should be
-    /// treated, plus the matched action and sequence when a binding executed (or the handler's
-    /// message when it threw).
+    /// treated, plus the matched sequence when a binding executed (or the handler's message when
+    /// it threw).
     /// </summary>
     internal readonly struct SimpleShortcutResult
     {
         public SimpleShortcutResultKind Kind { get; }
-        public Action? Action { get; }
         public string? Sequence { get; }
         public string? ErrorMessage { get; }
 
-        private SimpleShortcutResult(SimpleShortcutResultKind kind, Action? action, string? sequence, string? errorMessage)
+        private SimpleShortcutResult(SimpleShortcutResultKind kind, string? sequence, string? errorMessage)
         {
             Kind = kind;
-            Action = action;
             Sequence = sequence;
             ErrorMessage = errorMessage;
         }
 
-        public static SimpleShortcutResult PassThrough => new(SimpleShortcutResultKind.PassThrough, null, null, null);
-        public static SimpleShortcutResult Execute(Action action, string sequence) => new(SimpleShortcutResultKind.Execute, action, sequence, null);
-        public static SimpleShortcutResult Failed(string sequence, string errorMessage) => new(SimpleShortcutResultKind.Failed, null, sequence, errorMessage);
+        public static SimpleShortcutResult PassThrough => new(SimpleShortcutResultKind.PassThrough, null, null);
+        public static SimpleShortcutResult Execute(string sequence) => new(SimpleShortcutResultKind.Execute, sequence, null);
+        public static SimpleShortcutResult Failed(string sequence, string errorMessage) => new(SimpleShortcutResultKind.Failed, sequence, errorMessage);
     }
 
     /// <summary>
@@ -64,7 +62,7 @@ namespace MyExtension.Input
                 try
                 {
                     action();
-                    return SimpleShortcutResult.Execute(action, name);
+                    return SimpleShortcutResult.Execute(name);
                 }
                 catch (Exception ex)
                 {

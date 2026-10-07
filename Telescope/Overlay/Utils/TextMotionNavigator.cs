@@ -45,6 +45,23 @@ namespace Telescope.Overlay
             _lineIndex = new LineIndex(_text);
         }
 
+        /// <summary>
+        /// m1 (BP-8): replaces the text ONLY when it changed — returns true when the text changed
+        /// (rebuilds the <see cref="LineIndex"/> and resets the caret) and false when unchanged
+        /// (no rebuild, caret preserved). The full-file LineIndex rebuild is skipped when the
+        /// preview file is unchanged.
+        /// </summary>
+        public bool SetTextIfChanged(string text)
+        {
+            text = text ?? string.Empty;
+            if (string.Equals(_text, text, StringComparison.Ordinal))
+            {
+                return false;
+            }
+            SetText(text);
+            return true;
+        }
+
         /// <summary>Sets the caret to a specific character index, clamped into range.</summary>
         public void MoveTo(int index)
         {

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Telescope.Logging;
 
 namespace Telescope.Finders
@@ -45,28 +46,24 @@ namespace Telescope.Finders
         /// <param name="dteFactory">Returns the top-level DTE automation object (see <see cref="FileFinder"/>).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (amortizes the per-query solution walk).</param>
         /// <param name="contentCache">Shared file-content cache (D7/BP-14 — ONE instance injected from the controller; m8/BP-14 makes it a REQUIRED param so a finder can never silently revert to its own cache).</param>
-        internal CodeIssuesFinder(Func<DTE> dteFactory, ProjectFileCache fileCache, FileContentCache contentCache)
+        /// <param name="testFileSource">Hermetic-test seam: when set, candidate gathering bypasses DTE entirely.</param>
+        /// <param name="testOpener">Hermetic-test seam: when set, opening bypasses DTE entirely.</param>
+        internal CodeIssuesFinder(
+            Func<DTE> dteFactory,
+            ProjectFileCache fileCache,
+            FileContentCache contentCache,
+            Func<IReadOnlyList<string>>? testFileSource = null,
+            Action<CodeIssue>? testOpener = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
             _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
             _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
+            _testFileSource = testFileSource;
+            _testOpener = testOpener;
         }
 
-        /// <summary>Test-only constructor: scans the given files for TODO markers and reports opens without DTE.</summary>
-        internal CodeIssuesFinder(Func<IReadOnlyList<string>> fileSource, Action<CodeIssue> opener)
-            : this(new FileContentCache(500), fileSource, opener)
-        {
-        }
-
-        /// <summary>Test-only constructor: routes the file source through the shared content cache (D7/BP-14).</summary>
-        internal CodeIssuesFinder(FileContentCache contentCache, Func<IReadOnlyList<string>> fileSource, Action<CodeIssue> opener)
-        {
-            _contentCache = contentCache ?? throw new ArgumentNullException(nameof(contentCache));
-            _testFileSource = fileSource;
-            _testOpener = opener;
-            _dteFactory = () => null!;
-            _fileCache = new ProjectFileCache();
-        }
+        /// <summary>BP-D3 (m53): the shared content cache (the reflection-free seam).</summary>
+        internal FileContentCache ContentCache => _contentCache;
 
         protected override IReadOnlyList<CodeIssue> GatherHits()
         {
@@ -74,11 +71,14 @@ namespace Telescope.Finders
 
             if (_testFileSource != null)
             {
-                // Hermetic test path: no VS thread affinity.
-                foreach (string path in _testFileSource())
+                // Hermetic test path: the TODO scan is pure file I/O — run it off-thread (m4/BP-6).
+                Task.Run(() =>
                 {
-                    CollectTodos(path, issues);
-                }
+                    foreach (string path in _testFileSource())
+                    {
+                        CollectTodos(path, issues);
+                    }
+                }).GetAwaiter().GetResult();
                 return issues;
             }
 
@@ -88,10 +88,17 @@ namespace Telescope.Finders
                 // m7 (BP-13): the ONE shared solution-invalidation helper (replaces the duplicated
                 // compare + Invalidate block).
                 ProjectFileCache.EnsureSolutionCache(_fileCache, ref _cachedSolutionName, dte?.Solution?.FullName);
-                foreach (string path in _fileCache.Get(() => ProjectFiles.Enumerate(dte)))
+                // m4 (BP-6): the TODO scan is pure file I/O — run it off-thread. The DTE
+                // enumeration stays on the UI thread; CollectErrorList (the COM ErrorItems walk)
+                // MUST stay on the UI thread (it asserts ThrowIfNotOnUIThread).
+                IReadOnlyList<string> files = _fileCache.Get(() => ProjectFiles.Enumerate(dte));
+                Task.Run(() =>
                 {
-                    CollectTodos(path, issues);
-                }
+                    foreach (string path in files)
+                    {
+                        CollectTodos(path, issues);
+                    }
+                }).GetAwaiter().GetResult();
                 CollectErrorList(dte, issues);
             }
 
@@ -187,24 +194,17 @@ namespace Telescope.Finders
                     return;
                 }
 
-                int count = items.Count;
-                for (int i = 1; i <= count; i++)
+                // m33 (BP-24): the shared per-item walk (per-item try/catch — a throwing item is
+                // skipped, the rest survive).
+                ErrorItemsWalker.ForEach(items, item =>
                 {
-                    try
+                    string fileName = item.FileName ?? string.Empty;
+                    if (fileName.Length == 0)
                     {
-                        ErrorItem item = items.Item(i);
-                        string fileName = item.FileName ?? string.Empty;
-                        if (fileName.Length == 0)
-                        {
-                            continue;
-                        }
-                        issues.Add(new CodeIssue(ClassifySeverity(item.ErrorLevel), fileName, item.Line, item.Description ?? string.Empty));
+                        return;
                     }
-                    catch
-                    {
-                        // skip an item that can't be read
-                    }
-                }
+                    issues.Add(new CodeIssue(ClassifySeverity(item.ErrorLevel), fileName, item.Line, item.Description ?? string.Empty));
+                });
             }
             catch (Exception ex)
             {

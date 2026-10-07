@@ -50,6 +50,7 @@ namespace MyExtension.Package
         /// </summary>
         public void Dispose()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_documentEvents != null)
             {
                 try { _documentEvents.DocumentOpened -= OnDocumentOpened; } catch { /* already unhooked */ }

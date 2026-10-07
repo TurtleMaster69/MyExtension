@@ -165,7 +165,7 @@ namespace Telescope.Overlay
                 case TextMotion.LineEnd: nav.LineEnd(); return true;
                 case TextMotion.Top: nav.Top(); return true;
                 case TextMotion.Bottom: nav.Bottom(); return true;
-                case TextMotion.InsertAfter: nav.InsertAfter(); insertPlacement = CaretPlacement.Current; return true;
+                case TextMotion.InsertAfter: nav.InsertAfter(); insertPlacement = CaretPlacement.AfterCaret; return true;
                 case TextMotion.InsertEnd: nav.InsertEnd(); insertPlacement = CaretPlacement.End; return true;
                 case TextMotion.InsertStart: nav.InsertStart(); insertPlacement = CaretPlacement.Start; return true;
                 default: return false;

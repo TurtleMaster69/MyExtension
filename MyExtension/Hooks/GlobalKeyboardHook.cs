@@ -42,6 +42,8 @@ namespace MyExtension.Hooks
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_SYSKEYDOWN = 0x0104;
+        private const int HC_ACTION = 0;
+        private const int HC_NOREMOVE = 3;
 
         // Delegate kept as a field so the GC can't collect it while the unmanaged hook uses it.
         private readonly NativeMethods.LowLevelKeyboardProc _proc;
@@ -91,59 +93,71 @@ namespace MyExtension.Hooks
                 return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
             }
 
-            if (!IsVisualStudioFocused())
+            // m16 (BP-10): a peeked event (HC_NOREMOVE) is passed through untouched — only
+            // HC_ACTION (0) is a real key event the hook processes.
+            if (!IsActionEvent(nCode))
+            {
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            // m10 (BP-5): a key-up returns BEFORE the focus check — only key-downs need it, so
+            // the reorder avoids the two Win32 calls (GetForegroundWindow + GetWindowThreadProcessId)
+            // on every key-up. ShouldProcessKey is the pure seam: false for a key-up without
+            // consulting the focus check, the focus check's result for a key-down.
+            if (!ShouldProcessKey((int)wParam, () => IsVisualStudioFocused()))
             {
                 return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
             }
 
             // lParam points at a KBDLLHOOKSTRUCT; its first DWORD is the virtual-key code.
+            // m19: guard a null lParam before the read — an exception in the hook callback is
+            // fatal (Windows silently removes the hook).
+            if (lParam == IntPtr.Zero)
+            {
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
             int vkCode = Marshal.ReadInt32(lParam);
             Keys key = (Keys)vkCode;
 
-            bool isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
-
-            if (isKeyDown)
+            // Enter-storm guard (F1): if this key-down is one we just synthesized in
+            // KeyInjection.Press, pass it through untouched so it reaches the focused
+            // tree/control natively instead of re-triggering the controller action.
+            if (InjectedKeyGuard.Instance.TryConsume(vkCode))
             {
-                // Enter-storm guard (F1): if this key-down is one we just synthesized in
-                // KeyInjection.Press, pass it through untouched so it reaches the focused
-                // tree/control natively instead of re-triggering the controller action.
-                if (InjectedKeyGuard.Instance.TryConsume(vkCode))
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            // GetAsyncKeyState reads the *physical* modifier state (as opposed to the
+            // message stream), so it's authoritative even if we later swallow a key.
+            bool ctrl = (NativeMethods.GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;
+            bool shift = (NativeMethods.GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
+            bool alt = (NativeMethods.GetAsyncKeyState((int)Keys.Menu) & 0x8000) != 0;
+
+            // Cheap pre-filter: plain typing keys that InputHandler can't possibly act on
+            // return here immediately, without running the handler at all.
+            if (IsInteresting(key, ctrl, shift, alt))
+            {
+                bool handled = false;
+
+                // The hook is installed on the main thread, so HandleKey normally runs
+                // directly here. The else is defensive only; its wait must stay bounded
+                // (Windows removes low-level hooks whose callbacks block too long).
+                if (ThreadHelper.CheckAccess())
                 {
-                    return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                    handled = _inputHandler.HandleKey(key, ctrl, shift, alt);
+                }
+                else
+                {
+                    ThreadHelper.JoinableTaskFactory.Run(async () =>
+                    {
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        handled = _inputHandler.HandleKey(key, ctrl, shift, alt);
+                    });
                 }
 
-                // GetAsyncKeyState reads the *physical* modifier state (as opposed to the
-                // message stream), so it's authoritative even if we later swallow a key.
-                bool ctrl = (NativeMethods.GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0;
-                bool shift = (NativeMethods.GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
-                bool alt = (NativeMethods.GetAsyncKeyState((int)Keys.Menu) & 0x8000) != 0;
-
-                // Cheap pre-filter: plain typing keys that InputHandler can't possibly act on
-                // return here immediately, without running the handler at all.
-                if (IsInteresting(key, ctrl, shift, alt))
+                if (handled)
                 {
-                    bool handled = false;
-
-                    // The hook is installed on the main thread, so HandleKey normally runs
-                    // directly here. The else is defensive only; its wait must stay bounded
-                    // (Windows removes low-level hooks whose callbacks block too long).
-                    if (ThreadHelper.CheckAccess())
-                    {
-                        handled = _inputHandler.HandleKey(key, ctrl, shift, alt);
-                    }
-                    else
-                    {
-                        ThreadHelper.JoinableTaskFactory.Run(async () =>
-                        {
-                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                            handled = _inputHandler.HandleKey(key, ctrl, shift, alt);
-                        });
-                    }
-
-                    if (handled)
-                    {
-                        return (IntPtr)1; // swallow the key-down — VS/VsVim never see it
-                    }
+                    return (IntPtr)1; // swallow the key-down — VS/VsVim never see it
                 }
             }
 
@@ -158,6 +172,25 @@ namespace MyExtension.Hooks
         /// </summary>
         private bool IsInteresting(Keys key, bool ctrl, bool shift, bool alt) =>
             _inputHandler.IsKeyOfInterest(key, ctrl, shift, alt);
+
+        /// <summary>m16 (BP-10): true when the hook event is a real key event (HC_ACTION), false
+        /// for a peeked event (HC_NOREMOVE) that must be passed through untouched. The pure seam
+        /// the callback gates on.</summary>
+        internal static bool IsActionEvent(int nCode) => nCode == HC_ACTION;
+
+        /// <summary>m10 (BP-5): true only for a key-down that passes the focus check. A key-up
+        /// (WM_KEYUP) returns false WITHOUT consulting the focus check — the reorder avoids the
+        /// two Win32 calls (GetForegroundWindow + GetWindowThreadProcessId) on every key-up. The
+        /// pure seam the callback gates on.</summary>
+        internal static bool ShouldProcessKey(int wParam, Func<bool> isFocused)
+        {
+            bool isKeyDown = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
+            if (!isKeyDown)
+            {
+                return false;
+            }
+            return isFocused();
+        }
 
         /// <summary>
         /// Installs the low-level hook. <c>dwThreadId = 0</c> makes it global (all threads).

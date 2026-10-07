@@ -114,7 +114,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `MyExtension/Vim/Utils/VimModeClassifier.cs` | Pure Vim ModeKind → typing flag + friendly name classifier (the `vim-mode=` truth table). |
 | `Telescope/Overlay/Utils/OverlayShowState.cs` | State-based guard for the deferred `ShowDialog()` (open-then-close race). |
 | `Telescope/Overlay/Utils/FocusTargetModel.cs` | Pure pane-focus state machine — the GEOMETRIC directional move (Ctrl+H/J/K/L = left/down/up/right — the collapsed single focus resolver, absorbing the deleted `PaneNavigationEngine`), the logged no-op edges, and the click normalization behind `[Telescope] focus target=Input|List|Preview` (evolved from the M34 two-state model). |
-| `Telescope/Overlay/Utils/Panes/*.cs` | The pane host: `IPane` (Id token `Input|List|Preview`, content, `Activate`/`Deactivate`) + `PaneHost` (ordered registry, focused-pane tracking, click normalization) + `PromptPane`/`ListPane`/`PreviewPane` + `PaneSelectionSync` (the native-arrow adoption math). |
+| `Telescope/Overlay/Utils/Panes/*.cs` | The pane host: `IPane` (Id token `Input|List|Preview`, content, `Activate`/`Deactivate`) + `PaneHost` (ordered registry, focused-pane tracking, click normalization) + `PromptPane`/`ListPane`/`PreviewPane`. |
 | `Telescope/Overlay/Utils/LineIndex.cs` | Pure line → (line, offset) index shared by the preview caret placement + blank-line fallback. |
 | `Telescope/Overlay/Utils/IPreviewEditor.cs` | The preview pane's editor seam (`Show`/`ApplyCaret`/`Focus`/`Dispose`): the overlay delegates the REAL read-only editor view hosting (create/reuse by mtime, caret application, dispose) to a host-supplied implementation — VS-SDK-coupled view creation stays out of the Telescope library. |
 | `Telescope/Overlay/Utils/BlockCaretStyle.cs` | Shared frozen white block-caret brush/geometry for the prompt + tool-window + editor-view surfaces. |
@@ -339,7 +339,7 @@ needs a test must emit a deterministic diagnostic. The canonical lines are:
 Two hermetic test projects, both run with `dotnet run`, both supporting a
 **substring filter** as the first arg and `--list`:
 
-- `dotnet run --project tests/Telescope.Tests` — **297 tests**. Telescope overlay
+- `dotnet run --project tests/Telescope.Tests` — **319 tests**. Telescope overlay
   navigation + insert/normal mode (`OverlayKeyHandler`), file search
   (`FzfFilter`), file open (`FileFinder`), results formatting, buffered log
   writer (`LogFileWriter`), preview-pane vim motions (`TextMotionNavigator`),
@@ -360,7 +360,7 @@ Two hermetic test projects, both run with `dotnet run`, both supporting a
   (`PromptMotionRouter`), the pane-failure fallback (`PaneFailureTracker`), the
   results column model (`ResultColumn`/`ColumnVisibilityModel`), and the preview
   caret-map/diagnostic seams (`PreviewCaretMap`/`PreviewDiagnostics`).
-- `dotnet run --project tests/NeoVisual.Tests` — **212 tests**. Keybinding parsing
+- `dotnet run --project tests/NeoVisual.Tests` — **236 tests**. Keybinding parsing
   (`KeybindingConfig`), tool-window type + mode classification
   (`ToolWindowTypeResolver`, `GeneralToolWindowController`,
   `SolutionExplorerController`, `TextInputToolWindowController`), the injected-key
@@ -570,8 +570,8 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (297) and
-  `dotnet run --project tests/NeoVisual.Tests` (212).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (319) and
+  `dotnet run --project tests/NeoVisual.Tests` (236).
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 44 executed GREEN;
   no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.

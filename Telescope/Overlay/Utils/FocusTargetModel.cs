@@ -56,9 +56,11 @@ namespace Telescope.Overlay
     /// A pane's layout rect in overlay DIP coordinates (origin top-left) — the pane analogue of
     /// MyExtension.Navigation.WindowRect (NOT shared: Telescope does not reference MyExtension).
     /// The geometric focus pipeline's input; the overlay measures the panes and pushes the rects
-    /// in via <see cref="FocusTargetModel.SetLayout"/>.
+    /// in via <see cref="FocusTargetModel.SetLayout"/>. Implements the shared
+    /// <see cref="IGeometricRect"/> so the pure <see cref="GeometricSelectionEngine"/> can select
+    /// over it (M4/BP-3).
     /// </summary>
-    internal readonly struct PaneRect
+    internal readonly struct PaneRect : IGeometricRect
     {
         public static readonly PaneRect Empty = new PaneRect(0, 0, 0, 0);
 
@@ -135,6 +137,11 @@ namespace Telescope.Overlay
     {
         private readonly List<KeyValuePair<FocusTarget, PaneRect>> _layout = new();
 
+        // M4 (BP-3/BP-4): the parallel rect list the shared GeometricSelectionEngine iterates —
+        // kept in sync with _layout in SetLayout so the delegation allocates nothing per move
+        // (n17: the per-move List<Candidate> is gone with the mirrored pipeline).
+        private readonly List<PaneRect> _rects = new();
+
         public FocusTarget Current { get; private set; } = FocusTarget.Input;
 
         public void Reset() => Current = FocusTarget.Input;
@@ -147,6 +154,11 @@ namespace Telescope.Overlay
         {
             _layout.Clear();
             _layout.AddRange(layout);
+            _rects.Clear();
+            for (int i = 0; i < layout.Count; i++)
+            {
+                _rects.Add(layout[i].Value);
+            }
         }
 
         public FocusTargetAction Handle(PaneFocusKey key)
@@ -239,40 +251,31 @@ namespace Telescope.Overlay
         /// this (the target did not change — no mode exit on a no-op).</summary>
         public static bool ExitsInsert(FocusTarget target) => target != FocusTarget.Input;
 
+        /// <summary>n16 (BP-17): true when <paramref name="target"/> differs from the current pane —
+        /// the EnterInsert guard so a focus change + <c>focus target=</c> log only fire when the
+        /// machine is not already on the target.</summary>
+        public bool ShouldFocus(FocusTarget target) => target != Current;
+
         // ================================================================
-        // The collapsed geometric selection pipeline (was PaneNavigationEngine — D1/D2).
-        // The SAME pipeline over pane rects as the window navigation's WindowNavigationEngine:
-        // in-direction → aligned → closest gap → largest adjacency → ties to the LAST entry in
-        // the iteration (registry) order. TWO pinned deviations from the window engine:
-        // (1) the candidate filter adds `gap >= 0` — window rects are disjoint by OS
-        // construction (a negative gap cannot occur), but pane rects OVERLAP (the full-width
-        // Input underlies both top panes); a negative gap means "overlapping/behind", not "in
-        // direction". (2) the DPI divide is DROPPED — all panes share one window, so the
-        // closest-gap band is `gap == minGap` (no cross-monitor tolerance to bridge).
+        // The shared geometric selection pipeline (M4/BP-3/BP-4): FocusTargetModel delegates to
+        // the pure GeometricSelectionEngine (the same engine WindowNavigationEngine uses) with the
+        // PANE parameters (allowNegativeGap:false, divide:0, strictEdge:false). The mirrored
+        // SelectTarget pipeline + the per-move List<Candidate> allocation (n17) are gone.
         // ================================================================
 
-        private readonly struct Candidate
-        {
-            public readonly FocusTarget Id;
-            public readonly int Gap;
-            public readonly int Adjacency;
-
-            public Candidate(FocusTarget id, int gap, int adjacency)
-            {
-                Id = id;
-                Gap = gap;
-                Adjacency = adjacency;
-            }
-        }
+        /// <summary>M4 (BP-3/BP-4): the capability seam — FocusTargetModel delegates to the shared
+        /// <see cref="GeometricSelectionEngine"/> (the mirrored <c>SelectTarget</c> pipeline is
+        /// gone). Pinned by <c>Run_FocusTargetModel_DirectionTable</c>.</summary>
+        internal static bool UsesSharedGeometricEngine => true;
 
         /// <summary>(the pane rects, the focused pane, the direction) → the target pane, or
         /// null when NO pane lies in that direction (the caller no-ops — no wrap).
         /// <paramref name="panes"/> MUST be in registry order [Input, List, Preview] — the
-        /// tie-break iterates it and the LAST tie wins (the <c>&gt;=</c> comparison below).
-        /// BP-12 (m6): the mirrored <c>SelectTarget</c> pipeline was renamed to this single
+        /// tie-break iterates it and the LAST tie wins (the <c>&gt;=</c> comparison in the shared
+        /// engine). BP-12 (m6): the mirrored <c>SelectTarget</c> pipeline was renamed to this single
         /// direction→target resolver (the method name <c>SelectTarget</c> is gone — the pinned
         /// tie-break + no-op edges survive byte-identically).</summary>
-        private static FocusTarget? ResolveTarget(
+        private FocusTarget? ResolveTarget(
             IReadOnlyList<KeyValuePair<FocusTarget, PaneRect>> panes,
             FocusTarget current,
             PaneFocusKey direction)
@@ -283,52 +286,13 @@ namespace Telescope.Overlay
                 return null;   // no layout yet (pre-RefreshLayout) — a safe no-op
             }
 
-            List<Candidate> passing = new List<Candidate>();
-            int minGap = int.MaxValue;
-            for (int i = 0; i < panes.Count; i++)
-            {
-                if (panes[i].Key == current)
-                {
-                    continue;
-                }
-                PaneRect c = panes[i].Value;
-                if (c.IsEmpty || !IsInDirection(c, active, direction) || !IsAligned(c, active, direction))
-                {
-                    continue;
-                }
-                int gap = c.GapTo(active, direction);
-                if (gap < 0)
-                {
-                    continue;   // THE PINNED DEVIATION: overlapping/behind — not "in direction"
-                }
-                passing.Add(new Candidate(panes[i].Key, gap, c.Adjacency(active, PerpendicularAxis(direction))));
-                if (gap < minGap)
-                {
-                    minGap = gap;
-                }
-            }
-
-            if (passing.Count == 0)
+            int? index = GeometricSelectionEngine.SelectTarget(
+                active, _rects, DirectionOf(direction), allowNegativeGap: false, divide: 0, strictEdge: false);
+            if (index == null)
             {
                 return null;
             }
-
-            FocusTarget? best = null;
-            int bestAdjacency = int.MinValue;
-            foreach (Candidate candidate in passing)
-            {
-                if (candidate.Gap > minGap)
-                {
-                    continue;   // outside the closest-gap band (the divide is dropped — §1.2)
-                }
-                if (best == null || candidate.Adjacency >= bestAdjacency)
-                {
-                    best = candidate.Id;   // ">=" — the LAST tie in registry order wins (pinned)
-                    bestAdjacency = candidate.Adjacency;
-                }
-            }
-
-            return best;
+            return panes[index.Value].Key;
         }
 
         private static PaneRect GetRect(IReadOnlyList<KeyValuePair<FocusTarget, PaneRect>> panes, FocusTarget id)
@@ -343,29 +307,14 @@ namespace Telescope.Overlay
             return PaneRect.Empty;
         }
 
-        private static PaneAxis PerpendicularAxis(PaneFocusKey d)
-            => (d == PaneFocusKey.Up || d == PaneFocusKey.Down) ? PaneAxis.X : PaneAxis.Y;
-
-        private static bool IsInDirection(PaneRect c, PaneRect a, PaneFocusKey d)
+        private static int DirectionOf(PaneFocusKey d)
         {
             switch (d)
             {
-                case PaneFocusKey.Up: return c.Y < a.Y;
-                case PaneFocusKey.Down: return c.Y > a.Y;
-                case PaneFocusKey.Left: return c.X < a.X;
-                case PaneFocusKey.Right: return c.X > a.X;
-                default: throw new ArgumentOutOfRangeException(nameof(d));
-            }
-        }
-
-        private static bool IsAligned(PaneRect c, PaneRect a, PaneFocusKey d)
-        {
-            switch (d)
-            {
-                case PaneFocusKey.Up:
-                case PaneFocusKey.Down: return a.X <= c.Right && c.X <= a.Right;
-                case PaneFocusKey.Left:
-                case PaneFocusKey.Right: return a.Y <= c.Bottom && c.Y <= a.Bottom;
+                case PaneFocusKey.Up: return GeometricSelectionEngine.Up;
+                case PaneFocusKey.Down: return GeometricSelectionEngine.Down;
+                case PaneFocusKey.Left: return GeometricSelectionEngine.Left;
+                case PaneFocusKey.Right: return GeometricSelectionEngine.Right;
                 default: throw new ArgumentOutOfRangeException(nameof(d));
             }
         }

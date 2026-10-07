@@ -155,8 +155,8 @@ namespace MyExtension.ToolWindows
         /// <summary>
         /// True when a tool window of this type is primarily a text-input surface (search boxes,
         /// command/immediate consoles, browser address bars, ...), so it should start in input
-        /// mode. A7: the SINGLE classification source — <see cref="GeneralToolWindowController.IsTextInputType"/>
-        /// derives from this table, so a new text-input type is classified in exactly one place
+        /// mode. A7: the SINGLE classification source — the controllers derive their initial mode
+        /// from this table, so a new text-input type is classified in exactly one place
         /// (no second switch to keep in sync with the enum + GUID map).
         /// </summary>
         public static bool IsTextInputType(ToolWindowType type)
@@ -165,8 +165,6 @@ namespace MyExtension.ToolWindows
             {
                 case ToolWindowType.FindReplace:
                 case ToolWindowType.FindAdvanced:
-                case ToolWindowType.FindResults1:
-                case ToolWindowType.FindResults2:
                 case ToolWindowType.ObjectSearchWindow:
                 case ToolWindowType.ObjectSearchResultsWindow:
                 case ToolWindowType.ImmediateWindow:

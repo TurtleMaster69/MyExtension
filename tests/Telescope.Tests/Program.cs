@@ -17,6 +17,8 @@ using Telescope.Logging;
 using Telescope.Overlay;
 using TestHarness;
 using static TestHarness.TestScaffold;
+using FzfHit = Telescope.Finders.GrepHit;
+using ImplementationHit = Telescope.Finders.DefinitionHit;
 
 namespace Telescope.Tests
 {
@@ -439,11 +441,11 @@ namespace Telescope.Tests
         public static void Run_ColumnVisibility_ToggleOff()
         {
             var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
-            Assert.Equal("access,file", model.VisibleIdsJoined);
+            Assert.Equal("access,file", ResultsFormatter.ColumnsIdList(model.VisibleIds));
 
             // Toggle a visible column OFF -> it leaves VisibleIds; the others keep their order.
             Assert.True(model.Toggle("access"));
-            Assert.Equal("file", model.VisibleIdsJoined);
+            Assert.Equal("file", ResultsFormatter.ColumnsIdList(model.VisibleIds));
         }
 
         public static void Run_ColumnVisibility_ToggleOn()
@@ -452,7 +454,7 @@ namespace Telescope.Tests
             // Toggle a hidden-by-default column ON (symbol was off) -> appended at its CATALOG
             // position (after file), not the end of the toggle order.
             Assert.True(model.Toggle("symbol"));
-            Assert.Equal("access,file,symbol", model.VisibleIdsJoined);
+            Assert.Equal("access,file,symbol", ResultsFormatter.ColumnsIdList(model.VisibleIds));
         }
 
         public static void Run_ColumnVisibility_OrderStability()
@@ -462,12 +464,12 @@ namespace Telescope.Tests
             Assert.True(model.Toggle("access"));   // off   -> visible: file
             Assert.True(model.Toggle("column"));   // on    -> file,column
             Assert.True(model.Toggle("text"));     // on    -> file,column,text
-            Assert.Equal("file,column,text", model.VisibleIdsJoined);
+            Assert.Equal("file,column,text", ResultsFormatter.ColumnsIdList(model.VisibleIds));
 
             // access (catalog index 0) comes back BEFORE file — a naive append-to-end
             // implementation would yield "file,column,text,access" and fail here.
             Assert.True(model.Toggle("access"));
-            Assert.Equal("access,file,column,text", model.VisibleIdsJoined);
+            Assert.Equal("access,file,column,text", ResultsFormatter.ColumnsIdList(model.VisibleIds));
         }
 
         public static void Run_ColumnVisibility_AllOffRule()
@@ -479,30 +481,30 @@ namespace Telescope.Tests
             Assert.True(model.Toggle("access"));            // visible: file (now the last one)
             Assert.False(model.Toggle("file"), "the last visible column cannot be hidden");
             Assert.True(model.IsVisible("file"));
-            Assert.Equal("file", model.VisibleIdsJoined);   // unchanged
+            Assert.Equal("file", ResultsFormatter.ColumnsIdList(model.VisibleIds));   // unchanged
 
             // Hiding is possible again once another column is visible.
             Assert.True(model.Toggle("symbol"));
             Assert.True(model.Toggle("file"));
-            Assert.Equal("symbol", model.VisibleIdsJoined);
+            Assert.Equal("symbol", ResultsFormatter.ColumnsIdList(model.VisibleIds));
         }
 
         public static void Run_ColumnVisibility_UnknownIdNoOp()
         {
             var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
             Assert.False(model.Toggle("no-such-column"));
-            Assert.Equal("access,file", model.VisibleIdsJoined);   // unchanged, no throw
+            Assert.Equal("access,file", ResultsFormatter.ColumnsIdList(model.VisibleIds));   // unchanged, no throw
         }
 
         public static void Run_ColumnVisibility_IdFormat()
         {
             // The "[Telescope] results columns=<ids>" literal (D5/M-M7): the id list is
             // comma-separated with NO spaces, in the model's visible (catalog) order. The
-            // overlay's log line (Section B) must embed EXACTLY VisibleIdsJoined.
+            // overlay's log line (Section B) must embed EXACTLY ResultsFormatter.ColumnsIdList.
             var model = new ColumnVisibilityModel(FinderColumns.ForFinder("References"));
-            Assert.Equal("access,file", model.VisibleIdsJoined);
+            Assert.Equal("access,file", ResultsFormatter.ColumnsIdList(model.VisibleIds));
             Assert.True(model.Toggle("symbol"));
-            Assert.Equal("access,file,symbol", model.VisibleIdsJoined);
+            Assert.Equal("access,file,symbol", ResultsFormatter.ColumnsIdList(model.VisibleIds));
         }
 
         public static void Run_ResultRowCells_OrderedCells()
@@ -512,7 +514,7 @@ namespace Telescope.Tests
             // column shifts the cells left). D3: presentation-only; Display is untouched.
             var visible = FinderColumns.ForFinder("References").Where(c => c.DefaultVisible).ToList();
             var hit = new ReferenceHit(@"C:\p\Writer.cs", 5, 5, isWrite: true, "Value", "Shared.Value = 1;");
-            var cells = ResultRowCells.Compute(new FinderEntry("Value (write) Writer.cs:5:5 — Shared.Value = 1;", hit), visible);
+            var cells = ResultRowCells.Compute(new FinderEntry("Value (write) Writer.cs:5:5 — Shared.Value = 1;", hit), visible, null);
 
             Assert.Equal(2, cells.Count);
             Assert.Equal("W", cells[0]);          // D2a: write -> W (Section A rev 1)
@@ -524,7 +526,7 @@ namespace Telescope.Tests
             // A payload-less entry (the E("alpha") shape) must not crash the row computation:
             // every cell is the empty string.
             var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();
-            var cells = ResultRowCells.Compute(new FinderEntry("alpha"), visible);
+            var cells = ResultRowCells.Compute(new FinderEntry("alpha"), visible, null);
             Assert.Equal(2, cells.Count);
             Assert.True(cells.All(c => c.Length == 0), "every cell is empty for a null payload");
         }
@@ -534,7 +536,7 @@ namespace Telescope.Tests
             // A payload of the WRONG hit type yields empty cells — never a throw (the getters'
             // Cell<THit> type test).
             var visible = FinderColumns.ForFinder("References").Where(c => c.DefaultVisible).ToList();
-            var cells = ResultRowCells.Compute(new FinderEntry("a file row", new FileHit(@"C:\p\A.cs", 0)), visible);
+            var cells = ResultRowCells.Compute(new FinderEntry("a file row", new FileHit(@"C:\p\A.cs", 0)), visible, null);
             Assert.Equal(2, cells.Count);
             Assert.True(cells.All(c => c.Length == 0), "a foreign payload yields empty cells");
         }
@@ -542,7 +544,7 @@ namespace Telescope.Tests
         public static void Run_ResultRowCells_NullEntryEmptyCells()
         {
             var visible = FinderColumns.ForFinder("Files").Where(c => c.DefaultVisible).ToList();
-            var cells = ResultRowCells.Compute(null, visible);
+            var cells = ResultRowCells.Compute(null, visible, null);
             Assert.Equal(2, cells.Count);
             Assert.True(cells.All(c => c.Length == 0), "a null entry yields empty cells");
         }
@@ -1021,6 +1023,10 @@ namespace Telescope.Tests
                     finally
                     {
                         LogFileWriter.TimerScheduler = null;
+                        // m52 (BP-D2): Close() after nulling the seam disposes + nulls the static
+                        // _flushTimer, so the next Write recreates a real Timer instead of leaving
+                        // the injected FakeTimer in place (blocking the real ~200ms timer).
+                        LogFileWriter.Close();
                     }
                 });
             }
@@ -1049,7 +1055,58 @@ namespace Telescope.Tests
                     finally
                     {
                         LogFileWriter.TimerScheduler = null;
+                        // m52 (BP-D2): Close() after nulling the seam disposes + nulls the static
+                        // _flushTimer, so the next Write recreates a real Timer instead of leaving
+                        // the injected FakeTimer in place (blocking the real ~200ms timer).
+                        LogFileWriter.Close();
                     }
+                });
+            }
+        }
+
+        // ================================================================
+        // LogFileWriter flush-timer restore (BP-D2/m52) — the two FlushTimer
+        // tests above inject `TimerScheduler = cb => new FakeTimer()` and their
+        // finally only nulls TimerScheduler, so the static `_flushTimer` stays
+        // the injected FakeTimer — blocking the real ~200ms timer for every
+        // later test (GetWriter only re-arms `if (_flushTimer is Timer t)`).
+        // The fix: Close() after TimerScheduler = null (disposes + nulls
+        // _flushTimer) so the next Write recreates a real Timer, plus the
+        // `FlushTimerIsReal` seam to observe the restore without reflection.
+        // RED: `LogFileWriter.FlushTimerIsReal` does not exist yet -> compile
+        //      error (CS0117).
+        // ================================================================
+
+        public static void Run_LogFileWriter_FlushTimerRestored()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    // Start clean: Close() disposes + nulls any prior _flushTimer so
+                    // EnsureTimer() uses the injected seam below.
+                    LogFileWriter.Close();
+                    LogFileWriter.TimerScheduler = cb => new FakeTimer();
+                    try
+                    {
+                        LogFileWriter.Write("x");
+                        Assert.False(LogFileWriter.FlushTimerIsReal,
+                            "the injected FakeTimer must be observable as NOT a real Timer");
+                    }
+                    finally
+                    {
+                        LogFileWriter.TimerScheduler = null;
+                        // THE FIX (BP-D2/m52): Close() after nulling the seam disposes +
+                        // nulls the static _flushTimer, so the next Write recreates a real
+                        // ~200ms Timer instead of leaving the FakeTimer in place.
+                        LogFileWriter.Close();
+                    }
+
+                    // After the restore, a fresh Write must re-arm a REAL Timer.
+                    LogFileWriter.Write("x");
+                    Assert.True(LogFileWriter.FlushTimerIsReal,
+                        "after TimerScheduler = null + Close(), the next Write must recreate a real Timer");
                 });
             }
         }
@@ -1288,19 +1345,33 @@ namespace Telescope.Tests
 
         public static void Run_FzfFilter_TimeoutRace()
         {
+            // BP-D18 (M10): the stub's `ping -n 2 127.0.0.1` (≈1s) raced FilterTimeoutMs=1000 — a
+            // wall-clock boundary race. The DelayFactory seam makes the boundary deterministic: the
+            // timeout delay is a task the test controls (a TaskCompletionSource); the stub emits
+            // immediately; the test completes the timeout task AFTER the stub has emitted, so
+            // winner == timeout with all.IsCompleted -> the boundary fast path returns the filtered
+            // output (NOT the unfiltered list), no spurious timeout line.
+            // COMPILE-RED: `FzfFilter.DelayFactory` does not exist yet -> CS0117.
             using (var dir = new TempDir())
             {
                 string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
                 WithLogPath(logPath, () =>
                 {
                     string stubPath = Path.Combine(dir.Path, "fzf-boundary.cmd");
-                    File.WriteAllText(stubPath,
-                        "@echo off\r\n" +
-                        "ping -n 2 127.0.0.1 > nul\r\n" +
-                        "echo alpha.cs\r\n");
+                    File.WriteAllText(stubPath, "@echo off\r\necho alpha.cs\r\n");
 
+                    var timeoutTcs = new TaskCompletionSource<bool>();
                     var fzf = new FzfFilter(stubPath) { FilterTimeoutMs = 1000 };
-                    var result = fzf.FilterAsync(new[] { "alpha.cs", "beta.txt" }, "alp", CancellationToken.None).GetAwaiter().GetResult();
+                    // The timeout delay is the controlled task; the grace delay is a real short
+                    // delay (never reached on the boundary fast path).
+                    fzf.DelayFactory = (ms, ct) => ms == fzf.FilterTimeoutMs ? timeoutTcs.Task : Task.Delay(1);
+
+                    var resultTask = fzf.FilterAsync(new[] { "alpha.cs", "beta.txt" }, "alp", CancellationToken.None);
+                    // Let the stub emit (the output task completes) before completing the timeout at
+                    // the boundary — a bounded wait, not a race (the local stub exits in ms).
+                    Task.Delay(100).GetAwaiter().GetResult();
+                    timeoutTcs.SetResult(true);
+                    var result = resultTask.GetAwaiter().GetResult();
                     LogFileWriter.Flush();
 
                     // The filter completed at the boundary: its output (only the match) must be
@@ -1864,13 +1935,14 @@ namespace Telescope.Tests
 
         public static void Run_TextMotionDispatcher_InsertPlacements()
         {
-            // A (bare) -> InsertAfter, placement Current.
+            // A (bare) -> InsertAfter, placement AfterCaret (m46/BP-16: the placement drift fix —
+            // Apply reports AfterCaret for InsertAfter, matching PromptMotionRouter's bare-a mapping).
             var n = new TextMotionNavigator();
             n.SetText("hello");
             n.MoveTo(2);
             CaretPlacement? placement;
             Assert.True(TextMotionDispatcher.Handle(Key.A, false, n, out placement));
-            Assert.Equal(CaretPlacement.Current, placement);
+            Assert.Equal(CaretPlacement.AfterCaret, placement);
             Assert.Equal(3, n.Caret);
 
             // A (shift) -> InsertEnd, placement End.
@@ -1976,22 +2048,22 @@ namespace Telescope.Tests
             // a (bare) -> InsertAfter, placement AfterCaret (N31/BP-44: a inserts AFTER the caret,
             // distinct from i's Current). RED today: PromptMotionRouter maps bare a to Current and
             // CaretPlacement.AfterCaret does not exist -> compile error.
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.A, false, out placement),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.A, false, out _, out placement),
                 "bare a is an insert placement, not a prompt motion");
             Assert.Equal(CaretPlacement.AfterCaret, placement);
 
             // A (shift) -> InsertEnd, placement End.
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.A, true, out placement),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.A, true, out _, out placement),
                 "shift+A is an insert placement, not a prompt motion");
             Assert.Equal(CaretPlacement.End, placement);
 
             // i (bare) -> generic insert at the current position (OverlayKey.I -> Current).
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.I, false, out placement),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.I, false, out _, out placement),
                 "bare i is an insert placement, not a prompt motion");
             Assert.Equal(CaretPlacement.Current, placement);
 
             // I (shift) -> InsertStart, placement Start.
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.I, true, out placement),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.I, true, out _, out placement),
                 "shift+I is an insert placement, not a prompt motion");
             Assert.Equal(CaretPlacement.Start, placement);
         }
@@ -1999,13 +2071,13 @@ namespace Telescope.Tests
         public static void Run_PromptMotionRouter_MotionsConsumed()
         {
             // Motions ARE consumed by the prompt/preview motion handler (placement null).
-            Assert.True(PromptMotionRouter.ShouldConsume(Key.H, false, out _),
+            Assert.True(PromptMotionRouter.ShouldConsume(Key.H, false, out _, out _),
                 "h is a prompt motion");
-            Assert.True(PromptMotionRouter.ShouldConsume(Key.W, false, out _),
+            Assert.True(PromptMotionRouter.ShouldConsume(Key.W, false, out _, out _),
                 "w is a prompt motion");
-            Assert.True(PromptMotionRouter.ShouldConsume(Key.D4, true, out _),
+            Assert.True(PromptMotionRouter.ShouldConsume(Key.D4, true, out _, out _),
                 "shift+4 ($) is a prompt motion");
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.D4, false, out _),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.D4, false, out _, out _),
                 "bare $ (D4 without shift) is not a prompt motion");
         }
 
@@ -2018,13 +2090,13 @@ namespace Telescope.Tests
             // param to ShouldConsume; the build-agent extends the call sites for it. RED: today
             // ShouldConsume returns true for the prompt surface (j/k/g/G are consumed as caret
             // motions), so each Assert.False fails.
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.J, false, out _),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.J, false, out _, out _),
                 "j must not be consumed in the prompt (selection navigation)");
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.K, false, out _),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.K, false, out _, out _),
                 "k must not be consumed in the prompt (selection navigation)");
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.G, false, out _),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.G, false, out _, out _),
                 "g must not be consumed in the prompt (gg -> Top is a selection move)");
-            Assert.False(PromptMotionRouter.ShouldConsume(Key.G, true, out _),
+            Assert.False(PromptMotionRouter.ShouldConsume(Key.G, true, out _, out _),
                 "G must not be consumed in the prompt (Bottom is a selection move)");
         }
 
@@ -2056,6 +2128,11 @@ namespace Telescope.Tests
         // with M11 (Phase 3). LineOf MUST equal TextMotionNavigator.LineNumber
         // semantics (count of '\n' in text[0..index) + 1).
         // RED: LineIndex does not exist -> compile error (CS0246).
+        // BP-D14 (n18): this is the ONLY cross-implementation check in the suite — it asserts
+        // LineIndex.LineOf equals TextMotionNavigator.LineNumber across 7 inputs (two independent
+        // implementations of the same line-number semantics). It is deliberately KEPT despite the
+        // shared-defect caveat (n18): a shared defect in both implementations would pass here, but
+        // the cross-check still catches a divergence introduced by a change to either side.
         // ================================================================
 
         public static void Run_LineIndex_LineOfMatchesNavigator()
@@ -2402,7 +2479,7 @@ namespace Telescope.Tests
                 File.WriteAllText(a, "// a");
                 File.WriteAllText(b, "// b");
 
-                var finder = new FileFinder(() => new[] { a, b }, _ => { });
+                var finder = new FileFinder(() => null!, new ProjectFileCache(), () => new[] { a, b }, null, _ => { });
                 var entries = finder.GetCandidates();
 
                 Assert.Equal(2, entries.Count);
@@ -2419,7 +2496,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "Alpha.cs");
                 File.WriteAllText(a, "// a");
                 string? opened = null;
-                var finder = new FileFinder(() => new[] { a }, p => opened = p);
+                var finder = new FileFinder(() => null!, new ProjectFileCache(), () => new[] { a }, null, p => opened = p);
 
                 finder.OnSelected(new FinderEntry("Alpha.cs", new FileHit(a, 0)));
                 Assert.Equal(a, opened);
@@ -2432,7 +2509,7 @@ namespace Telescope.Tests
             {
                 string missing = Path.Combine(dir.Path, "Ghost.cs");
                 int opened = 0;
-                var finder = new FileFinder(() => new[] { missing }, _ => opened++);
+                var finder = new FileFinder(() => null!, new ProjectFileCache(), () => new[] { missing }, null, _ => opened++);
 
                 finder.OnSelected(new FinderEntry("Ghost.cs", new FileHit(missing, 0)));
                 Assert.Equal(0, opened);
@@ -2458,7 +2535,7 @@ namespace Telescope.Tests
 
                 int count = 0;
                 var cache = new ProjectFileCache();
-                var finder = new FileFinder(cache, () => { count++; return new[] { a }; }, _ => { });
+                var finder = new FileFinder(() => null!, cache, null, () => { count++; return new[] { a }; }, _ => { });
 
                 finder.GetCandidates();
                 finder.GetCandidates();
@@ -2701,7 +2778,7 @@ namespace Telescope.Tests
                 string b = Path.Combine(dir.Path, "B.cs");
                 File.WriteAllText(b, "// nothing here\n");
 
-                var finder = new CodeIssuesFinder(() => new[] { a, b }, _ => { });
+                var finder = new CodeIssuesFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a, b }, _ => { });
                 var entries = finder.GetCandidates();
 
                 Assert.Equal(2, entries.Count);
@@ -2718,7 +2795,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "var todoList = new List<int>();\nint total = 1;\n");
 
-                var finder = new CodeIssuesFinder(() => new[] { a }, _ => { });
+                var finder = new CodeIssuesFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 Assert.Equal(0, finder.GetCandidates().Count);
             }
         }
@@ -2731,7 +2808,7 @@ namespace Telescope.Tests
                 File.WriteAllText(a, "line one\n// TODO: here\n");
 
                 CodeIssue? opened = null;
-                var finder = new CodeIssuesFinder(() => new[] { a }, issue => opened = issue);
+                var finder = new CodeIssuesFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, issue => opened = issue);
                 var entry = finder.GetCandidates()[0];
 
                 finder.OnSelected(entry);
@@ -2749,7 +2826,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// TODO: one\n");
 
-                var finder = new CodeIssuesFinder(() => new[] { a }, _ => { });
+                var finder = new CodeIssuesFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 var first = finder.GetCandidates();
                 Assert.Equal(1, first.Count);
 
@@ -3047,34 +3124,12 @@ namespace Telescope.Tests
         }
 
         // ================================================================
-        // GotoDispatcher — the single/multi-hit goto decision (Gap 6 D2)
-        // (pure static seam, the CloseWindowCommand/DiagnosticNavigator pattern)
-        // RED: `GotoDispatcher` / `GotoDecision` do not exist yet -> compile error (CS0246)
+        // GotoDispatcher (BP-23 / n15): the three Run_GotoDispatcher_* tests were DELETED — the
+        // GotoDispatcher class is deleted by the build (the one-line Decide is inlined at the
+        // single call site). The single/multi-hit behavior is pinned by the byte-stable
+        // `[Telescope] goto-direct finder=... file=... line=...` diagnostic + the deferred
+        // `telescope-goto` gate (E2E-CR77-1).
         // ================================================================
-
-        public static void Run_GotoDispatcher_SingleHitIsDirectJump()
-        {
-            // AC1: exactly 1 hit -> open it directly (no overlay).
-            Assert.Equal(GotoDecision.DirectJump, GotoDispatcher.Decide(1));
-        }
-
-        public static void Run_GotoDispatcher_ZeroHitsOpensOverlay()
-        {
-            // The pinned empty-result behavior (D2/X7): 0 hits STILL opens the overlay — it
-            // shows the empty state and the user can retype (LazyVim shows an empty list,
-            // never a silent no-op).
-            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(0));
-            // Defensive: a negative count can never come from List.Count, but the seam pins it
-            // on the overlay side too (never DirectJump).
-            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(-1));
-        }
-
-        public static void Run_GotoDispatcher_MultipleHitsOpenOverlay()
-        {
-            // AC2: multiple hits -> the Telescope overlay with the corresponding finder.
-            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(2));
-            Assert.Equal(GotoDecision.OpenOverlay, GotoDispatcher.Decide(5));
-        }
 
         // ================================================================
         // GrepFinder — query-driven live grep over the solution's files
@@ -3089,7 +3144,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// NEEDLE here\n");
 
-                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 Assert.Equal(0, finder.GetCandidates("").Count);
             }
         }
@@ -3103,7 +3158,7 @@ namespace Telescope.Tests
                 string b = Path.Combine(dir.Path, "B.cs");
                 File.WriteAllText(b, "// nothing here\n");
 
-                var finder = new GrepFinder(() => new[] { a, b }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a, b }, _ => { });
                 // Case-insensitive substring: "needle" matches BOTH "NEEDLE here" (line 2) and
                 // "needle again" (line 4); the non-matching "middle" line and B.cs are excluded.
                 var entries = finder.GetCandidates("needle");
@@ -3120,7 +3175,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "first\nNEEDLE here\n");
 
-                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 var entry = finder.GetCandidates("NEEDLE")[0];
                 // Deterministic {fileName}:{line}: {lineText} display (1-based line, fileName only).
                 Assert.Equal("A.cs:2: NEEDLE here", entry.Display);
@@ -3134,7 +3189,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "x\n// NEEDLE x\n");
 
-                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 var entry = finder.GetCandidates("NEEDLE")[0];
                 // The GrepHit payload must round-trip through FinderEntry.Payload so OnSelected can
                 // recover the exact file/line/text to open.
@@ -3154,7 +3209,7 @@ namespace Telescope.Tests
                 File.WriteAllText(a, "first\n// NEEDLE x\n");
 
                 GrepHit? opened = null;
-                var finder = new GrepFinder(() => new[] { a }, hit => opened = hit);
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, hit => opened = hit);
                 var entry = finder.GetCandidates("NEEDLE")[0];
 
                 finder.OnSelected(entry);
@@ -3174,7 +3229,7 @@ namespace Telescope.Tests
                 for (int i = 0; i < 500; i++) { sb.AppendLine("NEEDLE " + i); }
                 File.WriteAllText(a, sb.ToString());
 
-                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 var entries = finder.GetCandidates("NEEDLE");
                 Assert.True(entries.Count > 0, "hits are still returned up to the cap");
                 Assert.True(entries.Count <= 200, $"hit cap bounds the result set (got {entries.Count})");
@@ -3198,7 +3253,7 @@ namespace Telescope.Tests
 
                 int count = 0;
                 var cache = new ProjectFileCache();
-                var finder = new GrepFinder(cache, () => { count++; return new[] { a }; }, _ => { });
+                var finder = new GrepFinder(() => null!, cache, new FileContentCache(500), () => { count++; return new[] { a }; }, _ => { });
 
                 finder.GetCandidates("NEEDLE");
                 finder.GetCandidates("NEEDLE2");
@@ -3216,7 +3271,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
 
-                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 var syncHits = finder.GetCandidates("needle");
 
                 // M4: the per-file content scan must return the SAME hits when it runs off-thread
@@ -3249,7 +3304,7 @@ namespace Telescope.Tests
                 string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
                 WithLogPath(logPath, () =>
                 {
-                    var finder = new GrepFinder(() => new[] { "a" }, _ => { });
+                    var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { "a" }, _ => { });
 
                     // m27: use the public GetCandidates() path (no reflection). GrepFinder is
                     // query-driven: its GetCandidates(string) override short-circuits on an empty
@@ -3282,7 +3337,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "class A\n{\n    int alpha;\n}");
 
-                var finder = new GrepFinder(() => new[] { a }, _ => { });
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
 
                 Assert.True(finder.IsQueryDriven, "GrepFinder is query-driven (GetCandidates(query))");
                 Assert.True(finder.GetCandidates("").Count == 0, "empty query -> no candidates (short-circuit)");
@@ -3426,7 +3481,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// NEEDLE here\n");
 
-                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, _ => { });
                 Assert.Equal(0, finder.GetCandidates("").Count);
             }
         }
@@ -3438,7 +3493,7 @@ namespace Telescope.Tests
                 string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
                 WithLogPath(logPath, () =>
                 {
-                    var finder = new FzfFinder(() => new[] { "a" }, _ => { }, new FakeFzfEngine(true));
+                    var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { "a" }, _ => { });
 
                     // The empty-query path is a clean empty: no gather log and no failure log.
                     var entries = finder.GetCandidates("");
@@ -3463,7 +3518,7 @@ namespace Telescope.Tests
                 {
                     LogFileWriter.LogPath = logPath;
                     var engine = new FakeFzfEngine(true);
-                    var finder = new FzfFinder(() => new[] { "a" }, _ => { }, engine);
+                    var finder = new FzfFinder(() => null!, new ProjectFileCache(), engine, new FileContentCache(500), () => new[] { "a" }, _ => { });
 
                     // The cleared-prompt path (async) must short-circuit: 0 candidates, no gather
                     // log, and NO fzf spawn (finding 1).
@@ -3496,7 +3551,7 @@ namespace Telescope.Tests
                     string a = Path.Combine(dir.Path, "A.cs");
                     File.WriteAllText(a, "alpha\nFUZZYPROBE here\nbeta\n");
 
-                    var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                    var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, _ => { });
                     var entries = await finder.GetCandidatesAsync("FUZZYPROBE");
                     LogFileWriter.Flush();
 
@@ -3518,7 +3573,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "first\nNEEDLE here\n");
 
-                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, _ => { });
                 var entry = (await finder.GetCandidatesAsync("NEEDLE"))[0];
                 // Deterministic {fileName}:{line}: {lineText} display (1-based line, fileName only).
                 Assert.Equal("A.cs:2: NEEDLE here", entry.Display);
@@ -3532,7 +3587,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "x\n// NEEDLE x\n");
 
-                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, _ => { });
                 var entry = (await finder.GetCandidatesAsync("NEEDLE"))[0];
                 // The FzfHit payload must round-trip through FinderEntry.Payload so OnSelected can
                 // recover the exact file/line/text to open.
@@ -3552,7 +3607,7 @@ namespace Telescope.Tests
                 File.WriteAllText(a, "first\n// NEEDLE x\n");
 
                 FzfHit? opened = null;
-                var finder = new FzfFinder(() => new[] { a }, hit => opened = hit, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, hit => opened = hit);
                 var entry = (await finder.GetCandidatesAsync("NEEDLE"))[0];
 
                 finder.OnSelected(entry);
@@ -3572,7 +3627,7 @@ namespace Telescope.Tests
                 for (int i = 0; i < 500; i++) { sb.AppendLine("NEEDLE " + i); }
                 File.WriteAllText(a, sb.ToString());
 
-                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, _ => { });
                 var entries = await finder.GetCandidatesAsync("NEEDLE");
                 Assert.True(entries.Count > 0, "hits are still returned up to the cap");
                 Assert.True(entries.Count <= 200, $"hit cap bounds the result set (got {entries.Count})");
@@ -3588,7 +3643,7 @@ namespace Telescope.Tests
 
                 int count = 0;
                 var cache = new ProjectFileCache();
-                var finder = new FzfFinder(cache, () => { count++; return new[] { a }; }, _ => { }, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, cache, new FakeFzfEngine(true), new FileContentCache(500), () => { count++; return new[] { a }; }, _ => { });
 
                 await finder.GetCandidatesAsync("NEEDLE");
                 await finder.GetCandidatesAsync("NEEDLE2");
@@ -3606,7 +3661,7 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "class A\n{\n    int alpha;\n}");
 
-                var finder = new FzfFinder(() => new[] { a }, _ => { }, new FakeFzfEngine(true));
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { a }, _ => { });
 
                 Assert.True(finder.IsQueryDriven, "FzfFinder is query-driven (GetCandidatesAsync(query))");
                 Assert.True(finder.GetCandidates("").Count == 0, "empty query -> no candidates (short-circuit)");
@@ -3623,7 +3678,7 @@ namespace Telescope.Tests
                 string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
                 WithLogPath(logPath, () =>
                 {
-                    var finder = new FzfFinder(() => new[] { "a" }, _ => { }, new FakeFzfEngine(true));
+                    var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), new FileContentCache(500), () => new[] { "a" }, _ => { });
 
                     // The overlay-open path calls the SYNC GetCandidates("") (D2b): it must return 0
                     // candidates and NOT log a "FzfFinder failed to enumerate:" failure.
@@ -3652,7 +3707,7 @@ namespace Telescope.Tests
                     File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
 
                     var engine = new FakeFzfEngine(false);
-                    var finder = new FzfFinder(() => new[] { a }, _ => { }, engine);
+                    var finder = new FzfFinder(() => null!, new ProjectFileCache(), engine, new FileContentCache(500), () => new[] { a }, _ => { });
 
                     // fzf unavailable -> literal case-insensitive substring scan (NOT the full list),
                     // a real hit count, and the fallback diagnostic; no fzf spawn (AC9/D2c).
@@ -3686,7 +3741,7 @@ namespace Telescope.Tests
                 File.WriteAllText(a, "// NEEDLE here\n");
 
                 var engine = new FakeFzfEngine(true);
-                var finder = new FzfFinder(() => new[] { a }, _ => { }, engine);
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), engine, new FileContentCache(500), () => new[] { a }, _ => { });
 
                 using (var cts = new CancellationTokenSource())
                 {
@@ -3860,14 +3915,14 @@ namespace Telescope.Tests
             AssertThrowsArgumentNull(() => new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), null!));
             AssertThrowsArgumentNull(() => new CodeIssuesFinder(() => null!, new ProjectFileCache(), null!));
 
-            // The shared instance is used when passed (reference equality on the private _contentCache).
+            // The shared instance is used when passed (reference equality on the ContentCache seam).
             var shared = new FileContentCache(500);
             var grep = new GrepFinder(() => null!, new ProjectFileCache(), shared);
             var fzf = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), shared);
             var issues = new CodeIssuesFinder(() => null!, new ProjectFileCache(), shared);
-            Assert.True(ReferenceEquals(shared, ReadContentCache(grep)), "GrepFinder uses the injected shared FileContentCache (BP-14)");
-            Assert.True(ReferenceEquals(shared, ReadContentCache(fzf)), "FzfFinder uses the injected shared FileContentCache (BP-14)");
-            Assert.True(ReferenceEquals(shared, ReadContentCache(issues)), "CodeIssuesFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, grep.ContentCache), "GrepFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, fzf.ContentCache), "FzfFinder uses the injected shared FileContentCache (BP-14)");
+            Assert.True(ReferenceEquals(shared, issues.ContentCache), "CodeIssuesFinder uses the injected shared FileContentCache (BP-14)");
         }
 
         // BP-15 (m9): FileContentCache must evict via an O(1) LinkedList+Dictionary LRU (not the O(n)
@@ -3876,12 +3931,9 @@ namespace Telescope.Tests
         // GetLines share the LRU) is pinned so the O(1) rewrite must preserve it.
         public static void Run_FileContentCache_Lru()
         {
-            // RED: the O(1) LRU seam must exist (a LinkedList<string> _lru field).
-            var lruField = typeof(FileContentCache).GetField("_lru",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(lruField != null,
-                "FileContentCache must expose the O(1) LRU seam (_lru LinkedList) — BP-15 (m9)");
-
+            // RED: the O(1) LRU seam must exist (LruOrder — a read-only MRU-first view of the
+            // LinkedList<string> _lru). CS0117: FileContentCache.LruOrder / EntryCount do not exist
+            // yet (BP-D3 m53).
             var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var index = new Dictionary<string, int> { ["a"] = 0, ["b"] = 1, ["c"] = 2 };
             int reads = 0;
@@ -3896,14 +3948,17 @@ namespace Telescope.Tests
             cache.GetLines("b"); // b:2
             cache.GetLines("a"); // touch a -> a:3 (b is now the LRU)
             cache.GetLines("c"); // insert c -> evict b (the LRU), a survives
+
+            // The O(1) LRU seam: MRU-first order + the exact-total invariant (count <= cap).
+            Assert.True(string.Join(",", cache.LruOrder) == "c,a",
+                "LruOrder is MRU-first: c was inserted last, a was touched before it (b evicted)");
+            Assert.True(cache.EntryCount <= 2, "the exact-total invariant holds (count <= cap)");
+
             int before = reads;
             cache.GetLines("a"); // hit (a survived) -> no re-read
             Assert.Equal(before, reads);
             cache.GetLines("b"); // miss (b was evicted) -> re-read
             Assert.Equal(before + 1, reads);
-
-            // The exact-total invariant: count never exceeds the cap.
-            Assert.True(ReadEntryCount(cache) <= 2, "the exact-total invariant holds (count <= cap)");
 
             // GetContent and GetLines share the LRU: a GetContent hit refreshes the LRU position.
             int contentReads = 0;
@@ -3919,6 +3974,12 @@ namespace Telescope.Tests
             int before2 = contentReads;
             cache2.GetContent("a"); // hit (a survived) -> no re-read
             Assert.Equal(before2, contentReads);
+
+            // GetContent shares the LRU: the GetContent HIT above refreshed a's position (a is MRU).
+            Assert.True(string.Join(",", cache2.LruOrder) == "a,c",
+                "GetContent HIT refreshes the LRU position (a is MRU, b evicted)");
+            Assert.Equal(2, cache2.EntryCount);
+
             cache2.GetLines("b");   // miss (b was evicted) -> re-read
             Assert.Equal(before2 + 1, contentReads);
         }
@@ -3943,8 +4004,6 @@ namespace Telescope.Tests
                 .GetValue(cache)!;
         }
 
-        private static int ReadEntryCount(FileContentCache cache) => ReadEntries(cache).Count;
-
         // ================================================================
         // IFinder query fold — GetCandidates(string) + IsQueryDriven (BP-8/L6)
         // RED: `GetCandidates(string)` / `IsQueryDriven` do not exist on IFinder
@@ -3960,7 +4019,7 @@ namespace Telescope.Tests
                 File.WriteAllText(a, "// a");
                 File.WriteAllText(b, "// b");
 
-                var finder = new FileFinder(() => new[] { a, b }, _ => { });
+                var finder = new FileFinder(() => null!, new ProjectFileCache(), () => new[] { a, b }, null, _ => { });
                 var noArg = finder.GetCandidates();
                 var emptyArg = finder.GetCandidates("");
 
@@ -3979,7 +4038,7 @@ namespace Telescope.Tests
 
                 // Written against IFinder so the test pins the NEW interface contract: before the
                 // fold IFinder.GetCandidates() takes no args, so GetCandidates("") does not compile.
-                IFinder finder = new GrepFinder(() => new[] { a }, _ => { });
+                IFinder finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
                 var noArg = finder.GetCandidates();
                 var emptyArg = finder.GetCandidates("");
 
@@ -3995,8 +4054,8 @@ namespace Telescope.Tests
                 string a = Path.Combine(dir.Path, "A.cs");
                 File.WriteAllText(a, "// x\n");
 
-                IFinder grep = new GrepFinder(() => new[] { a }, _ => { });
-                IFinder files = new FileFinder(() => new[] { a }, _ => { });
+                IFinder grep = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
+                IFinder files = new FileFinder(() => null!, new ProjectFileCache(), () => new[] { a }, null, _ => { });
 
                 Assert.True(grep.IsQueryDriven, "GrepFinder is query-driven");
                 Assert.False(files.IsQueryDriven, "FileFinder is not query-driven");
@@ -4610,21 +4669,23 @@ namespace Telescope.Tests
             Assert.Equal(FocusTarget.List, model.Current);
         }
 
-        // BP-12 (m6): the mirrored geometric pipeline (SelectTarget) must be replaced by a ~10-line
-        // direction->target table for the fixed 3-pane layout. The table MUST reproduce the pinned
-        // moves byte-identically (the Ctrl+K Input->Preview tie-break + the no-op edges). RED: today
-        // SelectTarget (the mirrored pipeline) still exists -> the reflection check fails. The
-        // behavior assertions pin the pinned moves the table must preserve; the ~30 Run_FocusTarget_*
-        // tests stay GREEN. The standard layout (NewModelAt): Input full-width below, List/Preview
-        // on top.
+        // BP-6 (M4): the mirrored geometric pipeline (SelectTarget) must be replaced by the shared
+        // GeometricSelectionEngine (the pure engine both FocusTargetModel.ResolveTarget and
+        // WindowNavigationEngine.SelectTarget delegate to — the plan's decision, NOT the fallback
+        // direction->target table). The engine MUST reproduce the pinned moves byte-identically (the
+        // Ctrl+K Input->Preview tie-break + the no-op edges). RED: the capability seam
+        // UsesSharedGeometricEngine does not exist yet -> CS0117 (compile-RED). The behavior
+        // assertions pin the pinned moves the shared engine must preserve; the ~30
+        // Run_FocusTarget_* tests stay GREEN.
+        // The standard layout (NewModelAt): Input full-width below, List/Preview on top.
         public static void Run_FocusTargetModel_DirectionTable()
         {
             // RED: the mirrored geometric pipeline (SelectTarget) must be GONE — replaced by the
-            // direction->target table (BP-12). Today it still exists -> this assertion fails.
-            var selectTarget = typeof(FocusTargetModel).GetMethod("SelectTarget",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            Assert.True(selectTarget == null,
-                "FocusTargetModel.SelectTarget (the mirrored geometric pipeline) must be replaced by a direction->target table (BP-12)");
+            // shared GeometricSelectionEngine delegation (BP-3/BP-4). The seam does not exist yet
+            // -> CS0117 (compile-RED). The behavior assertions below pin the moves the shared
+            // engine must preserve byte-identically.
+            Assert.True(FocusTargetModel.UsesSharedGeometricEngine,
+                "FocusTargetModel must delegate to the shared GeometricSelectionEngine (BP-3/BP-4) — the mirrored SelectTarget pipeline is gone");
 
             // Ctrl+K Input -> Preview (the pinned tie-break: the equal-width last-in-list net).
             var model = NewModelAt(FocusTarget.Input);
@@ -4705,17 +4766,10 @@ namespace Telescope.Tests
         // RED: `PaneSelectionSync` doesn't exist -> compile error (CS0246).
         // ================================================================
 
-        // BP-18 (n6): the over-engineered PaneSelectionSync.Steps wrapper must be GONE — the call
-        // site inlines the one-line subtraction. RED: today Steps still exists -> the assertion
-        // fails. The old Run_PaneSelectionSync_Steps (which pinned the sign contract of the deleted
-        // method) is DELETED.
-        public static void Run_PaneSelectionSync_StepsRemoved()
-        {
-            var steps = typeof(PaneSelectionSync).GetMethod("Steps",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-            Assert.True(steps == null,
-                "PaneSelectionSync.Steps must be deleted (BP-18) — the call site inlines the subtraction");
-        }
+        // BP-27 (m41): the PaneSelectionSync shell is deleted (compile-enforced once the class is
+        // gone) — the old reflection-absence test Run_PaneSelectionSync_StepsRemoved is DELETED in
+        // the same step (it referenced typeof(PaneSelectionSync), which would not compile after the
+        // deletion). The pane-focus behavior is pinned by the ~30 Run_FocusTarget_* tests.
 
         // ================================================================
         // PaneHost — the pane contract + host (Feature 7)
@@ -4730,7 +4784,6 @@ namespace Telescope.Tests
             public FakePane(FocusTarget id) { Id = id; Content = new System.Windows.FrameworkElement(); }
             public FocusTarget Id { get; }
             public FrameworkElement Content { get; }
-            public bool IsFocusable => true;
             public void Activate() => Events.Add($"activate:{Id}");
             public void Deactivate() => Events.Add($"deactivate:{Id}");
         }
@@ -4999,10 +5052,17 @@ namespace Telescope.Tests
         public static void Run_FocusTargetModel_IsSingleResolver()
         {
             // BP-1 (D1/D2): the collapse deletes PaneNavigationEngine (the mirrored engine) —
-            // FocusTargetModel is the single pure focus resolver. RED: the type still exists.
-            var engineType = typeof(FocusTargetModel).Assembly.GetType("Telescope.Overlay.PaneNavigationEngine");
-            Assert.True(engineType == null,
-                "PaneNavigationEngine must be deleted (collapsed into FocusTargetModel) — BP-1");
+            // FocusTargetModel is the single pure focus resolver. The deletion is compile-time-
+            // enforced (any reference to the deleted type fails to build), so this test pins the
+            // PUBLIC contract the inlined call site must preserve: the geometric pane-focus moves
+            // (Down from List -> Input, Up from Input -> Preview — the pinned tie-break).
+            var model = NewModelAt(FocusTarget.List);
+            Assert.Equal(FocusTargetAction.Handled, model.Handle(PaneFocusKey.Down));
+            Assert.Equal(FocusTarget.Input, model.Current);
+
+            model = NewModelAt(FocusTarget.Input);
+            Assert.Equal(FocusTargetAction.Handled, model.Handle(PaneFocusKey.Up));
+            Assert.Equal(FocusTarget.Preview, model.Current);
         }
 
         // ================================================================
@@ -5014,10 +5074,8 @@ namespace Telescope.Tests
         {
             // BP-2 (D6): PaneHost derives the previously-active pane from FocusTargetModel.Current
             // instead of storing _active — a desync would log `focus target=X` while pane Y holds
-            // focus. RED: the _active field still exists.
-            var field = typeof(PaneHost).GetField("_active",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(field == null,
+            // focus. RED: the seam does not exist yet -> CS0117 (compile-RED).
+            Assert.False(new PaneHost().StoresActiveField,
                 "PaneHost must not store _active (the FocusTargetModel is the single owner) — BP-2");
         }
 
@@ -5038,8 +5096,18 @@ namespace Telescope.Tests
                 // killing cmd.exe closes the pipe read end and unblocks the write — a grandchild
                 // (e.g. ping.exe) would inherit the pipe read end and survive the kill, stranding
                 // the write (BP-5 test-authoring fix).
+                // BP-D1 (m51): the stub writes a started.txt marker BEFORE entering its infinite
+                // loop; the test polls for the marker (bounded 5s) and only then cancels — proving
+                // the write is genuinely blocked (the marker is written before the loop, so its
+                // presence means the child is alive and holding the pipe) without a wall-clock
+                // guess (the old Thread.Sleep(200) could cancel before the write blocked, passing
+                // vacuously on a slow machine).
                 string cmdPath = Path.Combine(dir.Path, "block.cmd");
-                File.WriteAllText(cmdPath, "@echo off\r\n:loop\r\ngoto loop\r\n");
+                string markerPath = Path.Combine(dir.Path, "started.txt");
+                File.WriteAllText(cmdPath,
+                    "@echo off\r\n" +
+                    $"echo started> \"{markerPath}\"\r\n" +
+                    ":loop\r\ngoto loop\r\n");
 
                 var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 5000 };
                 var big = Enumerable.Range(0, 20000).Select(i => "line-" + i + new string('x', 200)).ToList();
@@ -5047,8 +5115,14 @@ namespace Telescope.Tests
                 using (var cts = new CancellationTokenSource())
                 {
                     var task = fzf.FilterAsync(big, "query", cts.Token);
-                    // Let the write start and block on the full pipe buffer.
-                    Thread.Sleep(200);
+                    // Poll for the marker (bounded 5s) — the write is genuinely blocked once the
+                    // marker is present (the child is alive and holding the pipe).
+                    var deadline = DateTime.UtcNow.AddSeconds(5);
+                    while (!File.Exists(markerPath) && DateTime.UtcNow < deadline)
+                    {
+                        Thread.Sleep(20);
+                    }
+                    Assert.True(File.Exists(markerPath), "the block.cmd stub started (marker written)");
                     cts.Cancel();
 
                     bool returned = false;
@@ -5217,7 +5291,6 @@ namespace Telescope.Tests
             host.Activate(FocusTarget.List);
             Assert.Equal("activate:List", pane.Events[0]);
             Assert.True(pane.Content != null, "the pane's Content is wired (a FrameworkElement)");
-            Assert.True(pane.IsFocusable, "the pane is focusable");
         }
 
         public static void Run_IPane_Contract_Deactivate()
@@ -5339,31 +5412,686 @@ namespace Telescope.Tests
             Assert.Equal(OverlayAction.MoveToFirst, h.Handle(OverlayKey.G));
         }
 
-        // Reads the private _contentCache field of a finder (the shared-cache reference check).
-        private static object ReadContentCache(object finder)
-        {
-            var field = finder.GetType().GetField("_contentCache",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.True(field != null, $"{finder.GetType().Name} has a _contentCache field");
-            return field!.GetValue(finder)!;
-        }
-
         // BP-14 (D7): all three finders must share ONE FileContentCache instance (injected from
         // TelescopeController) — not 3×500-entry independent caches. RED: the finder ctors do not
-        // yet take a shared FileContentCache -> CS1729.
+        // yet take a shared FileContentCache -> CS1729. BP-D3 (m53): the shared-cache reference is
+        // asserted via the ContentCache seam (CS0117 — GrepFinder/FzfFinder/CodeIssuesFinder do not
+        // expose ContentCache yet), not reflection.
         public static void Run_FileContentCache_Shared()
         {
             var shared = new FileContentCache(500);
-            var grep = new GrepFinder(shared, () => new[] { "a.cs" }, _ => { });
-            var fzf = new FzfFinder(shared, () => new[] { "a.cs" }, _ => { }, new FakeFzfEngine(true));
-            var issues = new CodeIssuesFinder(shared, () => new[] { "a.cs" }, _ => { });
+            var grep = new GrepFinder(() => null!, new ProjectFileCache(), shared, () => new[] { "a.cs" }, _ => { });
+            var fzf = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(true), shared, () => new[] { "a.cs" }, _ => { });
+            var issues = new CodeIssuesFinder(() => null!, new ProjectFileCache(), shared, () => new[] { "a.cs" }, _ => { });
 
-            Assert.True(ReferenceEquals(shared, ReadContentCache(grep)),
+            Assert.True(ReferenceEquals(shared, grep.ContentCache),
                 "GrepFinder uses the injected shared FileContentCache (BP-14)");
-            Assert.True(ReferenceEquals(shared, ReadContentCache(fzf)),
+            Assert.True(ReferenceEquals(shared, fzf.ContentCache),
                 "FzfFinder uses the injected shared FileContentCache (BP-14)");
-            Assert.True(ReferenceEquals(shared, ReadContentCache(issues)),
+            Assert.True(ReferenceEquals(shared, issues.ContentCache),
                 "CodeIssuesFinder uses the injected shared FileContentCache (BP-14)");
+        }
+
+        // ================================================================
+        // 106-findings plan — Section A (Phase 0: query-driven finder core)
+        // BP-1 (M1) — GrepFinder.GetCandidatesAsync truly async (no UI-thread block).
+        // RED: the base default GetCandidatesAsync ignores the token and returns the hits.
+        // ================================================================
+
+        public static async Task Run_GrepFinder_GetCandidatesAsync_NoBlock()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// NEEDLE here\n");
+
+                var finder = new GrepFinder(() => null!, new ProjectFileCache(), new FileContentCache(500), () => new[] { a }, _ => { });
+
+                // A pre-cancelled gather must return EMPTY — the async override honors the token
+                // (BP-1). RED today: the base default runs the sync GetCandidates and returns the hits.
+                using (var cts = new CancellationTokenSource())
+                {
+                    cts.Cancel();
+                    var cancelled = await finder.GetCandidatesAsync("NEEDLE", cts.Token);
+                    Assert.Equal(0, cancelled.Count);
+                }
+
+                // A normal gather returns the hits.
+                var hits = await finder.GetCandidatesAsync("NEEDLE");
+                Assert.Equal(1, hits.Count);
+            }
+        }
+
+        // ================================================================
+        // BP-2 (M2) — FzfFinder batches ALL files' lines into ONE fzf --filter call.
+        // RED: the per-file loop calls FilterAsync once per file -> FilterCalls == 2.
+        // ================================================================
+
+        public static async Task Run_FzfFinder_BatchedFilter()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "alpha\nNEEDLE one\nbeta\n");
+                string b = Path.Combine(dir.Path, "B.cs");
+                File.WriteAllText(b, "gamma\nNEEDLE two\ndelta\n");
+
+                var engine = new FakeFzfEngine(true);
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), engine, new FileContentCache(500), () => new[] { a, b }, _ => { });
+
+                var entries = await finder.GetCandidatesAsync("NEEDLE");
+
+                // ONE batched fzf call across BOTH files (not one per file). RED today: 2.
+                Assert.Equal(1, engine.FilterCalls);
+                Assert.Equal(2, entries.Count);
+            }
+        }
+
+        // ================================================================
+        // BP-2 (M2) — FzfLineMapper boundary-aware BuildCandidates/MapBatched.
+        // COMPILE-RED: BuildCandidates/MapBatched do not exist yet -> CS0117.
+        // ================================================================
+
+        public static void Run_FzfLineMapper_Boundary()
+        {
+            // The batched fzf path needs a boundary-aware mapper: BuildCandidates flattens ALL
+            // files' lines into ONE candidate list (each "{fileIndex}\u0001{lineText}") and
+            // MapBatched maps the ranked output back to (fileIndex, lineNumber) in fzf's GLOBAL
+            // rank order (per-file ordinal consumption of duplicate line texts).
+            var filesLines = new List<(string Path, IReadOnlyList<string> Lines)>
+            {
+                ("A.cs", new[] { "alpha", "NEEDLE one", "beta" }),
+                ("B.cs", new[] { "gamma", "NEEDLE two", "NEEDLE one" }),
+            };
+
+            var candidates = FzfLineMapper.BuildCandidates(filesLines);
+            Assert.Equal("0\u0001alpha", candidates[0]);
+            Assert.Equal("1\u0001NEEDLE one", candidates[5]);
+
+            // fzf's global rank order (the matched lines as fzf returned them).
+            var matched = new[] { "1\u0001NEEDLE one", "0\u0001NEEDLE one", "1\u0001NEEDLE two" };
+            var mapped = FzfLineMapper.MapBatched(filesLines, matched);
+
+            Assert.Equal(3, mapped.Count);
+            Assert.Equal(1, mapped[0].FileIndex);
+            Assert.Equal(3, mapped[0].LineNumber);
+            Assert.Equal(0, mapped[1].FileIndex);
+            Assert.Equal(2, mapped[1].LineNumber);
+            Assert.Equal(1, mapped[2].FileIndex);
+            Assert.Equal(2, mapped[2].LineNumber);
+        }
+
+        // ================================================================
+        // BP-4 (m2) — FileContentCache file I/O outside the _gate lock.
+        // RED: the first read holds the lock while blocked in the reader -> the second read
+        // blocks on the lock -> Wait(1000) returns false.
+        // ================================================================
+
+        public static void Run_FileContentCache_IOOutsideLock()
+        {
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var entered = new ManualResetEventSlim(false);
+            var gate = new ManualResetEventSlim(false);
+            var cache = new FileContentCache(
+                timestamp: _ => fixedTime,
+                reader: p =>
+                {
+                    if (p == "a")
+                    {
+                        entered.Set();
+                        gate.Wait(TimeSpan.FromSeconds(5));
+                    }
+                    return new[] { "line" };
+                });
+
+            // The first read blocks inside the reader (holding the lock today).
+            var first = Task.Run(() => cache.GetLines("a"));
+            entered.Wait(TimeSpan.FromSeconds(5));
+
+            // A second read of a DIFFERENT path must complete without waiting for the first.
+            var second = Task.Run(() => cache.GetLines("b"));
+            bool completed = second.Wait(TimeSpan.FromSeconds(1));
+
+            gate.Set();
+            first.Wait();
+
+            Assert.True(completed,
+                "a cold read must not serialize other cache accesses (the file I/O must run outside the lock) — BP-4");
+        }
+
+        // ================================================================
+        // BP-5 (m3) — FzfFinder literal-fallback scan off-thread.
+        // RED: the fallback + cold GetLines run on the calling thread -> recorded == test thread.
+        // ================================================================
+
+        public static async Task Run_FzfFinder_LiteralFallbackOffThread()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "line one\nNEEDLE here\nmiddle\nneedle again\n");
+
+                int testThreadId = Thread.CurrentThread.ManagedThreadId;
+                int recordedThreadId = -1;
+                var cache = new FileContentCache(
+                    timestamp: _ => new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    reader: _ => { recordedThreadId = Thread.CurrentThread.ManagedThreadId; return new[] { "NEEDLE here" }; });
+
+                var finder = new FzfFinder(() => null!, new ProjectFileCache(), new FakeFzfEngine(false), cache, () => new[] { a }, _ => { });
+
+                var entries = await finder.GetCandidatesAsync("NEEDLE");
+
+                Assert.True(entries.Count > 0, "the literal fallback returns hits");
+                Assert.True(recordedThreadId != testThreadId,
+                    $"the literal-fallback scan must run off-thread (recorded {recordedThreadId}, test {testThreadId}) — BP-5");
+            }
+        }
+
+        // ================================================================
+        // BP-6 (m4) — CodeIssuesFinder TODO scan off-thread (the COM Error List walk stays UI-thread).
+        // RED: the hermetic TODO scan runs inline -> recorded == test thread.
+        // ================================================================
+
+        public static void Run_CodeIssuesFinder_TodoScanOffThread()
+        {
+            using (var dir = new TempDir())
+            {
+                string a = Path.Combine(dir.Path, "A.cs");
+                File.WriteAllText(a, "// TODO: fix this\n");
+
+                int testThreadId = Thread.CurrentThread.ManagedThreadId;
+                int recordedThreadId = -1;
+                var cache = new FileContentCache(
+                    timestamp: _ => new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    reader: _ => { recordedThreadId = Thread.CurrentThread.ManagedThreadId; return new[] { "// TODO: fix this" }; });
+
+                var finder = new CodeIssuesFinder(() => null!, new ProjectFileCache(), cache, () => new[] { a }, _ => { });
+
+                var entries = finder.GetCandidates("");
+
+                Assert.True(entries.Count > 0, "the TODO scan returns hits");
+                Assert.True(recordedThreadId != testThreadId,
+                    $"the TODO scan must run off-thread (recorded {recordedThreadId}, test {testThreadId}) — BP-6");
+            }
+        }
+
+        // ================================================================
+        // BP-8 (m7) — FileContentCache GetLines/GetContent share one entry.
+        // RED: GetLines re-reads because the entry's Lines == null -> reader count 1.
+        // ================================================================
+
+        public static void Run_FileContentCache_SharedEntry()
+        {
+            var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            int readerCount = 0;
+            int contentReaderCount = 0;
+            var cache = new FileContentCache(
+                timestamp: _ => fixedTime,
+                reader: _ => { readerCount++; return new[] { "line" }; },
+                contentReader: _ => { contentReaderCount++; return "line\n"; });
+
+            cache.GetContent("a");
+            cache.GetLines("a");
+
+            // GetLines must derive the lines from the cached content (m7) — the reader is never
+            // called. RED today: GetLines re-reads (entry.Lines == null) -> readerCount == 1.
+            Assert.Equal(0, readerCount);
+            Assert.Equal(1, contentReaderCount);
+        }
+
+        // ================================================================
+        // BP-9 (m8 + m9) — FzfFilter suppresses the spurious timeout log on a cancelled gather;
+        // the grace delay carries the cancellation token.
+        // RED (m8): the uncancelled grace delay waits, then logs the timeout line.
+        // ================================================================
+
+        public static void Run_FzfFilter_NoSpuriousTimeoutOnCancel()
+        {
+            using (var dir = new TempDir())
+            {
+                string logPath = Path.Combine(dir.Path, "neovisual-exp.log");
+                WithLogPath(logPath, () =>
+                {
+                    string cmdPath = Path.Combine(dir.Path, "hang.cmd");
+                    File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
+
+                    var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 100 };
+                    using (var cts = new CancellationTokenSource())
+                    {
+                        var task = fzf.FilterAsync(new[] { "alpha" }, "alp", cts.Token);
+                        // Cancel inside the 250ms grace window (the 100ms timeout has fired).
+                        Thread.Sleep(200);
+                        cts.Cancel();
+                        var result = task.GetAwaiter().GetResult();
+                        LogFileWriter.Flush();
+
+                        Assert.Equal(1, result.Count);
+                        Assert.True(result.Contains("alpha"), "cancellation falls back to the full candidate list");
+                        string content = File.Exists(logPath) ? ReadAllTextShared(logPath) : string.Empty;
+                        Assert.False(content.Contains("fzf filter failed: timeout after"),
+                            "a cancelled gather must NOT log the spurious timeout line (m8) — BP-9");
+                    }
+                });
+            }
+        }
+
+        // ================================================================
+        // BP-9 (m9) — the grace delay carries the cancellation token.
+        // RED: the uncancelled grace delay waits the remaining ~200ms after the cancel.
+        // ================================================================
+
+        public static void Run_FzfFilter_GraceDelayToken()
+        {
+            using (var dir = new TempDir())
+            {
+                string cmdPath = Path.Combine(dir.Path, "hang.cmd");
+                File.WriteAllText(cmdPath, "@ping -n 30 127.0.0.1 > nul");
+
+                var fzf = new FzfFilter(cmdPath) { FilterTimeoutMs = 100 };
+                using (var cts = new CancellationTokenSource())
+                {
+                    var task = fzf.FilterAsync(new[] { "alpha" }, "alp", cts.Token);
+                    // Cancel inside the 250ms grace window (the 100ms timeout has fired).
+                    Thread.Sleep(150);
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    cts.Cancel();
+                    var result = task.GetAwaiter().GetResult();
+                    sw.Stop();
+
+                    Assert.Equal(1, result.Count);
+                    Assert.True(result.Contains("alpha"), "cancellation falls back to the full candidate list");
+                    Assert.True(sw.ElapsedMilliseconds <= 150,
+                        $"the grace delay must carry the cancellation token (returned {sw.ElapsedMilliseconds}ms after cancel) — BP-9");
+                }
+            }
+        }
+
+        // ================================================================
+        // BP-11 (m54) — direct unit test for LiteralLineScanner.Scan (coverage addition, NOT a RED).
+        // ================================================================
+
+        public static void Run_LiteralLineScanner_Direct()
+        {
+            // Null lines -> empty.
+            Assert.Equal(0, LiteralLineScanner.Scan(null!, "q", 10).Count);
+            // Empty query -> empty.
+            var lines = new[] { "alpha", "beta" };
+            Assert.Equal(0, LiteralLineScanner.Scan(lines, "", 10).Count);
+            // Zero cap -> empty.
+            Assert.Equal(0, LiteralLineScanner.Scan(lines, "q", 0).Count);
+            // Case-insensitive substring returns the right 1-based lines.
+            var hits = LiteralLineScanner.Scan(new[] { "Alpha", "beta", "ALPHA again" }, "alpha", 10);
+            Assert.Equal(2, hits.Count);
+            Assert.Equal(1, hits[0]);
+            Assert.Equal(3, hits[1]);
+            // The cap bounds the result.
+            var capped = LiteralLineScanner.Scan(new[] { "q", "q", "q", "q" }, "q", 2);
+            Assert.Equal(2, capped.Count);
+        }
+
+        // ================================================================
+        // 106-findings plan — Section B (Phases 2-4)
+        // BP-3 (M4) — the shared GeometricSelectionEngine reproduces BOTH contracts with the
+        // parameters (allowNegativeGap, divide, strictEdge).
+        // COMPILE-RED: `GeometricSelectionEngine` does not exist yet -> CS0246.
+        // ================================================================
+
+        public static void Run_SharedGeometricEngine_Parameters()
+        {
+            // (a) pane params (allowNegativeGap:false, divide:0, strictEdge:false) over the
+            //     NewModelAt layout — Down from List -> Input (Input.Y=60 > List.Y=0, gap=0
+            //     passes the gap>=0 filter), Up from Input -> Preview (the pinned tie-break).
+            var paneRects = new List<PaneRect>
+            {
+                new PaneRect(0, 60, 300, 40),   // Input
+                new PaneRect(0, 0, 100, 60),    // List
+                new PaneRect(100, 0, 200, 60),  // Preview
+            };
+            PaneRect list = paneRects[1];
+            PaneRect input = paneRects[0];
+
+            // Down (1) from List -> Input (index 0).
+            int? down = GeometricSelectionEngine.SelectTarget(list, paneRects, 1, false, 0, false);
+            Assert.Equal(0, down);
+
+            // Up (0) from Input -> Preview (index 2 — the pinned tie-break).
+            int? up = GeometricSelectionEngine.SelectTarget(input, paneRects, 0, false, 0, false);
+            Assert.Equal(2, up);
+
+            // (b) window params (allowNegativeGap:true, divide:settings, strictEdge:true) —
+            //     post-M7 Down c.Y > a.Bottom / Up c.Bottom < a.Y. Active (100,100,100,100)
+            //     Bottom=200; the overlapping candidate is excluded by strictEdge.
+            var active = new PaneRect(100, 100, 100, 100);
+            var windows = new List<PaneRect>
+            {
+                new PaneRect(100, 150, 100, 100),  // overlapping — excluded by strictEdge
+                new PaneRect(100, 250, 50, 50),    // truly below (Y=250 > Bottom=200)
+            };
+            int? below = GeometricSelectionEngine.SelectTarget(active, windows, 1, true, 0, true);
+            Assert.Equal(1, below);
+
+            var aboveWindows = new List<PaneRect>
+            {
+                new PaneRect(100, 150, 100, 100),  // overlapping — excluded by strictEdge
+                new PaneRect(100, 40, 50, 50),     // truly above (Bottom=90 < Y=100)
+            };
+            int? above = GeometricSelectionEngine.SelectTarget(active, aboveWindows, 0, true, 0, true);
+            Assert.Equal(1, above);
+        }
+
+        // ================================================================
+        // BP-7 (M12) — the IsOpen race: a close during the IsAvailableAsync await must leave
+        // the overlay closed (the re-check bails; ShowDialog never fires on a closed window).
+        // The current code sets IsOpen=true + RequestShow() AFTER the await, so a close during
+        // the await leaves IsOpen stuck true. The test models the race in the CURRENT code's
+        // order (Close before RequestShow) and asserts the FIXED behavior.
+        // ================================================================
+
+        public static void Run_TelescopeOverlay_IsOpenRace()
+        {
+            var s = new OverlayShowState();
+            s.Close();          // close during the await (before RequestShow)
+            s.RequestShow();    // the current code's post-await RequestShow
+            Assert.False(s.ShouldShowDialog(), "a close during the await must suppress the dialog");
+        }
+
+        // ================================================================
+        // BP-8 (m1) — SetTextIfChanged skips the LineIndex rebuild when the text is unchanged.
+        // COMPILE-RED: `SetTextIfChanged` does not exist yet -> CS1061.
+        // ================================================================
+
+        public static void Run_PreviewNavigator_SetTextGuarded()
+        {
+            var n = new TextMotionNavigator();
+            n.SetText("alpha\nbeta");
+            n.MoveTo(6); // caret in "beta"
+
+            // Unchanged text: no rebuild, caret preserved.
+            Assert.False(n.SetTextIfChanged("alpha\nbeta"), "unchanged text must not rebuild");
+            Assert.Equal(6, n.Caret);
+
+            // Changed text: rebuild, caret reset to 0.
+            Assert.True(n.SetTextIfChanged("alpha\nbeta\ngamma"), "changed text must rebuild");
+            Assert.Equal(0, n.Caret);
+        }
+
+        // ================================================================
+        // BP-9 (m5) — the results log fires on change only (columns/count/selected/boxText).
+        // COMPILE-RED: `ResultsLogGate` does not exist yet -> CS0246.
+        // ================================================================
+
+        public static void Run_ResultsLog_OnChange()
+        {
+            var gate = new ResultsLogGate();
+
+            // First render always logs.
+            Assert.True(gate.ShouldLog("file,line", 3, 0, 5), "first render logs");
+
+            // Unchanged columns/count/selection/boxText: no log.
+            Assert.False(gate.ShouldLog("file,line", 3, 0, 5), "unchanged state does not log");
+
+            // A selection-only change logs.
+            Assert.True(gate.ShouldLog("file,line", 3, 1, 5), "selection change logs");
+
+            // A count change logs.
+            Assert.True(gate.ShouldLog("file,line", 4, 1, 5), "count change logs");
+
+            // A columns change logs.
+            Assert.True(gate.ShouldLog("file,line,kind", 4, 1, 5), "columns change logs");
+
+            // Back to the last-logged state: no log.
+            Assert.False(gate.ShouldLog("file,line,kind", 4, 1, 5), "unchanged after a change does not log");
+        }
+
+        // ================================================================
+        // BP-11 (m20) — Dispose() from a background thread must marshal to the UI thread and
+        // close the overlay (not swallow the exception and leak it).
+        // COMPILE-RED: the injectable close-overlay seam does not exist yet -> CS1739 (no
+        // 'closeOverlay' parameter on the TelescopeController ctor).
+        // ================================================================
+
+        public static void Run_TelescopeController_DisposeClosesOverlay()
+        {
+            var uiThreadField = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            object? originalDispatcher = uiThreadField!.GetValue(null);
+            try
+            {
+                uiThreadField.SetValue(null, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+
+                bool closed = false;
+                var controller = new TelescopeController(closeOverlay: () => closed = true);
+                var thread = new System.Threading.Thread(() => controller.Dispose());
+                thread.Start();
+                // Pump the UI dispatcher so the marshaled close path can run on this (UI) thread.
+                while (!thread.Join(25))
+                {
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
+                }
+                Assert.True(closed, "Dispose() from a background thread must invoke the close path");
+            }
+            finally
+            {
+                uiThreadField.SetValue(null, originalDispatcher);
+            }
+        }
+
+        // ================================================================
+        // BP-12 (m23) — PaneFailureTracker._emitted must be interlocked: concurrent loggers
+        // emit exactly once. RED today: _emitted is a plain bool; N threads behind a Barrier
+        // can all read false before any writes true -> multiple return true.
+        // ================================================================
+
+        public static void Run_PaneFailureTracker_Interlocked()
+        {
+            // BP-12 (m23): the field must be `int` (Interlocked.Exchange(ref int, 1) == 0) —
+            // net472 has no Interlocked.Exchange(ref bool, ...). RED today: _emitted is a plain
+            // bool -> this assertion fails DETERMINISTICALLY (the N-threads race below may not
+            // manifest on a many-core machine, so the field-type check is the reliable RED).
+            var emittedField = typeof(PaneFailureTracker).GetField("_emitted",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.Equal(typeof(int), emittedField!.FieldType);
+
+            const int n = 16;
+            var tracker = new PaneFailureTracker();
+            var go = 0;
+            var ready = new CountdownEvent(n);
+            var results = new ConcurrentBag<bool>();
+            var threads = new List<Thread>();
+            for (int i = 0; i < n; i++)
+            {
+                var t = new Thread(() =>
+                {
+                    ready.Signal();
+                    // Spin on the shared flag so ALL threads enter ShouldEmit() simultaneously —
+                    // the non-atomic read-modify-write of _emitted then races (RED today).
+                    while (Volatile.Read(ref go) == 0) { Thread.SpinWait(1); }
+                    results.Add(tracker.ShouldEmit());
+                });
+                threads.Add(t);
+                t.Start();
+            }
+            ready.Wait();
+            Volatile.Write(ref go, 1);
+            foreach (var t in threads)
+            {
+                t.Join();
+            }
+            Assert.True(results.Count(r => r) == 1, "exactly one thread must emit");
+        }
+
+        // ================================================================
+        // BP-16 (m46) — the placement drift: TextMotionDispatcher.Apply reports Current for
+        // InsertAfter while PromptMotionRouter reports AfterCaret. The fix aligns Apply to
+        // AfterCaret so the caller applies the SAME placement the router reports (the single
+        // MapKey result, no drift). RED today: Apply reports Current.
+        // ================================================================
+
+        public static void Run_PromptMotionRouter_SingleMapKey()
+        {
+            var n = new TextMotionNavigator();
+            n.SetText("hello");
+            n.MoveTo(2);
+            CaretPlacement? placement;
+            Assert.True(TextMotionDispatcher.Apply(TextMotion.InsertAfter, n, out placement));
+            Assert.Equal(CaretPlacement.AfterCaret, placement);  // RED today: Current
+            Assert.Equal(3, n.Caret);
+        }
+
+        // ================================================================
+        // BP-17 (n16) — ShouldFocus guards the EnterInsert focus log: only focus+log when not
+        // already on the target.
+        // COMPILE-RED: `ShouldFocus` does not exist yet -> CS1061.
+        // ================================================================
+
+        public static void Run_FocusTargetModel_ShouldFocus()
+        {
+            var model = NewModelAt(FocusTarget.Input);
+            Assert.False(model.ShouldFocus(FocusTarget.Input), "already on Input -> no focus");
+            Assert.True(model.ShouldFocus(FocusTarget.List), "not on List -> focus");
+            Assert.True(model.ShouldFocus(FocusTarget.Preview), "not on Preview -> focus");
+        }
+
+        // ================================================================
+        // 106-findings plan — Section C Phase 7 (duplication + dead code)
+        // ================================================================
+
+        // BP-17 (m27): Grep()/Fzf() are byte-identical catalogs (post-m25 both use GrepHit) —
+        // merge into ONE method. RED today: the Fzf catalog types its getters to FzfHit, so a
+        // GrepHit payload renders EMPTY in Fzf vs "A.cs" in Grep.
+        public static void Run_FinderColumns_GrepFzfShared()
+        {
+            var grep = FinderColumns.ForFinder("Grep");
+            var fzf = FinderColumns.ForFinder("Fzf");
+            Assert.Equal(JoinIds(grep), JoinIds(fzf));
+            Assert.Equal(string.Join("|", grep.Select(c => c.Header)),
+                string.Join("|", fzf.Select(c => c.Header)));
+            Assert.Equal(JoinDefaultVisible(grep), JoinDefaultVisible(fzf));
+            // A GrepHit payload renders the same cells in both catalogs (RED today: Fzf renders
+            // empty because its getters are typed to FzfHit).
+            var hit = new GrepHit(@"C:\p\src\A.cs", 2, "NEEDLE here");
+            Assert.Equal(CellOf(grep, "file", hit), CellOf(fzf, "file", hit));
+            Assert.Equal(CellOf(grep, "line", hit), CellOf(fzf, "line", hit));
+            Assert.Equal(CellOf(grep, "text", hit), CellOf(fzf, "text", hit));
+        }
+
+        // BP-18 (m28): Files()/Recent() share structure but the dir-cell getter DIFFERS — the
+        // merge must parameterize the getter, NOT unify it. Files trims the root tail; Recent
+        // returns the full directory. Contract-pinning (the behavior is already correct today).
+        public static void Run_FinderColumns_FilesRecentShared()
+        {
+            var files = FinderColumns.ForFinder("Files", @"C:\proj");
+            var recent = FinderColumns.ForFinder("Recent");
+            var fileHit = new FileHit(@"C:\proj\Services\Foo.cs", 0);
+            var recentHit = new RecentFileHit(@"C:\other\solution\Deep\Dir\Order.cs");
+            Assert.Equal("Services", CellOf(files, "dir", fileHit));   // root-tail trimmed
+            Assert.Equal(@"C:\other\solution\Deep\Dir", CellOf(recent, "dir", recentHit));  // full dir
+        }
+
+        // BP-19 (m29): the 200-hit cap is ONE shared constant, not three per-finder copies.
+        // COMPILE-RED: the shared FinderConstants.HitCap does not exist yet -> CS0246. The
+        // build-agent creates FinderConstants.HitCap (the plan's suggested name) and the three
+        // finders (GrepFinder/FzfFinder/RecentFilesFinder) reference it.
+        public static void Run_HitCap_SharedConstant()
+        {
+            Assert.Equal(200, FinderConstants.HitCap);
+        }
+
+        // BP-22 (m31) + BP-26 (m40): VisibleIdsJoined/Ids/Catalog are dead members deleted by the
+        // build (compile-enforced — any residual reference fails the build). The surviving
+        // contract: ResultsFormatter.ColumnsIdList (the production path at TelescopeOverlay.cs:831)
+        // joins the visible column ids. Contract-pinning.
+        public static void Run_ResultColumn_DeadMembersRemoved()
+        {
+            Assert.Equal("", ResultsFormatter.ColumnsIdList(new string[] { }));
+            Assert.Equal("access,file", ResultsFormatter.ColumnsIdList(new[] { "access", "file" }));
+        }
+
+        // BP-24 (m33): the shared ErrorItemsWalker.ForEach iterates ErrorItems with per-item
+        // try/catch — a throwing item is skipped, the rest survive.
+        // COMPILE-RED: ErrorItemsWalker does not exist yet -> CS0246.
+        public static void Run_ErrorItemsWalker_SharedWalk()
+        {
+            var items = new FakeErrorItems(new List<ErrorItem>
+            {
+                new FakeErrorItem("A.cs"),
+                new FakeErrorItem("B.cs", throwOnAccess: true),
+                new FakeErrorItem("C.cs"),
+            });
+            var visited = new List<string>();
+            ErrorItemsWalker.ForEach(items, item => visited.Add(item.FileName));
+            Assert.Equal(2, visited.Count);
+            Assert.Equal("A.cs", visited[0]);
+            Assert.Equal("C.cs", visited[1]);
+        }
+
+        // BP-27 (m41): the PaneSelectionSync shell is deleted (compile-enforced once the class is
+        // gone). The pane-focus behavior it used to provide is pinned by the FocusTargetModel
+        // geometric tests — Down from List -> Input, Up from Input -> Preview (the pinned
+        // tie-break). Contract-pinning.
+        public static void Run_PaneSelectionSync_ShellRemoved()
+        {
+            var model = NewModelAt(FocusTarget.List);
+            var action = model.Handle(PaneFocusKey.Down);
+            Assert.Equal(FocusTargetAction.Handled, action);
+            Assert.Equal(FocusTarget.Input, model.Current);
+
+            var up = NewModelAt(FocusTarget.Input);
+            var upAction = up.Handle(PaneFocusKey.Up);
+            Assert.Equal(FocusTargetAction.Handled, upAction);
+            Assert.Equal(FocusTarget.Preview, up.Current);
+        }
+
+        // BP-28 (n19): DefinitionFinder/ImplementationFinder share the same display contract
+        // ({Kind} {SymbolName} — {file}:{line}) — the shared base must preserve it.
+        // Contract-pinning (the behavior is already correct today).
+        public static void Run_DefinitionFinder_SharedBody()
+        {
+            var defHit = new DefinitionHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            var defFinder = new DefinitionFinder(() => new[] { defHit }, _ => { });
+            var implHit = new ImplementationHit(@"C:\p\Shape.cs", 2, "Shape", "Class");
+            var implFinder = new ImplementationFinder(() => new[] { implHit }, _ => { });
+
+            Assert.Equal(defFinder.GetCandidates()[0].Display, implFinder.GetCandidates()[0].Display);
+            Assert.Equal("Class Shape — Shape.cs:2", defFinder.GetCandidates()[0].Display);
+        }
+
+        // ================================================================
+        // Fake ErrorItems/ErrorItem (BP-24 — the shared ErrorItemsWalker test seam)
+        // ================================================================
+
+        private sealed class FakeErrorItem : ErrorItem
+        {
+            private readonly string _fileName;
+            private readonly bool _throwOnAccess;
+            public FakeErrorItem(string fileName, bool throwOnAccess = false)
+            {
+                _fileName = fileName;
+                _throwOnAccess = throwOnAccess;
+            }
+            public string Description => _fileName;
+            public vsBuildErrorLevel ErrorLevel => vsBuildErrorLevel.vsBuildErrorLevelHigh;
+            public string FileName => _throwOnAccess ? throw new InvalidOperationException("boom") : _fileName;
+            public int Line => 1;
+            public int Column => 1;
+            public string Project => string.Empty;
+            public bool IsBuildError => false;
+            public string FullPath => _fileName;
+            public ErrorItems Collection => null!;
+            public DTE DTE => null!;
+            public void Navigate() { }
+        }
+
+        private sealed class FakeErrorItems : ErrorItems
+        {
+            private readonly List<ErrorItem> _items;
+            public FakeErrorItems(List<ErrorItem> items) { _items = items; }
+            public int Count => _items.Count;
+            public ErrorItem Item(object index) => _items[(int)index - 1];   // 1-based
+            public ErrorList Parent => null!;
+            public DTE DTE => null!;
         }
     }
 }

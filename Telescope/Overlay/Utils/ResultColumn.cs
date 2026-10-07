@@ -109,8 +109,6 @@ namespace Telescope.Overlay
     ///   the only visible column is a no-op (returns false). The chooser may never leave
     ///   zero columns (an empty header row renders broken and the <c>results columns=</c>
     ///   diagnostic would become an ambiguous empty suffix).
-    /// - ID FORMAT: <see cref="VisibleIdsJoined"/> is the comma-joined visible ids with no
-    ///   spaces — the exact payload of <c>[Telescope] results columns=...</c>.
     /// </summary>
     internal sealed class ColumnVisibilityModel
     {
@@ -125,12 +123,6 @@ namespace Telescope.Overlay
                 StringComparer.Ordinal);
         }
 
-        /// <summary>All column ids in catalog order (visible or not) — the chooser menu's source.</summary>
-        internal IReadOnlyList<string> Ids => _catalog.Select(c => c.Id).ToList();
-
-        /// <summary>All columns in catalog order.</summary>
-        internal IReadOnlyList<ResultColumn> Catalog => _catalog;
-
         /// <summary>The visible columns in catalog order — Section B builds the GridView from this.</summary>
         internal IReadOnlyList<ResultColumn> VisibleColumns =>
             _catalog.Where(c => _visible.Contains(c.Id)).ToList();
@@ -138,12 +130,6 @@ namespace Telescope.Overlay
         /// <summary>The visible column ids in catalog order — the <c>results columns=</c> payload.</summary>
         internal IReadOnlyList<string> VisibleIds =>
             _catalog.Where(c => _visible.Contains(c.Id)).Select(c => c.Id).ToList();
-
-        /// <summary>
-        /// The diagnostic id list: comma-joined visible ids, no spaces (e.g. <c>access,file</c>).
-        /// Section B logs it verbatim: <c>TelescopeLog.Log($"results columns={model.VisibleIdsJoined}")</c>.
-        /// </summary>
-        internal string VisibleIdsJoined => string.Join(",", VisibleIds);
 
         internal bool IsVisible(string id) => _visible.Contains(id);
 

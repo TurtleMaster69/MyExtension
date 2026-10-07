@@ -170,7 +170,11 @@ namespace MyExtension.Package
                         {
                             throw new InvalidOperationException("Telescope launcher was not initialized.");
                         }
-                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager, _launcher, _errorListGatherer!);
+                        if (_errorListGatherer == null)
+                        {
+                            throw new InvalidOperationException("Error list gatherer was not initialized.");
+                        }
+                        _keyboardHook = new GlobalKeyboardHook(this, _telescope, _windowManager, _launcher, _errorListGatherer);
                         return Task.CompletedTask;
                     }),
                     ("command", () => RegisterTelescopeCommandAsync(cancellationToken)),
@@ -458,7 +462,7 @@ namespace MyExtension.Package
 
         /// <summary>
         /// The shared goto-command action: gather the targets for the symbol at the caret, decide
-        /// via the pure GotoDispatcher (1 hit → direct jump, 0/multiple → overlay), then either
+        /// (1 hit → direct jump, 0/multiple → overlay), then either
         /// open the single hit at its line (logging the goto-direct outcome diagnostic) or open
         /// the Telescope overlay with the named finder (which re-gathers at open — the
         /// double-gather is accepted: the gatherers are cheap and the overlay's `open finder=`
@@ -471,7 +475,9 @@ namespace MyExtension.Package
             try
             {
                 var hits = gather() ?? Array.Empty<IFileLocation>();
-                if (GotoDispatcher.Decide(hits.Count) == GotoDecision.DirectJump)
+                // n15: the one-line GotoDispatcher.Decide wrapper is inlined — exactly 1 hit jumps
+                // directly, 0 or multiple open the overlay.
+                if (hits.Count == 1)
                 {
                     var hit = hits[0];
                     HitOpener.OpenAtLine(hit, OpenFileAtLine);
@@ -568,5 +574,16 @@ namespace MyExtension.Package
 
             base.Dispose(disposing);
         }
+    }
+
+    /// <summary>The outcome of the goto single/multi-hit decision (n15 — the GotoDispatcher class
+    /// was inlined; the enum is kept as the documented contract).</summary>
+    internal enum GotoDecision
+    {
+        /// <summary>Exactly 1 hit: open it directly (no overlay).</summary>
+        DirectJump,
+
+        /// <summary>0 hits or multiple hits: open the Telescope overlay with the finder.</summary>
+        OpenOverlay,
     }
 }

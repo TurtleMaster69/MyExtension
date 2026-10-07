@@ -5,6 +5,7 @@ using MyExtension.Input;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Telescope.Finders;
 
 namespace MyExtension.Package
 {
@@ -118,33 +119,26 @@ namespace MyExtension.Package
                 ? vsBuildErrorLevel.vsBuildErrorLevelHigh
                 : vsBuildErrorLevel.vsBuildErrorLevelMedium;
 
-            int count = items.Count;
-            for (int i = 1; i <= count; i++)
+            // m33 (BP-24): the shared per-item walk (per-item try/catch — a throwing item is
+            // skipped, the rest survive).
+            ErrorItemsWalker.ForEach(items, item =>
             {
-                try
+                if (item.ErrorLevel != wanted)
                 {
-                    ErrorItem item = items.Item(i);
-                    if (item.ErrorLevel != wanted)
-                    {
-                        continue;
-                    }
-                    string fileName = item.FileName ?? string.Empty;
-                    if (fileName.Length == 0 ||
-                        !string.Equals(fileName, filePath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-                    if (item.Line <= 0)
-                    {
-                        continue;
-                    }
-                    entries.Add(new DiagnosticEntry(fileName, item.Line));
+                    return;
                 }
-                catch
+                string fileName = item.FileName ?? string.Empty;
+                if (fileName.Length == 0 ||
+                    !string.Equals(fileName, filePath, StringComparison.OrdinalIgnoreCase))
                 {
-                    // skip an item that can't be read (same discipline as CodeIssuesFinder)
+                    return;
                 }
-            }
+                if (item.Line <= 0)
+                {
+                    return;
+                }
+                entries.Add(new DiagnosticEntry(fileName, item.Line));
+            });
 
             var result = entries
                 .OrderBy(e => e.Line)
@@ -159,6 +153,7 @@ namespace MyExtension.Package
 
         public void Dispose()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_buildEvents != null)
             {
                 try { _buildEvents.OnBuildDone -= OnBuildDone; } catch { /* already unhooked */ }

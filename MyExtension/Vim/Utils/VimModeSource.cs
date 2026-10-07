@@ -175,11 +175,15 @@ namespace MyExtension.Vim
                 _currentBuffer = null;
                 _currentTextBuffer = null;
             }
+            // m13: read the cached text buffer BEFORE the subscriptions map decrements the refcount
+            // (which removes the buffer->textBuffer entry at 0) — no reflection re-read on the
+            // closing buffer (a reflection failure on the teardown path would leak the SwitchedMode
+            // subscription).
+            _subscriptions.TryGetTextBuffer(sender, out object? textBuffer);
             // R3: the subscriptions map removes the Closed subscription + decrements the refcount
             // (removing the entry at 0) and reports whether this was the last view sharing the
             // text buffer — only then is the SwitchedMode subscription dropped.
             bool lastView = _subscriptions.OnBufferClosed(sender);
-            object? textBuffer = GetTextBuffer(sender);
             if (textBuffer != null && lastView)
             {
                 _subscribedTextBuffers.Remove(textBuffer);

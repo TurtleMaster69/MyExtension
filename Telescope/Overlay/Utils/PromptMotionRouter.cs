@@ -13,14 +13,17 @@ namespace Telescope.Overlay
         /// <summary>
         /// Decides whether a key is a prompt/preview vim MOTION (consumed by the motion handler) or
         /// an INSERT PLACEMENT (a/A/I — reported via <paramref name="insertPlacement"/> and routed by
-        /// the caller). R1: the restriction is <b>surface-aware</b> — the PROMPT surface
-        /// (<paramref name="previewSurface"/> false) restricts the motion set to h/l/w/b/e/0/$ so
-        /// j/k/g/G fall through to the overlay's selection navigation; the PREVIEW surface
-        /// (<paramref name="previewSurface"/> true) keeps the full set (j/k/g/G navigate the code).
+        /// the caller). m46 (BP-16): the single <see cref="TextMotionDispatcher.MapKey"/> result is
+        /// reported via <paramref name="motion"/> so the caller applies it with ONE MapKey per
+        /// motion keystroke (the caller no longer re-maps the key). R1: the restriction is
+        /// <b>surface-aware</b> — the PROMPT surface (<paramref name="previewSurface"/> false)
+        /// restricts the motion set to h/l/w/b/e/0/$ so j/k/g/G fall through to the overlay's
+        /// selection navigation; the PREVIEW surface (<paramref name="previewSurface"/> true) keeps
+        /// the full set (j/k/g/G navigate the code).
         /// </summary>
-        public static bool ShouldConsume(Key key, bool shift, out CaretPlacement? insertPlacement, bool previewSurface = false)
+        public static bool ShouldConsume(Key key, bool shift, out TextMotion? motion, out CaretPlacement? insertPlacement, bool previewSurface = false)
         {
-            TextMotion? motion = TextMotionDispatcher.MapKey(key, shift);
+            motion = TextMotionDispatcher.MapKey(key, shift);
             if (motion == null)
             {
                 // Bare i is the generic insert at the current position (OverlayKey.I -> Current).

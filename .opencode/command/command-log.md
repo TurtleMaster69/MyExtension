@@ -426,3 +426,30 @@
 - NEEDS-PERMISSION: yes — `bash "Add-Content *"` / write access for feature-researcher (or accept the hub-wiring pattern)
 - AGENT: feature-researcher
 - DATE: 2026-10-05
+
+### 2026-10-06 — arch-auditor (slice D2)
+- OPERATION: `lsp incomingCalls file=Telescope/Finders/GrepFinder.cs line=78 char=47` (GetCandidates) and `lsp incomingCalls file=Telescope/Filter/FzfFilter.cs line=161 char=47` (FilterAsync)
+- RESULT: "No results found" for both — but the symbols DO have callers (GrepFinder.GetCandidates ← FinderBase.GetCandidatesAsync ← TelescopeOverlay.cs:511; FzfFilter.FilterAsync ← FzfFinder.cs:151 + TelescopeOverlay.cs:524)
+- REASON: server — the calls are dispatched through interfaces (IFinder.GetCandidates / IFzfEngine.FilterAsync), which Roslyn's call-hierarchy incomingCalls does not resolve through the interface; `findReferences` on the interface member DID return the call sites
+- ALTERNATIVE: for interface-dispatched members, use `findReferences` on the interface/base declaration (verified working) or Trailmark `callers_of` on the `proxy.unresolved:<Interface>.<Member>` id; do not treat incomingCalls "No results found" as dead code
+- NEEDS-PERMISSION: no
+- AGENT: arch-auditor
+- DATE: 2026-10-06
+
+### 2026-10-06 — code-review-worker (slice D1)
+- OPERATION: `lsp incomingCalls file=Telescope/Overlay/TelescopeOverlay.cs line=1144 char=17` (FocusPane) and `line=555 char=17` (CancelFilter)
+- RESULT: "No results found" for both — but Trailmark `callers_of` returned real callers (FocusPane ← OpenColumnChooser/OnPaneClicked/OnPreviewKeyDown/EnterInsert; CancelFilter ← RefreshResults/CloseOverlay)
+- REASON: server — Roslyn call-hierarchy incomingCalls does not resolve PRIVATE instance methods called only from within the same class (same class as the 2026-10-06 arch-auditor D2 entry, but for private methods rather than interface dispatch)
+- ALTERNATIVE: for private same-class methods, use Trailmark `callers_of("<Type>.<Member>")` (verified working) or read the class body; do not treat incomingCalls "No results found" as dead code
+- NEEDS-PERMISSION: no
+- AGENT: code-review-worker
+- DATE: 2026-10-06
+
+### 2026-10-06 — e2e-test-builder (BP-9 m14 RED)
+- CMD: `Add-Type -OutputAssembly <tmp>\p.exe -OutputType ConsoleApplication -Path <tmp>\p.cs` (a temp C# probe to print `Keys` enum values)
+- RESULT: `Both the assembly types 'ConsoleApplication' and 'WindowsApplication' are not currently supported.` — Add-Type in this pwsh does not support `-OutputType ConsoleApplication`; the probe never compiled
+- REASON: misuse — Add-Type `-OutputType` only supports `Library`/`WindowsApplication`-incompatible set on this runtime; the probe was unnecessary anyway (the `Keys` enum values are standard .NET constants: `Keys.Modifiers` = 0xFFFF0000, so physical modifier keys 17/160-165 have no modifier-flag bit set — the current `ParseLeader` accepts them all, already pinned by the existing `Run_Keybinding_CustomLeaderParsed` test)
+- ALTERNATIVE: none needed — the RED behavior is established by the plan (BP-9) + the existing pinning test; no runtime probe required
+- NEEDS-PERMISSION: no
+- AGENT: e2e-test-builder
+- DATE: 2026-10-06

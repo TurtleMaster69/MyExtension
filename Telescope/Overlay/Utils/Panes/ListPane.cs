@@ -12,8 +12,7 @@ namespace Telescope.Overlay
     /// Ctrl+H/J/K/L give it real keyboard focus. The overlay still claims the vim selection
     /// gestures (j/k/gg/G/Enter/q/Esc/i/a/A/I — routed through the untouched OverlayKeyHandler
     /// via <see cref="ListKeyMap"/>); the native Up/Down arrows stay live (the ListView's own
-    /// selection handling; the overlay's SelectionChanged sync adopts the index —
-    /// <see cref="PaneSelectionSync"/>).
+    /// selection handling; the overlay's SelectionChanged sync adopts the index).
     ///
     /// <para/>Focus visuals (the pinned style, plan §1.6): FocusVisualStyle=null (no dotted
     /// rect); the active-pane indicator is the chrome Border's bottom accent line — constant 1px
@@ -40,7 +39,6 @@ namespace Telescope.Overlay
 
         public FocusTarget Id => FocusTarget.List;
         public FrameworkElement Content => _chrome;
-        public bool IsFocusable => true;
 
         public void Activate()
         {

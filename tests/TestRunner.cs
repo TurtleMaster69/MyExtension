@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 
 namespace TestHarness
 {
@@ -98,7 +99,7 @@ namespace TestHarness
                 }
                 if (testError != null)
                 {
-                    Console.WriteLine($"FAIL  {method.Name}: {Unwrap(testError).Message}");
+                    Console.WriteLine($"FAIL  {FormatFailure(method.Name, Unwrap(testError))}");
                     failed++;
                     continue;
                 }
@@ -118,6 +119,16 @@ namespace TestHarness
                 ex = tie.InnerException;
             }
             return ex;
+        }
+
+        /// <summary>
+        /// n2 (BP-D8): formats a test failure as the full exception (message + stack trace via
+        /// <c>ToString()</c>), not just the message — so a failing test is diagnosable. Pure seam
+        /// so the format is unit-testable.
+        /// </summary>
+        internal static string FormatFailure(string methodName, Exception ex)
+        {
+            return $"{methodName}: {ex}";
         }
     }
 
@@ -237,6 +248,38 @@ namespace TestHarness
             {
                 Telescope.Logging.LogFileWriter.DebugLogPath = original;
             }
+        }
+
+        /// <summary>
+        /// m61 (BP-D16): sets <c>ThreadHelper.uiThreadDispatcher</c> to the current thread's
+        /// dispatcher — so VS-coupled ctors that call <c>ThreadHelper.ThrowIfNotOnUIThread()</c>
+        /// (e.g. <c>WindowManager</c>) can run hermetically on the test host's STA thread — and
+        /// returns an <see cref="IDisposable"/> that restores the original on <c>Dispose()</c>.
+        /// The restore is guaranteed by a <c>using</c> even on exception. This is the SINGLE
+        /// reflection site for the field (the 14 per-test mutations were rewritten to use it).
+        /// </summary>
+        public static IDisposable SetCurrentDispatcherAsUiThread()
+        {
+            var field = typeof(Microsoft.VisualStudio.Shell.ThreadHelper).GetField(
+                "uiThreadDispatcher",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            object? original = field!.GetValue(null);
+            field.SetValue(null, Dispatcher.CurrentDispatcher);
+            return new RestoreDispatcher(field, original);
+        }
+
+        private sealed class RestoreDispatcher : IDisposable
+        {
+            private readonly FieldInfo _field;
+            private readonly object? _original;
+
+            public RestoreDispatcher(FieldInfo field, object? original)
+            {
+                _field = field;
+                _original = original;
+            }
+
+            public void Dispose() => _field.SetValue(null, _original);
         }
     }
 }

@@ -24,7 +24,7 @@ namespace MyExtension.Navigation
         // group), so the O(n) COM LinkedWindowFrame/Type/Caption reads in LinkedTo run once per
         // window-set change instead of per keystroke.
         // n1 (BP-20): the cache is DELIBERATELY static + reference-keyed, NOT instance-scoped — a
-        // new WindowNavigator is built per navigation (InputHandler.cs:554), so an instance cache
+        // new WindowNavigator is built per navigation (InputHandler.cs:639), so an instance cache
         // would always be cold. The reference-keyed static cache self-invalidates on window-set
         // change (keyed on the adapters list reference + the active window; WindowManager
         // re-enumerates on focus change -> a new list -> the cache is invalidated exactly when the

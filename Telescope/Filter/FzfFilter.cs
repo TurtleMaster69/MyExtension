@@ -87,6 +87,13 @@ namespace Telescope.Filter
         internal int PendingTimeoutCount { get; private set; }
 
         /// <summary>
+        /// BP-D18 (M10): injectable delay factory routing BOTH <c>Task.Delay</c> calls (the
+        /// timeout + the grace) so the timeout-vs-completion boundary is deterministic in tests
+        /// (no wall-clock <c>ping</c> race). Null in production.
+        /// </summary>
+        internal Func<int, CancellationToken, Task>? DelayFactory;
+
+        /// <summary>
         /// Creates a filter that resolves <c>fzf</c> from the system PATH. If <paramref name="fzfPath"/>
         /// is non-empty it is used verbatim instead (e.g. from config).
         /// </summary>
@@ -230,7 +237,7 @@ namespace Telescope.Filter
                     // timer survives a normal filter.
                     using var timeoutCts = new CancellationTokenSource();
                     PendingTimeoutCount++;
-                    var timeout = Task.Delay(FilterTimeoutMs, timeoutCts.Token);
+                    var timeout = DelayFactory?.Invoke(FilterTimeoutMs, timeoutCts.Token) ?? Task.Delay(FilterTimeoutMs, timeoutCts.Token);
                     var winner = await Task.WhenAny(all, timeout);
                     if (cancellationToken.IsCancellationRequested)
                     {
@@ -262,7 +269,19 @@ namespace Telescope.Filter
                         // m11 (BP-4): a filter completing a few ms after the timeout fires is NOT
                         // genuinely hung — give it a short grace period before killing. If it
                         // completes within the grace, fall through to the SAME boundary fast path.
-                        var graceWinner = await Task.WhenAny(all, Task.Delay(FilterTimeoutGraceMs));
+                        // m9 (BP-9): the grace delay carries the caller's cancellation token so a
+                        // cancelled gather returns promptly instead of waiting out the grace.
+                        var graceWinner = await Task.WhenAny(all, DelayFactory?.Invoke(FilterTimeoutGraceMs, cancellationToken) ?? Task.Delay(FilterTimeoutGraceMs, cancellationToken));
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            // m8 (BP-9): a cancelled gather must NOT log the spurious timeout line —
+                            // mirror the existing cancellation path (silent return, counters observed).
+                            timeoutCts.Cancel();
+                            PendingTimeoutCount--;
+                            _ = all.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                            AwaitedReadCount += 2;
+                            return lines;
+                        }
                         if (graceWinner == all)
                         {
                             timeoutCts.Cancel();

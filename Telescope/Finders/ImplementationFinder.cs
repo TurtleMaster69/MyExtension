@@ -1,9 +1,6 @@
-using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using Telescope.Logging;
+using ImplementationHit = Telescope.Finders.DefinitionHit;
 
 namespace Telescope.Finders
 {
@@ -23,42 +20,23 @@ namespace Telescope.Finders
     /// <b>Threading:</b> <see cref="GetCandidates"/> and <see cref="OnSelected"/> run on the UI
     /// thread (asserted); the injected gatherer/opener are the host's UI-thread calls.
     /// </summary>
-    public sealed class ImplementationFinder : FinderBase<ImplementationHit>
+    public sealed class ImplementationFinder : SymbolFinderBase
     {
-        private readonly Func<IReadOnlyList<ImplementationHit>> _gatherer;
-        private readonly Action<ImplementationHit> _opener;
-
         public override string Name => "Implementation";
 
         /// <param name="gatherer">Returns the implementation hits for the symbol at the caret (host-side Roslyn call).</param>
         /// <param name="opener">Opens a hit's file at its line (host-side DTE call).</param>
         public ImplementationFinder(Func<IReadOnlyList<ImplementationHit>> gatherer, Action<ImplementationHit> opener)
+            : base(gatherer, opener)
         {
-            _gatherer = gatherer ?? throw new ArgumentNullException(nameof(gatherer));
-            _opener = opener ?? throw new ArgumentNullException(nameof(opener));
         }
 
-        protected override IReadOnlyList<ImplementationHit> GatherHits()
-        {
-            IReadOnlyList<ImplementationHit> hits = _gatherer() ?? Array.Empty<ImplementationHit>();
-            TelescopeLog.Log($"implementations gathered count={hits.Count}");
-            return hits;
-        }
+        protected override string GatherCountLiteral => "implementations gathered";
 
-        protected override FinderEntry ToEntry(ImplementationHit hit)
-        {
-            string display = $"{hit.Kind} {hit.SymbolName} — {Path.GetFileName(hit.FilePath)}:{hit.LineNumber}";
-            return new FinderEntry(display, hit);
-        }
-
-        protected override void OpenHit(ImplementationHit hit)
-        {
-            _opener(hit);
-            TelescopeLog.Log($"opened implementation: file={hit.FilePath} line={hit.LineNumber}");
-        }
+        protected override string OpenedLiteral => "opened implementation:";
 
         protected override string OpenErrorNoun => "implementation";
 
-        protected override string GatherErrorLiteral(Exception ex) => $"implementations gather failed: {ex.Message}";
+        protected override string GatherErrorPrefix => "implementations gather failed";
     }
 }

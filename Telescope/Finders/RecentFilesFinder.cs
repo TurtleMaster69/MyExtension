@@ -14,7 +14,7 @@ namespace Telescope.Finders
     ///
     /// <para/>
     /// Policy owned HERE (pure, unit-testable): existing files only (<see cref="File.Exists"/>),
-    /// capped at <see cref="MaxHits"/>, the gatherer's most-recent-first order preserved (never
+    /// capped at <see cref="FinderConstants.HitCap"/>, the gatherer's most-recent-first order preserved (never
     /// re-sorted). Sourcing (the DTE reflection probe + the session MRU) lives in the host —
     /// MyExtension/Package/Utils/RecentFilesGatherer.cs.
     ///
@@ -24,9 +24,6 @@ namespace Telescope.Finders
     /// </summary>
     public sealed class RecentFilesFinder : FinderBase<RecentFileHit>
     {
-        /// <summary>The MRU cap (matches the query finders' 200-hit cap).</summary>
-        internal const int MaxHits = 200;
-
         private readonly Func<IReadOnlyList<string>> _gatherer;
         private readonly Action<string> _opener;
 
@@ -47,7 +44,7 @@ namespace Telescope.Finders
                 .Where(p => !string.IsNullOrEmpty(p))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Where(File.Exists)
-                .Take(MaxHits)
+                .Take(FinderConstants.HitCap)
                 .Select(p => new RecentFileHit(p))
                 .ToList();
 

@@ -261,7 +261,7 @@ namespace MyExtension.ToolWindows
         /// newlines/control chars replaced by spaces so the sample never splits the log line (R39).</summary>
         private static string Sample(string text)
         {
-            return SanitizeSample(text.Length > 30 ? text.Substring(0, 30) : text);
+            return DiagnosticLog.SanitizeText(text.Length > 30 ? text.Substring(0, 30) : text);
         }
 
         /// <summary>The first 30 chars of an editor snapshot (the <c>text=</c> log sample), read
@@ -269,24 +269,7 @@ namespace MyExtension.ToolWindows
         private static string Sample(ITextSnapshot snapshot)
         {
             int length = Math.Min(30, snapshot.Length);
-            return SanitizeSample(snapshot.GetText(0, length));
-        }
-
-        /// <summary>Replaces control characters (newlines, tabs, ...) with spaces so a sample can
-        /// never split the <c>[NeoVisual]</c> log line (R39).</summary>
-        private static string SanitizeSample(string sample)
-        {
-            var chars = sample.ToCharArray();
-            bool dirty = false;
-            for (int i = 0; i < chars.Length; i++)
-            {
-                if (char.IsControl(chars[i]))
-                {
-                    chars[i] = ' ';
-                    dirty = true;
-                }
-            }
-            return dirty ? new string(chars) : sample;
+            return DiagnosticLog.SanitizeText(snapshot.GetText(0, length));
         }
 
         private static string MotionName(TextMotion motion)

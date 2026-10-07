@@ -1,3 +1,4 @@
+using System.Threading;
 using Telescope.Overlay;
 
 namespace Telescope.Logging
@@ -11,17 +12,14 @@ namespace Telescope.Logging
     /// </summary>
     internal sealed class PaneFailureTracker
     {
-        private bool _emitted;
+        // m23 (BP-12): an int (0/1) so concurrent UI/background loggers emit exactly once via
+        // Interlocked.Exchange — net472 has no Interlocked.Exchange(ref bool, ...) overload.
+        private int _emitted;
 
         /// <summary>Returns true once (the first call), then false forever.</summary>
         public bool ShouldEmit()
         {
-            if (_emitted)
-            {
-                return false;
-            }
-            _emitted = true;
-            return true;
+            return Interlocked.Exchange(ref _emitted, 1) == 0;
         }
 
         /// <summary>Builds the one-time fallback line for the given failure reason.</summary>

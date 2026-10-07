@@ -974,8 +974,12 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     if ($null -eq $diag -or $diag.Errors -lt 0 -or $diag.Warnings -lt 0) {
         throw "neovisual-diagnostic-nav: could not query the Error List (errors=$($diag.Errors) warnings=$($diag.Warnings))"
     }
-    $hasErrors = ($diag.Errors -gt 0)
-    $hasWarnings = ($diag.Warnings -gt 0)
+    # m63 (BP-D20): the deterministic DiagProbe.cs seed (3 errors + 3 warnings) MUST produce both; a
+    # poll timeout means the Error List did not settle, which must FAIL the scenario, not branch to
+    # the no-op form. The four severity-nav asserts below are therefore UNCONDITIONAL target-form.
+    if (-not ($diag.Errors -gt 0 -and $diag.Warnings -gt 0)) {
+        throw "neovisual-diagnostic-nav: Error List did not settle with both errors and warnings (errors=$($diag.Errors) warnings=$($diag.Warnings))"
+    }
 
     # 6. Re-activate the DiagProbe.cs tab (the build may have moved focus) + position the caret at
     #    a known line (line 6 — between the first error/warning pair and the rest) so BOTH next and
@@ -1007,11 +1011,7 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkE; Start-Sleep -Milliseconds 800        # e -> next-error
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],e" 'Space ] e fired next-error'
-    if ($hasErrors) {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=next severity=error target=.*DiagProbe\.cs line=\d+" '],e navigated to the next error (target form)'
-    } else {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '],e logged a no-op (Error List provably empty for errors)'
-    }
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=next severity=error target=.*DiagProbe\.cs line=\d+" '],e navigated to the next error (target form)'
 
     # 8. Space [ e -> previous ERROR.
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
@@ -1019,11 +1019,7 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkE; Start-Sleep -Milliseconds 800        # e -> prev-error
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,e" 'Space [ e fired prev-error'
-    if ($hasErrors) {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=prev severity=error target=.*DiagProbe\.cs line=\d+" '[,e navigated to the previous error (target form)'
-    } else {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '[,e logged a no-op (Error List provably empty for errors)'
-    }
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=prev severity=error target=.*DiagProbe\.cs line=\d+" '[,e navigated to the previous error (target form)'
 
     # 9. Space ] w -> next WARNING.
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
@@ -1031,11 +1027,7 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> next-warning
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \],w" 'Space ] w fired next-warning'
-    if ($hasWarnings) {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=next severity=warning target=.*DiagProbe\.cs line=\d+" '],w navigated to the next warning (target form)'
-    } else {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '],w logged a no-op (Error List provably empty for warnings)'
-    }
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=next severity=warning target=.*DiagProbe\.cs line=\d+" '],w navigated to the next warning (target form)'
 
     # 10. Space [ w -> previous WARNING.
     Send-Tap $script:VkSpace; Start-Sleep -Milliseconds 150    # leader
@@ -1043,11 +1035,7 @@ Register-Scenario 'neovisual-diagnostic-nav' {
     $preNav = Get-LogCacheIndex $logPath
     Send-Tap $script:VkW; Start-Sleep -Milliseconds 800        # w -> prev-warning
     Assert-NewLogLine $logPath "$($script:PfxNeo)leader-binding executed: \[,w" 'Space [ w fired prev-warning'
-    if ($hasWarnings) {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=prev severity=warning target=.*DiagProbe\.cs line=\d+" '[,w navigated to the previous warning (target form)'
-    } else {
-        Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav no-op: " '[,w logged a no-op (Error List provably empty for warnings)'
-    }
+    Assert-NewLogLineAfter $logPath $preNav "$($script:PfxNeo)diagnostic-nav direction=prev severity=warning target=.*DiagProbe\.cs line=\d+" '[,w navigated to the previous warning (target form)'
 }
 
 # --- neovisual-git-bindings ------------------------------------------------
@@ -1463,8 +1451,14 @@ Register-Scenario 'explorer-open-navigation' {
     # view raises no TextViewCreated) — the assertion below proves `g` reached the controller with
     # the real selected path, and is order-independent of `o` (which then opens what `o` selects).
     Send-Tap $script:VkG; Start-Sleep -Milliseconds 800   # g -> select + open first source file
-    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer select file=.*\.cs" 'g selected the first source file'
-    Assert-NewLogLine $logPath "$($script:PfxNeo)editor-view-opened file=.*\.cs" 'g opened the selected source file'
+    Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer select file=(.+\.cs)" 'g selected the first source file'
+    $selected = Get-LastLogMatch $logPath "$($script:PfxNeo)solution-explorer select file=(.+\.cs)"
+    if (-not $selected) { throw 'g did not log a selected source file path' }
+    # m64 (BP-D21): assert the selected file is the ACTIVE document (order-independent — activating
+    # an already-open view raises no TextViewCreated, so the editor-view-opened log line is not
+    # reliable here) instead of the editor-view-opened assert.
+    $active = Wait-ActiveDocumentMatch $vs.Id ([regex]::Escape($selected)) 5000
+    if (-not $active) { throw "g did not open the selected source file: $selected" }
     Assert-VsFocused $vs 'explorer navigation (o)' # keys must land in the VS instance
     Send-Tap $script:VkO; Start-Sleep -Milliseconds 800   # o -> open the selected item (tree focus intact)
     Assert-NewLogLine $logPath "$($script:PfxNeo)solution-explorer open" 'o fired solution-explorer open'
@@ -1586,14 +1580,12 @@ Register-Scenario 'telescope-preview' {
 
     # The selected (first) candidate must be a real file so the preview has content.
     Assert-NewLogLine $logPath "$($script:PfxTel)preview file=.*\.cs" 'preview loaded the selected file content'
-    # The preview hosts a real editor view; the count is the classifier's span count. KNOWN
-    # LIMITATION (2026-10-04, m15): the count is read synchronously at view creation — BEFORE async
-    # classification lands — so it reads 0 for BOTH buffer sources (the workspace-attached Peek
-    # buffer and the standalone content-type buffer) and cannot discriminate engagement. This is a
-    # KNOWN-LIMITATION SMOKE CHECK ONLY: it pins the line's PRESENCE (the preview emitted the
-    # tokens= diagnostic), NOT a non-zero count and NOT highlighting proof. Do NOT assert a non-zero
-    # count here — the semantic coloring is verified by the manual visual pass, not by this line.
-    Assert-NewLogLine $logPath "$($script:PfxTel)preview tokens=\d+" 'preview emitted the tokens= diagnostic (known-limitation smoke check — count reads 0 for both buffer sources)'
+    # m62 (BP-D19): the `preview tokens=\d+` presence-only assertion was DROPPED — the count reads 0
+    # for BOTH buffer sources (the workspace-attached Peek buffer and the standalone content-type
+    # buffer; the count is read synchronously at view creation, BEFORE async classification lands) so
+    # it pinned nothing. The `[Telescope] preview tokens=...` diagnostic in the SOURCE is UNCHANGED —
+    # only the harness assertion is removed; the semantic coloring is verified by the manual visual
+    # pass, not by this line.
     # M-M7 FOCUS PREAMBLE: the overlay opens on the INPUT pane, where Ctrl+L (RIGHT) is a
     # pinned no-op edge (nothing right of the full-width Input). Land on the LIST first:
     # Ctrl+K (Input -> Preview, the pinned UP target) then Ctrl+H (Preview -> List).
@@ -2024,7 +2016,11 @@ Register-Scenario 'telescope-goto' {
         # diagnostic) so a retry that runs without the 0-gather signature (or a first attempt that
         # neither jumped directly nor gathered 0) fails HERE instead of being silently masked by
         # the re-walk.
-        Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)definitions gathered count=0" 'first goto attempt gathered 0 definitions (the re-walk trigger)' 2000
+        # M9 (BP-D17): the 15s Wait-NewLogLineAfter above may have advanced the persistent search
+        # cursor PAST the 0-gather line on the 0-gather race, so a cursor-based assert is
+        # unsatisfiable. Scan the LogCache directly in the [idx, count) window WITHOUT advancing
+        # the cursor (the Assert-NoEnterStorm idiom).
+        Update-LogCache $logPath; $saw = $false; for ($i = $idx; $i -lt $script:LogCache.Count; $i++) { if ($script:LogCache[$i] -match "$($script:PfxTel)definitions gathered count=0") { $saw = $true; break } }; if (-not $saw) { throw 'never saw: first goto attempt gathered 0 definitions (the re-walk trigger)' }
     }
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto-direct finder=\S+ file=.*Shared\.cs line=1$" 'goto-definition single hit jumped directly' 15000
     Assert-NewLogLineAfter $logPath $idx "$($script:PfxTel)goto line=1$" 'the direct jump opened Models/Shared.cs at line 1' 15000

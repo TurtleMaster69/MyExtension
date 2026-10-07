@@ -35,33 +35,27 @@ namespace Telescope.Finders
         /// before VS services are ready.
         /// </param>
         public FileFinder(Func<DTE> dteFactory)
+            : this(dteFactory, null)
         {
-            _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
         }
 
         /// <param name="dteFactory">Returns the top-level DTE automation object (see above).</param>
         /// <param name="fileCache">Shared project-file enumeration cache (N37/BP-50: amortizes the per-open solution walk).</param>
-        internal FileFinder(Func<DTE> dteFactory, ProjectFileCache fileCache)
+        /// <param name="testCandidateSource">Hermetic-test seam: drives candidate enumeration without DTE.</param>
+        /// <param name="testEnumerate">Hermetic-test seam: routes the enumerate delegate through the shared cache (m34).</param>
+        /// <param name="testOpener">Hermetic-test seam: drives opening without DTE.</param>
+        internal FileFinder(
+            Func<DTE> dteFactory,
+            ProjectFileCache? fileCache,
+            Func<IReadOnlyList<string>>? testCandidateSource = null,
+            Func<IReadOnlyList<string>>? testEnumerate = null,
+            Action<string>? testOpener = null)
         {
             _dteFactory = dteFactory ?? throw new ArgumentNullException(nameof(dteFactory));
-            _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
-        }
-
-        /// <summary>Test-only constructor: drives candidate enumeration and opening without DTE.</summary>
-        internal FileFinder(Func<IReadOnlyList<string>> candidateSource, Action<string> opener)
-        {
-            _testCandidateSource = candidateSource;
-            _testOpener = opener;
-            _dteFactory = () => null!;
-        }
-
-        /// <summary>Test-only constructor: routes the enumerate delegate through the shared cache (m34).</summary>
-        internal FileFinder(ProjectFileCache cache, Func<IReadOnlyList<string>> enumerate, Action<string> opener)
-        {
-            _fileCache = cache ?? throw new ArgumentNullException(nameof(cache));
-            _testEnumerate = enumerate;
-            _testOpener = opener;
-            _dteFactory = () => null!;
+            _fileCache = fileCache;
+            _testCandidateSource = testCandidateSource;
+            _testEnumerate = testEnumerate;
+            _testOpener = testOpener;
         }
 
         protected override IReadOnlyList<FileHit> GatherHits()

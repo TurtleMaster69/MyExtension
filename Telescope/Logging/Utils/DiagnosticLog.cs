@@ -16,8 +16,8 @@ namespace Telescope.Logging
 
         /// <summary>
         /// Replaces control characters (newlines, tabs, ...) with spaces so user-controlled text
-        /// interpolated into a log line can never split it (N43/BP-57, mirroring the R39
-        /// <c>SanitizeSample</c> pattern). Returns the original string when it is already clean.
+        /// interpolated into a log line can never split it (N43/BP-57, the R39 sample-sanitization
+        /// pattern). Returns the original string when it is already clean.
         /// </summary>
         internal static string SanitizeText(string? text)
         {

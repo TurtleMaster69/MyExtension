@@ -48,6 +48,13 @@ namespace Telescope.Logging
         /// <summary>Number of write failures swallowed by the never-throw contract (test seam).</summary>
         internal static int WriteFailureCount;
 
+        /// <summary>
+        /// True when the current flush timer is a real <see cref="Timer"/> (m52/BP-D2 test seam) —
+        /// false when a test-injected <see cref="TimerScheduler"/> fake is in place. Lets a test
+        /// observe that the real ~200ms timer was restored after the fake was removed.
+        /// </summary>
+        internal static bool FlushTimerIsReal => _flushTimer is Timer;
+
         private static string _logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MyExtension",

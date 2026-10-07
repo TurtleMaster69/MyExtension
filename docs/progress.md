@@ -7,12 +7,11 @@ reads at the start of every loop iteration.
 > **Resume checkpoint:** the previous session checkpoint (`.opencode/PROGRESS.md`)
 > has been superseded by this file.
 
-> **Status:** PAUSED (the user's 2026-10-05 instruction: "after u have finished gap 4 stop")
-· **Updated:** 2026-10-05 · **Last item:** Gap 4 — the recent-files finder (`Name="Recent"`,
-the USER-CONFIRMED `f,e` binding; the reflection probe + the eager session-MRU floor) — GREEN
-2026-10-05 (feature lane, M-M7; 2 iterations: the lazy MRU floor → the eager hookup; the
-unsatisfiable Step-3 assertion → the Step-2 attribution; + the in-item telescope-goto
-3rd-strike fix; full 44-scenario suite + both unit suites GREEN)
+> **Status:** ACTIVE (the 106-findings code-review fixes plan reached GREEN 2026-10-06; the
+> next pending item is Gap 5)
+· **Updated:** 2026-10-06 · **Last item:** the 106-findings code-review fixes (2026-10-06,
+GREEN in the unit-only lane, e2e DEFERRED — E2E-CR77-1..6 QUEUED); the next pending item is
+Gap 5 (the LSP symbols finder)
 
 ## SESSION HANDOFF (2026-10-04) — read this first
 
@@ -113,8 +112,8 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## Current state
 
-- **In progress:** (none — **the Code review fixes (34 findings, incl. nits) reached GREEN
-  2026-10-06** in the unit-only lane (e2e DEFERRED — the gates E2E-CR34-1..4 stay QUEUED in
+- **In progress:** (none — **the Code review fixes (106 findings, incl. nits) reached GREEN
+  2026-10-06** in the unit-only lane (e2e DEFERRED — the gates E2E-CR77-1..6 stay QUEUED in
   `docs/e2e-queue.md`); see the Done section. The build loop is PAUSED after this item — the
   user's 2026-10-05 instruction was to execute the first pending item in the unit-only lane
   and stop.)
@@ -126,10 +125,7 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
   in the 20261004-143017 session — all five now GREEN). The FEATURE-TRIAGE gate (LOOP step
   1f) applies to each new feature item. The pane host (Feature 7) is the lazygit overlay's
   foundation (deferred — a bonus when the core is finished).
-  of the user-chosen **"smallest first"** run order (2026-10-03):
-  gap 11 → feature 7 → gap 4 → gap 5 → gap 6 → gap 10 → gap 9 →
-  feature 8 (+gap 8) → feature 9 → which-key last (FEATURE-TRIAGE autonomy granted;
-  gaps 8-11 triaged 2026-10-03). The goto commands (Gap 6 core: `gd`/`gI`/`gr` →
+  The goto commands (Gap 6 core: `gd`/`gI`/`gr` →
   `MyExtension.GotoDefinition/GotoReferences/GotoImplementation`, 1-hit direct / multi-hit
   overlay, the new DefinitionFinder + GotoDispatcher) are **DONE** (GREEN 2026-10-04; see
   the Done section). The Telescope results columns + preview-as-editor item is **DONE**
@@ -255,7 +251,7 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 ## Baseline (as of last full verification)
 
 - Offline units: `tests/Telescope.Tests` **297 passed**; `tests/NeoVisual.Tests`
-  **212 passed** (after Gap 4 — the recent-files finder, 2026-10-05).
+  **212 passed** (after the 34-findings code-review fixes, 2026-10-06).
 - Live E2E: `tools/harness/test-e2e.ps1` lists **44 scenarios** — ALL executed GREEN
   (full-suite fresh boot with `-TimeoutSec 2400`, run 185, 2026-10-05; Gap 4's final gate —
   `telescope-recent` verified end-to-end, `telescope-goto` GREEN outright after its in-item
@@ -332,9 +328,9 @@ gap 10 → gap 9 → feature 8 (+gap 8) → feature 9 → which-key last`
 
 ## In-progress
 
-- (none — Gap 3 reached GREEN 2026-10-04 with e2e enabled and
-  `explorer-open-searchbox` reached GREEN 2026-09-27; see the Done section. No
-  known-RED remains.)
+- (none — the Code review fixes (34 findings, incl. nits) reached GREEN 2026-10-06
+  (unit-only lane, e2e deferred); see the Done section. The 106-findings plan is the
+  next pending item. No known-RED remains.)
 
 ## F45 status (Item 1 — log-prefix centralization)
 
@@ -380,6 +376,20 @@ were known-backlog assertion bugs, not regressions).
 
 Top of the queue, in priority order:
 
+> ~~**FIRST ITEM (2026-10-06, gate-APPROVED, handed off):** the **Code review fixes (106
+> findings, incl. nits)** plan~~ — **DONE** (GREEN 2026-10-06, feature lane, **unit-only,
+> e2e DEFERRED**; see the Done section). Source: `docs/reviews/code-review.md` (2026-10-06
+> refresh — the summary says "77 findings" but its OWN table lists **106 rows: 0 critical, 12
+> major, 74 minor, 20 nit**; the plan covers ALL 106 table rows and fixes the summary count
+> via m71). 10 phases, 105 BP steps, 106/106 finding coverage. **DEFER e2e tests (unit-only
+> lane):** the user's 2026-10-06 instruction — "we are not on e2e capable machine so defer
+> those to queue for later" — the e2e gates are queued in `e2e-queue.md` (E2E-CR77-1..6,
+> status QUEUED) and run on a capable machine after this plan is GREEN. RED was proven at the
+> unit level only. Baseline: Telescope.Tests **297**; NeoVisual.Tests **212**; both lints
+> PASS; the harness `-SelfCheck` PASS; `-List` 44. The plan is diagnostic-NEUTRAL except the
+> flagged diagnostic-behavior changes (M2 fzf hit ORDER, M5 leak fix, M7 nav TARGET, m5 log
+> frequency, m8 spurious timeout, m46 placement caret).
+
 > ~~**FIRST ITEM (2026-10-05, gate-APPROVED, handed off):** the **Code review fixes (34
 > findings, incl. nits)** plan~~ — **DONE** (GREEN 2026-10-06, feature lane, **unit-only,
 > e2e DEFERRED**; see the Done section). Source: `docs/reviews/code-review.md` (2026-10-05
@@ -406,7 +416,7 @@ Top of the queue, in priority order:
 > 2026-10-04) → ~~gap 1~~ (**DONE** GREEN 2026-10-04) → ~~gap 3~~ (**DONE** GREEN
 > 2026-10-04) → ~~gap 11~~ (**DONE** GREEN 2026-10-04) →
 > ~~feature 7~~ (**DONE** GREEN 2026-10-05) → ~~gap 4~~ (**DONE** GREEN 2026-10-05) →
-> **gap 5 (next)** → gap 6 → gap 10 → gap 9 → feature 8 (+gap 8) →
+> **gap 5 (next)** → ~~gap 6~~ (**DONE** GREEN 2026-10-04) → gap 10 → gap 9 → feature 8 (+gap 8) →
 > feature 9 → which-key last. Gaps 8/9/10 are **custom-view builds** (feature lane); gap 11
 > is **native bindings** (small); gap 8 is **folded into feature 8**. The which-key item is
 > built **last** and delivers **BOTH** a bottom-right non-focus-stealing popup overlay
@@ -842,6 +852,52 @@ Top of the queue, in priority order:
    proof — e.g. a post-move build/compile-check or reference-grep).
 
 ## Done (durable completion history — appended on every GREEN)
+
+- **2026-10-06 — Code review fixes (106 findings, incl. nits)** (Lane: `feature`, unit-only,
+  e2e DEFERRED; 46 delegations, 0 VS boots, 0 iterations). All 106 findings from
+  `docs/reviews/code-review.md` (2026-10-06 refresh — the summary count fixed 77 → 106 via
+  m71) fixed across 10 phases / 4 sections: Section A (Phases 0-1 — `VimModeTracker`
+  `MainEditorFocused`/`IsMainEditorView` M5, `HierarchyForestBuilder` unfiltered + `MapChildren`
+  internal M8, `GlobalKeyboardHook` `IsActionEvent`/`ShouldProcessKey` M4/M10, the `InputHandler`
+  test-only ctor + `Clock` + `SetSentinelArmedForTest` + single controller resolution
+  M11/M35/M36/M37/M38, `KeybindingConfig.ParseLeader` rejects physical modifiers M14,
+  `RoslynGatherers.ResolveOffset` M15, `VimModeSource` cached buffer M13, `GotoDecision`
+  relocation n15, `IToolWindowController` doc m48), Section B (Phases 2-4 — `FzfLineMapper`
+  `BuildCandidates`/`MapBatched` M2, `GeometricSelectionEngine` M3, `SetTextIfChanged` m1,
+  `ResultsLogGate` m5, close-overlay ctor seam m20, `ShouldFocus` n16, `FinderConstants.HitCap`
+  m29, `ErrorItemsWalker` m33, `IPane.IsFocusable` deletion m44, `PaneFailureTracker` interlock
+  m4, `VimBufferSubscriptions` verified-already-fixed m12), Section C (Phases 5-7 — Grep/Fzf
+  merge m27, Files/Recent merge m28, `ImplementationHit` merge m26, `VisibleIdsJoined` deletion
+  m31, 2-arg `Compute` deletion m32, `SymbolFinderBase` n19, `SanitizeText` m34,
+  `PaneSelectionSync` deletion m41, `Ids`/`Catalog` deletion m40), Section D Phase 8 (test infra
+  — `FlushTimerIsReal` m52, `BlockCaretState` m57, `FormatFailure` n2, `SetOverlayOpenForTest`
+  m59, `TestScaffold.SetCurrentDispatcherAsUiThread` m61, `StoresActiveField` m53), Phase 9
+  (harness — the `telescope-goto` re-walk trigger M9, `DelayFactory` M10, `preview tokens=` drop
+  m62, deterministic severity-nav m63, order-independent `explorer-open-navigation` m64,
+  `iterate-telescope.ps1` polls n9), Phase 10 (docs/lint — `e2e-queue.md` in the lint set m65,
+  header m66, DISCHARGED annotations m67, `progress.md` header m68, baseline attribution m69,
+  RUN ORDER m70, `code-review.md` count m71, SKILL.md Down-tolerance m72 + `Panes/` parenthetical
+  m73, agent slice-B lists m74, `WindowNavigator` comment n1, DOC-66-3 allowlist doc n10,
+  dangling fragment n11, In-progress citation n12, `NeoVisualLog` comment n20).
+  Telescope.Tests 297 → **319**; NeoVisual.Tests 212 → **236**; `dotnet build` 0 errors;
+  both lints PASS; `-SelfCheck` PASS; `-List` 44. The 6 flagged diagnostic-BEHAVIOR changes
+  (M2 fzf hit ORDER, M5 leak fix, M7 nav TARGET, m5 log frequency, m8 spurious timeout, m46
+  placement caret) are documented plan changes pinned at the unit level; the e2e gates
+  **E2E-CR77-1..6** stay QUEUED in `docs/e2e-queue.md` (run on a capable machine).
+  **Change summary:** created `Telescope/Finders/SymbolFinderBase.cs` (the shared
+  Definition/Implementation base), `Telescope/Finders/Utils/ErrorItemsWalker.cs`,
+  `Telescope/Finders/Utils/FinderConstants.cs`, `MyExtension/Adornments/BlockCaretState.cs`;
+  modified the finders (Grep/Fzf/Files/Recent/Issues/Definition/Implementation), the overlay
+  (`TelescopeOverlay` `ResultsLogGate`, `FocusTargetModel`, `PaneHost`), `FzfFilter`
+  (`DelayFactory`), `LogFileWriter` (`FlushTimerIsReal`), `InputHandler`/`GlobalKeyboardHook`/
+  `KeybindingConfig`/`VimModeTracker`/`VimModeSource`, `TelescopeController`
+  (`SetOverlayOpenForTest`), the harness (`test-e2e.ps1`, `iterate-telescope.ps1`), both lint
+  scripts, and the docs (spec/AGENTS/SKILL/progress/e2e-queue/code-review + both agent files).
+  Key diagnostics: NO new literals — the only behavior changes are the 6 flagged plan changes
+  (deferred to E2E-CR77-1..6). **Look first if this regresses:** the `SymbolFinderBase` merge
+  (BP-28 — a wrong display contract breaks `Run_DefinitionFinder_SharedBody`), the
+  `FzfLineMapper` batched path (BP-2 — `Run_FzfFinder_BatchedFilter`), and the `InputHandler`
+  single-controller resolution (BP-15 — `Run_TryRouteToolWindowKey_SingleDecision`).
 
 - **2026-10-06 — Code review fixes (34 findings, incl. nits)** (Lane: `feature`, unit-only,
   e2e DEFERRED; 8 delegations, 0 VS boots, 0 iterations). All 34 findings from

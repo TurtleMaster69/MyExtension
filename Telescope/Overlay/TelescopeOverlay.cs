@@ -43,7 +43,6 @@ namespace Telescope.Overlay
         private readonly ListView _resultsList;
         private readonly GridView _gridView;
         private GridViewColumn? _flexibleColumn;   // FALLBACK-PATH-ONLY: the single display column (D-B3)
-        private double _fixedWidthSum;             // FALLBACK-PATH-ONLY: sum of the fixed columns' widths
         private readonly ContentControl _previewHost;
 
         // D3: the bottom Grid's results column is PIXEL-sized (ApplyWindowWidth owns it); the
@@ -84,8 +83,12 @@ namespace Telescope.Overlay
         private IReadOnlyList<ResultColumn> _activeCatalog = Array.Empty<ResultColumn>();
         private ColumnVisibilityModel? _activeVisibilityModel;
         private bool _useFallbackDisplayColumn;
-        private ContextMenu? _chooserMenu;
         private bool _chooserMenuOpen;
+
+        // m5 (BP-9): the results-log-on-change gate — `results columns=`/`results count=` fire
+        // on change only (a selection-only render that changes none of the four values no longer
+        // re-logs).
+        private readonly ResultsLogGate _resultsLogGate = new();
 
         // Column-visibility state, per finder, for the PROCESS lifetime: TelescopeController builds
         // a fresh overlay per open (a WPF Window cannot re-show), so per-instance state would
@@ -146,7 +149,8 @@ namespace Telescope.Overlay
             ShowActivated = true;
             Focusable = true;
             SizeToContent = SizeToContent.Manual;
-            Width = 760;
+            // m39 (BP-13): the centralized default width constant (was the magic 760).
+            Width = ColumnWidths.DefaultOverlayWidth;
             Height = 420;
 
             var root = new Border
@@ -280,7 +284,7 @@ namespace Telescope.Overlay
             // Feature 7: the native-arrow sync. The ListView's own Up/Down/PageUp/... handling moves its
             // SelectedIndex (the overlay does NOT claim the arrows — ListKeyMap); this handler adopts the
             // native index into the untouched OverlayKeyHandler by replaying the delta through the
-            // machine's own Up/Down gestures (PaneSelectionSync). Guarded: programmatic selections
+            // machine's own Up/Down gestures. Guarded: programmatic selections
             // (ApplySelection) must not re-enter.
             _resultsList.SelectionChanged += (_, _) => OnListNativeSelectionChanged();
 
@@ -395,10 +399,22 @@ namespace Telescope.Overlay
             RenderResults();       // rebuilds the columns + rows at the final width (columnsDirty is true on a fresh instance)
 
             TelescopeLog.Log($"open finder={finder.Name} candidates={_candidates.Count}");
+            // M12 (BP-7): set IsOpen + RequestShow BEFORE the await so a close during the await
+            // leaves IsOpen false and the re-check below bails (ShowDialog never fires on a
+            // closed window).
+            IsOpen = true;
+            _showState.RequestShow();
+
             // N38/BP-52: the availability probe runs off the UI thread; await it here.
             if (!await _fzf.IsAvailableAsync())
             {
                 TelescopeLog.Log("fzf unavailable — showing unfiltered list");
+            }
+
+            // M12 (BP-7): re-check after the await — a close during the await must bail.
+            if (!_showState.ShouldShowDialog())
+            {
+                return;
             }
 
             // Own the dialog to the VS main window (the Code Search / InstaSearch pattern). A
@@ -429,9 +445,6 @@ namespace Telescope.Overlay
                 Left = (area.Width - Width) / 2;
                 Top = (area.Height - Height) / 3;
             }
-
-            IsOpen = true;
-            _showState.RequestShow();
 
             // Show as a modal dialog. Deferred out of the global keyboard hook callback
             // (leader-key path) to ApplicationIdle; the modal loop runs there while hook
@@ -670,7 +683,6 @@ namespace Telescope.Overlay
         {
             _gridView.Columns.Clear();
             _flexibleColumn = null;
-            _fixedWidthSum = 0;
 
             if (_useFallbackDisplayColumn)
             {
@@ -710,7 +722,8 @@ namespace Telescope.Overlay
         private void ApplyFlexibleColumnWidth()
         {
             if (_flexibleColumn == null || _resultsList.ActualWidth <= 0) return;
-            double width = Math.Max(120, _resultsList.ActualWidth - _fixedWidthSum - 18); // 18px v-scrollbar
+            // m39 (BP-13): the centralized vertical-scrollbar constant (was the magic 18).
+            double width = Math.Max(120, _resultsList.ActualWidth - ColumnWidths.VerticalScrollbarWidth);
             if (double.IsNaN(_flexibleColumn.Width) || Math.Abs(_flexibleColumn.Width - width) > 0.5)
             {
                 _flexibleColumn.Width = width;
@@ -786,7 +799,7 @@ namespace Telescope.Overlay
                 return;   // an ItemsSource reset / cleared selection — nothing to adopt
             }
             // n6 (BP-18): the one-line step math is inlined here (the PaneSelectionSync.Steps
-            // wrapper is deleted).
+            // wrapper was deleted).
             int steps = to - _selectedIndex;
             if (steps == 0)
             {
@@ -828,11 +841,18 @@ namespace Telescope.Overlay
             // D5: the column-set diagnostic — logged on EVERY render and after every chooser toggle
             // (the toggle path re-enters RenderResults). Byte-exact format:
             //   [Telescope] results columns=<comma-separated visible ids, catalog order, no spaces>
-            TelescopeLog.Log($"results columns={ResultsFormatter.ColumnsIdList(VisibleIds())}");
-            // Byte-stable harness contract (format unchanged from the TextBox era; boxText is now
-            // the rendered row-text length of the visible cells — ResultsFormatter.RenderedTextLength):
-            //   [Telescope] results count=<n> selected=<m> boxText=<len>
-            TelescopeLog.Log($"results count={_results.Count} selected={_selectedIndex} boxText={ResultsFormatter.RenderedTextLength(_lastRowCells)}");
+            // m5 (BP-9): gated on ResultsLogGate — fire on change only (columns/count/selected/boxText;
+            // a selection-only render that changes none of the four no longer re-logs).
+            string columnsIdList = ResultsFormatter.ColumnsIdList(VisibleIds());
+            int boxTextLen = ResultsFormatter.RenderedTextLength(_lastRowCells);
+            if (_resultsLogGate.ShouldLog(columnsIdList, _results.Count, _selectedIndex, boxTextLen))
+            {
+                TelescopeLog.Log($"results columns={columnsIdList}");
+                // Byte-stable harness contract (format unchanged from the TextBox era; boxText is now
+                // the rendered row-text length of the visible cells — ResultsFormatter.RenderedTextLength):
+                //   [Telescope] results count=<n> selected=<m> boxText=<len>
+                TelescopeLog.Log($"results count={_results.Count} selected={_selectedIndex} boxText={boxTextLen}");
+            }
         }
 
         /// <summary>
@@ -866,7 +886,9 @@ namespace Telescope.Overlay
 
             PreviewEditorResult result = _previewEditor?.Show(location) ?? PreviewEditorResult.Empty;
             _previewHost.Content = result.Element;
-            _previewNavigator.SetText(result.Text);   // ONE source of truth: the buffer's snapshot text
+            // m1 (BP-8): SetTextIfChanged skips the full-file LineIndex rebuild when the file is
+            // unchanged (the caret is repositioned below regardless).
+            _previewNavigator.SetTextIfChanged(result.Text);   // ONE source of truth: the buffer's snapshot text
 
             // Position the caret: the hit line, else the top (the old SetText reset-to-top semantics).
             if (location.LineNumber > 0)
@@ -954,7 +976,12 @@ namespace Telescope.Overlay
             _keyHandler.EnterInsertMode(placement);
             _promptBox.IsReadOnly = false;
             UpdateModeLabel();
-            FocusPane(FocusTarget.Input);   // Feature 7: the machine moves to Input + the pane focuses the prompt
+            // n16 (BP-17): only focus + log when not already on Input — EnterInsert while already
+            // on the Input pane must not fire a spurious `focus target=Input` line.
+            if (_focusTargetModel.ShouldFocus(FocusTarget.Input))
+            {
+                FocusPane(FocusTarget.Input);   // Feature 7: the machine moves to Input + the pane focuses the prompt
+            }
             ApplyInsertCaret(placement);
         }
 
@@ -1070,7 +1097,7 @@ namespace Telescope.Overlay
         private bool TryPromptMotion(Key key)
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-            if (!PromptMotionRouter.ShouldConsume(key, shift, out CaretPlacement? insertPlacement))
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out TextMotion? motion, out CaretPlacement? insertPlacement))
             {
                 if (insertPlacement != null)
                 {
@@ -1087,7 +1114,8 @@ namespace Telescope.Overlay
             }
             _promptNavigator.MoveTo(_promptBox.CaretIndex);
 
-            if (!TextMotionDispatcher.Handle(key, shift, _promptNavigator, out _))
+            // m46 (BP-16): apply the SINGLE MapKey result from ShouldConsume (no second MapKey).
+            if (motion == null || !TextMotionDispatcher.Apply(motion.Value, _promptNavigator, out _))
             {
                 return false;
             }
@@ -1116,11 +1144,12 @@ namespace Telescope.Overlay
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
             // R1: the preview surface keeps the FULL motion set (j/k/g/G navigate the code).
-            if (!PromptMotionRouter.ShouldConsume(key, shift, out _, previewSurface: true))
+            if (!PromptMotionRouter.ShouldConsume(key, shift, out TextMotion? motion, out _, previewSurface: true))
             {
                 return false;
             }
-            return TextMotionDispatcher.Handle(key, shift, _previewNavigator, out _);
+            // m46 (BP-16): apply the SINGLE MapKey result from ShouldConsume (no second MapKey).
+            return motion != null && TextMotionDispatcher.Apply(motion.Value, _previewNavigator, out _);
         }
 
         private void ApplyPreviewCaret()
@@ -1234,8 +1263,6 @@ namespace Telescope.Overlay
                     return (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? OverlayKey.ShiftG : OverlayKey.G;
                 case Key.I: return OverlayKey.I;
                 case Key.A: return OverlayKey.A;
-                case Key.H when (Keyboard.Modifiers & ModifierKeys.Control) != 0: return OverlayKey.CtrlH;
-                case Key.L when (Keyboard.Modifiers & ModifierKeys.Control) != 0: return OverlayKey.CtrlL;
                 default: return OverlayKey.Other;
             }
         }
@@ -1363,7 +1390,6 @@ namespace Telescope.Overlay
             menu.Closed += (_, _) =>
             {
                 _chooserMenuOpen = false;
-                _chooserMenu = null;
                 if (!IsActive)
                 {
                     CloseOverlay();   // restore the stale-overlay guard if activation was lost meanwhile
@@ -1373,7 +1399,6 @@ namespace Telescope.Overlay
                     FocusPane(FocusTarget.Input);    // keys must land back in the prompt (the machine's Current must match the focused pane)
                 }
             };
-            _chooserMenu = menu;
             _chooserMenuOpen = true;
             menu.PlacementTarget = _resultsList;
             menu.Placement = PlacementMode.MousePoint;

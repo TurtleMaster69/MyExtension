@@ -22,7 +22,6 @@ namespace Telescope.Overlay
 
         public FocusTarget Id => FocusTarget.Input;
         public FrameworkElement Content { get; }
-        public bool IsFocusable => true;
         public void Activate() => _activate();
         public void Deactivate() { /* no chrome — see the class comment */ }
     }

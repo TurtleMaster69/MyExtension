@@ -30,6 +30,13 @@ namespace MyExtension.ToolWindows
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             keeper.Tick += (_, _) =>
             {
+                // m21: a superseded keeper's queued tick is a no-op — the tick handler must not
+                // call tick(...) for a keeper that was already stopped by a newer Run (the race:
+                // a tick queued in the dispatcher before _current?.Stop() at the top of Run).
+                if (!ReferenceEquals(_current, keeper))
+                {
+                    return;
+                }
                 bool keepRunning = true;
                 try
                 {

@@ -33,8 +33,10 @@ namespace MyExtension.Adornments
         private readonly Rectangle _white;
         private readonly TextBlock _glyph;
 
-        private bool _desiredActive;
-        private bool _renderedActive;
+        // m57 (BP-D6): the desired/rendered state model is delegated to the pure BlockCaretState
+        // (the OverlayKeyHandler/TextMotionNavigator pattern) so the focus-loss/regain contract is
+        // unit-testable without a view or an adornment layer.
+        private readonly BlockCaretState _state = new BlockCaretState();
 
         // Tag for OUR adornment only. The native VS caret lives on the same "Caret" layer, so we
         // must never RemoveAllAdornments() — that would delete the native caret too (leaving NO
@@ -76,25 +78,26 @@ namespace MyExtension.Adornments
         /// only the rendered state; a focus regain restores it to the desired value.</summary>
         public bool Active
         {
-            get => _desiredActive;
+            get => _state.DesiredActive;
             set
             {
-                _desiredActive = value;
+                _state.DesiredActive = value;
                 ApplyRendered(value);
             }
         }
 
         /// <summary>Applies the RENDERED state: logs the <c>block-caret active=</c> diagnostic
-        /// (which reflects the rendered state — unchanged literal) and draws/removes the block.</summary>
+        /// (which reflects the rendered state — unchanged literal) and draws/removes the block.
+        /// The state tracking itself is delegated to <see cref="BlockCaretState.ApplyRendered"/>.</summary>
         private void ApplyRendered(bool value)
         {
-            if (_renderedActive == value)
+            if (_state.RenderedActive == value)
             {
                 return;
             }
-            _renderedActive = value;
-            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}block-caret active={_renderedActive}");
-            if (!_renderedActive)
+            _state.ApplyRendered(value);
+            Telescope.Logging.NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}block-caret active={_state.RenderedActive}");
+            if (!_state.RenderedActive)
             {
                 // N4: deactivation must remove OUR adornment. Update() early-returns when
                 // inactive (the hot-path guard), so without this the block would persist and
@@ -120,6 +123,7 @@ namespace MyExtension.Adornments
             // R21: a normal-mode block caret must not persist over an unfocused editor view —
             // deactivate the RENDERED state so the native line caret shows. The DESIRED state
             // stays (ApplyEditorViewCaret asked for a block caret); GotAggregateFocus restores it.
+            // m57 (BP-D6): the state transition is delegated to BlockCaretState.
             ApplyRendered(false);
         }
 
@@ -128,8 +132,8 @@ namespace MyExtension.Adornments
             // m4 (BP-9): on focus regain, restore the rendered state to the desired value — a
             // normal-mode editor view that lost and regained focus must show the block caret again
             // (the `block-caret active=True` diagnostic is correct immediately, not after a mode
-            // toggle or a motion).
-            ApplyRendered(_desiredActive);
+            // toggle or a motion). m57 (BP-D6): the state transition is delegated to BlockCaretState.
+            ApplyRendered(_state.DesiredActive);
         }
 
         private void OnClosed(object sender, EventArgs e)
@@ -151,7 +155,7 @@ namespace MyExtension.Adornments
             // n2: when inactive (insert mode) there is no adornment of ours to remove — the
             // deactivation path already removed it — so skip the RemoveAdornmentsByTag call on
             // the caret/layout hot path entirely.
-            if (!_renderedActive)
+            if (!_state.RenderedActive)
             {
                 return;
             }

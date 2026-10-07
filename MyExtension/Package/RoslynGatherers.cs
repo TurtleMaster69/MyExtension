@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Telescope.Finders;
 using Telescope.Logging;
+using ImplementationHit = Telescope.Finders.DefinitionHit;
 
 namespace MyExtension.Package
 {
@@ -322,7 +323,7 @@ namespace MyExtension.Package
                         () => document.GetTextAsync(System.Threading.CancellationToken.None));
                     if (line >= 1 && line <= text.Lines.Count)
                     {
-                        return text.Lines[line - 1].Start + Math.Max(0, column - 1);
+                        return ResolveOffset(text, line, column);
                     }
                 }
             }
@@ -331,6 +332,23 @@ namespace MyExtension.Package
                 NeoVisualLog.Log($"{Telescope.Logging.DiagnosticLog.NeoVisual}GetCaretOffset failed: {ex.Message}");
             }
             return -1;
+        }
+
+        /// <summary>
+        /// m15: resolves a 1-based (line, column) caret position to a 0-based buffer offset,
+        /// clamping the column to the line length (<c>Span.Length + 1</c>) so a caret in virtual
+        /// space resolves to the line end instead of a position past it (which would resolve the
+        /// wrong symbol). Returns -1 for an out-of-range line.
+        /// </summary>
+        internal static int ResolveOffset(Microsoft.CodeAnalysis.Text.SourceText text, int line, int column)
+        {
+            if (text == null || line < 1 || line > text.Lines.Count)
+            {
+                return -1;
+            }
+            var lineSpan = text.Lines[line - 1].Span;
+            int clampedColumn = Math.Min(Math.Max(1, column), lineSpan.Length + 1);
+            return lineSpan.Start + (clampedColumn - 1);
         }
 
         /// <summary>Reads the given 1-based source line from <paramref name="path"/> for display; defensive.

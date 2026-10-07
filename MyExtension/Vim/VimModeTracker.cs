@@ -42,6 +42,11 @@ namespace MyExtension.Vim
     {
         private readonly IVimModeSource _source;
 
+        // M5 (BP-1): fired when a MAIN-EDITOR (document) view gains focus — the identity that
+        // distinguishes the main editor from the Command Window's non-document editor view. The
+        // InputHandler subscribes to invalidate the cached text-input-surface flag (BP-2).
+        internal event Action? MainEditorFocused;
+
         // The code view that currently holds aggregate focus, if any. Mutated on the UI thread
         // only (focus events); used to make the editor-focus flag robust to out-of-order focus
         // transitions (a lost-focus event from a non-focused view must not clear it).
@@ -125,6 +130,36 @@ namespace MyExtension.Vim
                 _focusedView = view;
                 _editorFocused = true;
                 UpdateTypingFromMode(_source.GetModeKind(view));
+                // M5 (BP-1): a MAIN-EDITOR (document) view's focus fires the invalidation event —
+                // the Command Window's non-document editor view must not.
+                if (IsMainEditorView(view))
+                {
+                    MainEditorFocused?.Invoke();
+                }
+            }
+        }
+
+        /// <summary>
+        /// M5 (BP-1): the document-view discriminator — true when <paramref name="view"/> is a
+        /// main-editor (document) view (its buffer carries an <see cref="ITextDocument"/> with a
+        /// non-empty <see cref="ITextDocument.FilePath"/>). This is the identity that
+        /// distinguishes the main editor from the Command Window's non-document editor view
+        /// (which also sets <c>IsEditorFocused</c>). Defensive: a view whose buffer cannot be
+        /// read is not a main-editor view.
+        /// </summary>
+        internal static bool IsMainEditorView(ITextView view)
+        {
+            try
+            {
+                return view != null
+                    && view.TextBuffer.Properties.TryGetProperty(
+                        typeof(Microsoft.VisualStudio.Text.ITextDocument),
+                        out Microsoft.VisualStudio.Text.ITextDocument doc)
+                    && !string.IsNullOrEmpty(doc.FilePath);
+            }
+            catch
+            {
+                return false;
             }
         }
 

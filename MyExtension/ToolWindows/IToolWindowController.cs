@@ -15,7 +15,7 @@ namespace MyExtension.ToolWindows
     /// <para/>
     /// <see cref="Type"/> identifies which tool window this controller drives. A window's initial
     /// mode comes from whether its type is a text-input surface (see
-    /// <see cref="GeneralToolWindowController.IsTextInputType"/>), and the user can then toggle it.
+    /// <see cref="ToolWindowTypeResolver.IsTextInputType"/>), and the user can then toggle it.
     ///
     /// <para/>
     /// <b>Threading:</b> all members are called on the UI thread only (the same thread that runs

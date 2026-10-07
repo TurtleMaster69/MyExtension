@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using Telescope.Finders;
+using FzfHit = Telescope.Finders.GrepHit;
+using ImplementationHit = Telescope.Finders.DefinitionHit;
 
 namespace Telescope.Overlay
 {
@@ -67,29 +69,30 @@ namespace Telescope.Overlay
 
         // ---- per-finder catalogs (catalog order = the plan's catalog table order) ----
 
-        internal static IReadOnlyList<ResultColumn> Files(string? projectRoot = null) => new[]
-        {
-            //                    id      header      width-kind                  chars  min  max  truncation  visible
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<FileHit>(p, h => BaseName(h))),
-            new ResultColumn("dir", "Directory", ResultColumnWidth.Flexible,     0,   6,  40, ResultColumnTruncation.Tail, true,
-                p => DirCell(p, projectRoot)),
-            new ResultColumn("path", "Path",     ResultColumnWidth.Fixed,       60,  10,  60, ResultColumnTruncation.Tail, false,
-                p => Cell<FileHit>(p, h => h.FilePath)),
-        };
+        internal static IReadOnlyList<ResultColumn> Files(string? projectRoot = null) =>
+            FileDirPathColumns<FileHit>(p => DirCell(p, projectRoot));
 
-        internal static IReadOnlyList<ResultColumn> Recent() => new[]
-        {
+        internal static IReadOnlyList<ResultColumn> Recent() =>
             // The Files shape (file+dir visible, path hidden); the dir cell is the FULL
             // directory always — a cross-solution MRU has no single root to trim (the overlay
             // passes no projectRoot), so the getter is Recent-specific, not DirCell (typed to
-            // FileHit — the type-disjointness guard).
+            // RecentFileHit — the type-disjointness guard).
+            FileDirPathColumns<RecentFileHit>(p => Cell<RecentFileHit>(p, h => Path.GetDirectoryName(h.FilePath) ?? string.Empty));
+
+        /// <summary>
+        /// The shared Files/Recent catalog shape (m28/BP-18): file+dir visible, path hidden.
+        /// Parameterized by BOTH the hit type and the dir-cell getter — the dir-cell semantic
+        /// diff is preserved (Files trims the project-root tail via <see cref="DirCell"/>;
+        /// Recent returns the full directory).
+        /// </summary>
+        private static IReadOnlyList<ResultColumn> FileDirPathColumns<THit>(Func<object?, string> dirGetter) where THit : FileLocation => new[]
+        {
             new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<RecentFileHit>(p, h => BaseName(h))),
+                p => Cell<THit>(p, h => BaseName(h))),
             new ResultColumn("dir", "Directory", ResultColumnWidth.Flexible,     0,   6,  40, ResultColumnTruncation.Tail, true,
-                p => Cell<RecentFileHit>(p, h => Path.GetDirectoryName(h.FilePath) ?? string.Empty)),
+                dirGetter),
             new ResultColumn("path", "Path",     ResultColumnWidth.Fixed,       60,  10,  60, ResultColumnTruncation.Tail, false,
-                p => Cell<RecentFileHit>(p, h => h.FilePath)),
+                p => Cell<THit>(p, h => h.FilePath)),
         };
 
         internal static IReadOnlyList<ResultColumn> Issues() => new[]
@@ -120,7 +123,12 @@ namespace Telescope.Overlay
                 p => Cell<ReferenceHit>(p, r => r.LineText)),
         };
 
-        internal static IReadOnlyList<ResultColumn> Grep() => new[]
+        internal static IReadOnlyList<ResultColumn> Grep() => GrepFzf();
+
+        internal static IReadOnlyList<ResultColumn> Fzf() => GrepFzf();
+
+        /// <summary>The shared Grep/Fzf catalog (m27/BP-17 — byte-identical post-m25, both use GrepHit).</summary>
+        private static IReadOnlyList<ResultColumn> GrepFzf() => new[]
         {
             new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
                 p => Cell<GrepHit>(p, h => BaseName(h))),
@@ -128,16 +136,6 @@ namespace Telescope.Overlay
                 p => Cell<GrepHit>(p, h => Line(h))),
             new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
                 p => Cell<GrepHit>(p, h => h.LineText)),
-        };
-
-        internal static IReadOnlyList<ResultColumn> Fzf() => new[]
-        {
-            new ResultColumn("file", "File",     ResultColumnWidth.Fixed,       28,   6,  30, ResultColumnTruncation.Tail, true,
-                p => Cell<FzfHit>(p, h => BaseName(h))),
-            new ResultColumn("line", "Line",     ResultColumnWidth.Fixed,        6,   2,   5, ResultColumnTruncation.End, true,
-                p => Cell<FzfHit>(p, h => Line(h))),
-            new ResultColumn("text", "Line text", ResultColumnWidth.Flexible,    0,  10,  int.MaxValue, ResultColumnTruncation.End, true,
-                p => Cell<FzfHit>(p, h => h.LineText)),
         };
 
         internal static IReadOnlyList<ResultColumn> Implementation() => new[]

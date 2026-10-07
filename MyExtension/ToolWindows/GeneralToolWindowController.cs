@@ -72,18 +72,5 @@ namespace MyExtension.ToolWindows
                 default: return 0;
             }
         }
-
-        /// <summary>
-        /// True when a tool window of this type is primarily a text-input surface (search boxes,
-        /// command/immediate consoles, browser address bars, ...), so it should start in input
-        /// mode. Used as the default; the mode can still be toggled per window.
-        /// A7: derives from the single classification source
-        /// (<see cref="ToolWindowTypeResolver.IsTextInputType"/>) — no second switch to keep in
-        /// sync with the enum + GUID map.
-        /// </summary>
-        public static bool IsTextInputType(ToolWindowType type)
-        {
-            return ToolWindowTypeResolver.IsTextInputType(type);
-        }
     }
 }

@@ -51,7 +51,8 @@ if (-not $Docs) {
         'docs/spec.md',
         'docs/progress.md',
         'docs/reviews/architecture-review.md',
-        'docs/reviews/code-review.md'
+        'docs/reviews/code-review.md',
+        'docs/e2e-queue.md'
     ) + (Get-ChildItem (Join-Path $repoRoot '.opencode/agent') -Filter '*.md' |
         ForEach-Object { '.opencode/agent/' + $_.Name })
 }
@@ -91,7 +92,14 @@ $externalAllowlist = @(
     'TypeError', 'KeyError',
     # .NET BCL interop types cited by the code-review-hub / code-review-worker agent
     # docs (2026-09-29) in the P/Invoke review context — external runtime types.
-    'SafeHandle'
+    'SafeHandle',
+    # m65 (BP-D23): `GotoProbe` is the seeded scratch-solution GotoProbe partial pair cited by
+    # the e2e-queue goto gates (docs/e2e-queue.md) + the code-review m65 finding — not a repo symbol.
+    'GotoProbe',
+    # m71 (BP-D29): deleted test names + the m55 finding's NEW hermetic test name cited by
+    # docs/reviews/code-review.md (the m55/n4/n5 findings record the deletions) — not repo symbols.
+    'NoReflection', 'Run_GetController_SameInstance', 'PositiveActionKeyCount',
+    'Run_KeyNames_RoundTrip_WindowPrefix'
 )
 
 # m61 (BP-65) + BP-71: the removed/renamed symbols below are NOT globally allowlisted — a future
@@ -109,13 +117,16 @@ $docScopedAllowlist = @{
     'AGENTS.md' = @('CardinalNavigation')
     '.opencode/skills/vs-extension-dev/SKILL.md' = @('CardinalNavigation')
     'docs/spec.md' = @('CardinalNavigation')
-    'docs/progress.md' = @('CardinalNavigationConstants', 'RectCoordinate', 'UtilityMethods', 'WindowAdapter', 'WindowMatrix')
+    'docs/progress.md' = @('CardinalNavigationConstants', 'RectCoordinate', 'UtilityMethods', 'WindowAdapter', 'WindowMatrix', 'PaneSelectionSync', 'Run_KeyNames_RoundTrip_WindowPrefix')
     'docs/reviews/architecture-review.md' = @('DistinctBy', 'CardinalMovment', 'CardinalNavigation', 'RectCoordinate', 'WindowAdapter', 'WindowMatrix')
     # m19 (BP-34): the code-review.md prose cites the DELETED symbols (PaneNavigationEngine.cs,
     # TryDispatch.cs) — the same pattern as architecture-review.md above. `Unhook` is a proposed
     # method name in the m2 finding's prose (the gatherer "has no Dispose/Unhook") that was never
     # implemented under that name (the fix used Dispose/HookEvents) — scoped to this review doc.
-    'docs/reviews/code-review.md' = @('PaneNavigationEngine', 'TryDispatch', 'Unhook')
+    # m41 (BP-27): `PaneSelectionSync` (the deleted empty shell) + m34 (BP-25): `SanitizeSample`
+    # (migrated to DiagnosticLog.SanitizeText) + m40 (BP-26): `Catalog` (the deleted
+    # ColumnVisibilityModel.Catalog) — the same "recently removed" pattern.
+    'docs/reviews/code-review.md' = @('PaneNavigationEngine', 'TryDispatch', 'Unhook', 'PaneSelectionSync', 'SanitizeSample', 'Catalog', 'Run_WindowManager_DefaultControllerCache_ReturnsCachedInstance')
     '.opencode/agent/code-review-worker.md' = @('DistinctBy')
     # Trailmark PYTHON types cited by the Trailmark-guidance doc (the QueryEngine
     # construction CORRECTION, 2026-10-04) — unresolvable in the C#-scoped lint by design.
@@ -134,6 +145,25 @@ $intentionallyAbsent = @(
     # the files to review (historical review-scope enumerations) — same file-path analog.
     # Cited there WITHOUT the Telescope/ prefix (the archives' project-relative shorthand).
     'Overlay/Utils/SyntaxHighlighter.cs'
+    # m26 (BP-16): `ImplementationHit.cs` was merged into `DefinitionHit.cs` (the
+    # `using ImplementationHit = ...DefinitionHit;` alias); the review archives + progress.md
+    # still cite the deleted file (historical review-scope enumerations / the change summary).
+    # progress.md cites the full `Telescope/Finders/ImplementationHit.cs`; code-review.md cites
+    # the bare `ImplementationHit.cs` (the archives' project-relative shorthand).
+    'Telescope/Finders/ImplementationHit.cs'
+    'ImplementationHit.cs'
+    # m25 (BP-10): `FzfHit.cs` was merged into `GrepHit.cs` (the `using FzfHit = ...GrepHit;`
+    # alias); n15 (BP-23): `GotoDispatcher.cs` was inlined into MyExtensionPackage; the
+    # WindowTypeProbe class was inlined into WindowManager. progress.md cites the deleted files
+    # in its historical change summaries (the same "recently removed" pattern as above).
+    'Telescope/Finders/Utils/FzfHit.cs'
+    'Telescope/Controller/GotoDispatcher.cs'
+    'WindowTypeProbe.cs'
+    # m71 (BP-D29): code-review.md cites the deleted WindowTypeProbe.cs with its full path +
+    # line ref (`MyExtension/ToolWindows/Utils/WindowTypeProbe.cs:11` — the class was inlined
+    # into WindowManager); the bare-name entry above does not match the directory-prefixed
+    # citation, so the exact cited form is allowlisted (the established pattern).
+    'MyExtension/ToolWindows/Utils/WindowTypeProbe.cs'
 )
 
 # Hub-created runtime artifacts (not in the repo until the loop creates them).

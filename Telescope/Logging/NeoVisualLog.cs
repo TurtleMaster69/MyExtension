@@ -106,10 +106,9 @@ namespace Telescope.Logging
         /// <summary>Writes a timestamped line to the structured NeoVisual log file, the NeoVisual pane, and the debugger.</summary>
         public static void Log(string message)
         {
-            // The structured log goes to the NeoVisual file (LogFileWriter.Write) AND the debugger
-            // output (Debug.WriteLine -> NeoVisualTraceListener -> the debug-output file). So a
-            // line here lands in BOTH per-run files: the exp (NeoVisual) file and the main
-            // (debug) file, keeping them comparable.
+            // The structured line always goes to the NeoVisual file (LogFileWriter.Write). The
+            // debug-output file receives it ONLY when DebugDuplicationEnabled is set (opt-in) —
+            // the Debug.WriteLine duplication is gated, not unconditional.
             LogFileWriter.Write(message);
             if (DebugDuplicationEnabled)
             {

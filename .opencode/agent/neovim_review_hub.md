@@ -173,9 +173,9 @@ including all three new finders and the `IFinder`/`IsQueryDriven` seams):
   `Input/Utils/KeybindingConfig.cs`, `VimModeTracker.cs`, `Input/Utils/PopupNavigation.cs`, `WindowManager.cs`,
   `BlockCaretAdornment.cs`, `Hooks/Utils/KeyInjection.cs`, `MyExtensionPackage.cs`, `Package/Utils/TelescopeCommand.cs`,
   `ToolWindows/Utils/ToolWindowTypeResolver.cs`
-- **B** `MyExtension/Navigation/`: `WindowNavigator.cs`, `Utils/WindowFrameAdapter.cs`,
+- **B** `MyExtension/Navigation/`: `WindowNavigator.cs`, `WindowNavigationEngine.cs`, `Utils/WindowFrameAdapter.cs`,
   `Utils/WindowFrameUtils.cs`, `Utils/NavigationConstants.cs`,
-  `Utils/WindowRect.cs`, `LinqExtensionMethods.cs`
+  `Utils/WindowRect.cs`, `Utils/NavigationSnapshot.cs`, `Utils/NavigationSettings.cs`, `Utils/Direction.cs`
 - **C** `MyExtension/ToolWindows/`: `IToolWindowController.cs`, `GeneralToolWindowController.cs`,
   `TextInputToolWindowController.cs`, `SolutionExplorerController.cs`, `Utils/HierarchyResolver.cs`,
   `Utils/TextMotionHelper.cs`
@@ -184,7 +184,7 @@ including all three new finders and the `IFinder`/`IsQueryDriven` seams):
   `Overlay/Utils/SyntaxHighlighter.cs`, `Overlay/Utils/ResultsFormatter.cs`, `Filter/FzfFilter.cs`, `Finders/FileFinder.cs`,
   `Finders/CodeIssuesFinder.cs`, `Finders/Utils/CodeIssue.cs`, `Finders/GrepFinder.cs`, `Finders/Utils/GrepHit.cs`,
   `Finders/ReferencesFinder.cs`, `Finders/Utils/ReferenceHit.cs`, `Finders/ImplementationFinder.cs`,
-  `Finders/Utils/ImplementationHit.cs`, `Finders/Utils/ProjectFiles.cs`, `Logging/Utils/DiagnosticLog.cs`,
+  `Finders/Utils/DefinitionHit.cs`, `Finders/Utils/ProjectFiles.cs`, `Logging/Utils/DiagnosticLog.cs`,
   `Logging/NeoVisualLog.cs`, `Logging/Utils/LogFileWriter.cs`, `Logging/Utils/NeoVisualTraceListener.cs`
 - **E** `tests/` + `tools/`: `tests/Telescope.Tests/Program.cs`, `tests/NeoVisual.Tests/Program.cs`,
   `tools/harness/test-e2e.ps1`, `tools/harness/iterate-telescope.ps1`, `tools/harness/dte-command.ps1`,

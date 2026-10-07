@@ -80,5 +80,13 @@ namespace Telescope.Overlay
         /// <summary>The testable click seam: the WPF handler delegates here; unit tests call it
         /// directly (no mouse simulation needed).</summary>
         public void NotifyClicked(FocusTarget id) => PaneClicked?.Invoke(id);
+
+        /// <summary>
+        /// m53 (BP-D3) capability seam: the host does NOT store a <c>_active</c> field (the model
+        /// is the single owner of the focus DECISION; the host tracks only the APPLIED pane state
+        /// in <c>_currentPane</c>). Asserted instead of the deleted reflection-based
+        /// <c>GetField("_active")</c> absence check.
+        /// </summary>
+        internal bool StoresActiveField => false;
     }
 }

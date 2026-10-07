@@ -56,11 +56,22 @@ namespace MyExtension.Navigation
 
             foreach (var window in allWindows)
             {
-                var eachWindowParentWindow = window?.LinkedWindowFrame;
-
-                if (WindowFrameUtils.CompareWindows(eachWindowParentWindow, parentWindow))
+                // M6 (BP-12): a stale/disconnected RCW must not propagate through LinkedTo ->
+                // BuildActiveWindows -> the ctor catch and degrade ALL navigation to a no-op. Each
+                // window's LinkedWindowFrame read + the CompareWindows Caption/Type reads are
+                // isolated — a throwing window is skipped, the rest survive.
+                try
                 {
-                    linkedWindows.Add(window);
+                    var eachWindowParentWindow = window?.LinkedWindowFrame;
+
+                    if (WindowFrameUtils.CompareWindows(eachWindowParentWindow, parentWindow))
+                    {
+                        linkedWindows.Add(window);
+                    }
+                }
+                catch
+                {
+                    // stale/disconnected window — skip it
                 }
             }
 

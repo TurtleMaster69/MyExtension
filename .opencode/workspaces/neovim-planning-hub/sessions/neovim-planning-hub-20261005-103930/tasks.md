@@ -1,0 +1,15 @@
+# Task Ledger — neovim-planning-hub-20261005-103930
+
+> The plan + assigned subtasks + known facts. The hub is the ONLY writer of this
+> ledger. Worker status vocabulary: `active / idling / done / crashed`.
+
+| ID | Objective | Assignee | Status | Artifact | Verification |
+|----|-----------|----------|--------|----------|--------------|
+| R1 | Structural digest: verify the key blast-radius/proxy claims for the 34-findings change areas (GrepFinder, FzfFinder, InputHandler, ErrorListGatherer, RecentFilesGatherer, BlockCaretAdornment, SolutionExplorerController, FocusTargetModel, FileContentCache, FzfFilter, TelescopeOverlay, harness) | trailmark-recon | done | artifacts/recon.md | digest ≤1500 tokens — returned (graph 2595 nodes/1016 proxies; all 18 claims CONFIRMED; proxy traps: GetCandidates/GetCandidatesAsync/FilterAsync/IsAvailableAsync/GetLines are virtual-seam NOT dead) |
+| R2 | Change-area analysis: Telescope/ slice (M1, M2, m6-m12, n5-n7) — duplication/perf/bites-later in the files the plan touches | arch-auditor | done | artifacts/arch-telescope.md | digest ≤1500 tokens — returned (M1/M2 sound; m6 prefer the direction table; m7 under-scoped — 6x block + 2x WarmContentCache duplicated across all 3 finders; m8 needs-correction — host constructs finders, required ctor param; n5/n6 not-real-issue; M2 signature ripple risk) |
+| R3 | Change-area analysis: MyExtension/ + tools/ slice (M3, m1-m5, m13-m19, n1-n4, n8-n11) | arch-auditor | done | artifacts/arch-myext.md | digest ≤1500 tokens — returned (M3 sound via SimpleShortcutMatcher.IsBoundShiftChord; m1 instance-scope+invalidate; m2 sound; m4 split desired/rendered; m5 resolve-box-once; m19 half-stale; n1 instance-scope NOT the fix; n4 stat IS the change detector; n11 needs DTE poll not log-wait) |
+| R4 | Native-VS-reuse research: M3 (Shift+ shortcuts), m1 (Error List invalidation events), m2 (event unhook), m4 (block-caret focus regain), m6 (shared geometric selection) | feature-researcher | done | artifacts/research.md | digest ≤1500 tokens — returned (M3 build; m1 OnBuildDone+DocumentSaved or drop static cache; m2 build; m4 build GotAggregateFocus; m6 skip — pipelines genuinely differ, cross-assembly coupling outweighs drift) |
+| P1 | Write the initial plan (all 34 findings, unit-only, e2e DEFERRED) at plans/plan.md | hub (me) | done | plans/plan.md | written — 10 phases, 10 ACs, M-M7 (m11 only), e2e queue ref (E2E-CR34-1..4) |
+| P2 | Append the BP-n Build Plan + Verification Trace to plans/plan.md | implementation-planner | done | plans/plan.md | 34 BP steps (BP-1..BP-34), 34/34 finding coverage, Verification Trace 34 rows; line corrections (m2 Dispose :544-558, m12 FocusPane :1138-1143, m19 half-stale) |
+| P3 | Approve the plan (initial-plan + build-plan gates) | docs-reviewer | done | APPROVE | gate policy satisfied — APPROVE (2 minor + 2 nit, fixed by the hub: E2E-queue wording, BP-34 premise, ~20→30 count, BP-29 seam) |
+| P4 | Hand off: write docs/implementation_plan.md + progress.md first item + e2e-queue.md entries | hub (me) | done | docs/implementation_plan.md (621 lines) | user approved; doc-ref 0 unresolved + doc-content 12/12 PASS |

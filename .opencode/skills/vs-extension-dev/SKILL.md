@@ -298,8 +298,8 @@ of any of these only when the task needs it.
 ## Testing the extension
 
 See **AGENTS.md** for the full picture. Summary:
-- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (319) and
-  `dotnet run --project tests/NeoVisual.Tests` (236), with substring filter +
+- Offline unit tests: `dotnet run --project tests/Telescope.Tests` (366) and
+  `dotnet run --project tests/NeoVisual.Tests` (264), with substring filter +
   `--list`.
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 44 executed GREEN
   against the experimental

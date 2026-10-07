@@ -94,6 +94,7 @@ blocked from VS by returning `(IntPtr)1` from the hook callback.
 | `Telescope/Finders/ReferencesFinder.cs` | Symbol-at-caret find-references with read/write access (Roslyn `FindReferencesAsync`; host-injected gatherer keeps it hermetic-testable). |
 | `Telescope/Finders/GrepFinder.cs` | Query-driven grep over `ProjectFiles.Enumerate` (per-keystroke re-gather with a ~200ms debounce; skips fzf for query finders). |
 | `Telescope/Finders/FzfFinder.cs` | Query-driven fuzzy content finder over `ProjectFiles.Enumerate` (per-file fzf `--filter`; literal fallback when fzf unavailable). |
+| `Telescope/Finders/Utils/QueryDrivenFinderBase.cs` | The shared query-driven finder base (GrepFinder + FzfFinder inherit; the ctor, `EnumerateFiles`, `ContentCache` seam, `ToEntry` display, `OpenHit`, the `IsNullOrWhiteSpace` short-circuit, and the async gather skeleton — the matcher hook is the only difference). |
 | `Telescope/Finders/ImplementationFinder.cs` | Symbol-at-caret `FindImplementationsAsync`, first in-source declaring location, deterministic type-before-member ordering (host-injected gatherer). |
 | `Telescope/Finders/RecentFilesFinder.cs` | Recent-files finder over `DTE.RecentFiles` (the VS MRU, most-recent-first, existing files only; host-injected gatherer keeps it hermetic-testable). |
 | `Telescope/Finders/Utils/ProjectFiles.cs` | Shared DTE project-file enumeration. |
@@ -571,8 +572,8 @@ GREened 2026-09-27; a few scenarios flake on retry) are: `telescope-open`,
 ## 8. Build & test commands
 
 - Build: `dotnet build` (VSIX — no `dotnet run`).
-- Offline units: `dotnet run --project tests/Telescope.Tests` (319) and
-  `dotnet run --project tests/NeoVisual.Tests` (236).
+- Offline units: `dotnet run --project tests/Telescope.Tests` (366) and
+  `dotnet run --project tests/NeoVisual.Tests` (264).
 - Live E2E: `pwsh tools/harness/test-e2e.ps1` (44 registered — 44 executed GREEN;
   no known-RED; a few flake on retry);
   subset with `-Tests a,b,c`; list with `-List`.
